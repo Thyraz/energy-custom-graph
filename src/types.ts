@@ -21,6 +21,8 @@ export interface EnergyCustomGraphSeriesConfig {
   color?: string;
   y_axis?: "left" | "right";
   show_legend?: boolean;
+  multiply?: number;
+  add?: number;
 }
 
 export type EnergyCustomGraphPeriodConfig =
@@ -63,4 +65,3 @@ export interface EnergyCustomGraphCardConfig extends LovelaceCardConfig {
   tooltip_precision?: number;
   show_unit?: boolean;
 }
-

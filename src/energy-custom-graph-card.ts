@@ -33,7 +33,9 @@ import type {
   ECOption,
   LegendOption,
   YAxisOption,
+  BarSeriesOption,
 } from "./types/echarts";
+import { BAR_BORDER_WIDTH } from "./chart/series-builder";
 
 const DEFAULT_PERIOD: EnergyCustomGraphPeriodConfig = { mode: "energy" };
 
@@ -372,6 +374,10 @@ export class EnergyCustomGraphCard extends LitElement {
     const oldConfig = this._config;
     this._config = {
       ...config,
+      energy_date_selection:
+        config.energy_date_selection !== undefined
+          ? config.energy_date_selection
+          : true,
       period: config.period ?? DEFAULT_PERIOD,
     };
     this._loggedEnergyFallback = false;
@@ -421,18 +427,23 @@ export class EnergyCustomGraphCard extends LitElement {
       </div>`;
     }
 
-    const hasData = this._chartData.some(
-      (series) =>
-        Array.isArray(series.data) &&
-        series.data.some(
-          (point) =>
-            point !== null &&
-            point !== undefined &&
-            Array.isArray(point) &&
-            point[1] !== null &&
-            point[1] !== undefined
-        )
-    );
+    const hasData = this._chartData.some((series) => {
+      if (!Array.isArray(series.data)) {
+        return false;
+      }
+      return series.data.some((point: any) => {
+        if (point === null || point === undefined) {
+          return false;
+        }
+        if (Array.isArray(point)) {
+          return point[1] !== null && point[1] !== undefined;
+        }
+        if (typeof point === "object" && Array.isArray(point.value)) {
+          return point.value[1] !== null && point.value[1] !== undefined;
+        }
+        return false;
+      });
+    });
 
     if (!hasData || !this._chartOptions) {
       return html`<div class="placeholder">
@@ -475,6 +486,8 @@ export class EnergyCustomGraphCard extends LitElement {
       colorPalette: this._config.color_cycle ?? [],
       computedStyle,
     });
+
+    this._applyBarStyling(series);
 
     if (!series.length) {
       this._chartData = [];
@@ -538,6 +551,144 @@ export class EnergyCustomGraphCard extends LitElement {
 
     this._chartData = series;
     this._chartOptions = options;
+  }
+
+  private _applyBarStyling(series: SeriesOption[]): void {
+    const barSeries = series.filter(
+      (item): item is BarSeriesOption => item.type === "bar"
+    );
+
+    if (!barSeries.length) {
+      return;
+    }
+
+    const bucketSet = new Set<number>();
+
+    barSeries.forEach((serie) => {
+      if (!Array.isArray(serie.data)) {
+        return;
+      }
+      serie.data = serie.data.map((entry) => {
+        if (Array.isArray(entry)) {
+          bucketSet.add(Number(entry[0]));
+          return { value: [entry[0], entry[1]] };
+        }
+        if (entry && typeof entry === "object" && "value" in entry) {
+          const tuple = Array.isArray((entry as any).value)
+            ? (entry as any).value
+            : undefined;
+          if (tuple) {
+            bucketSet.add(Number(tuple[0]));
+            return {
+              ...(entry as Record<string, unknown>),
+              value: [tuple[0], tuple[1]],
+            };
+          }
+          return { ...(entry as Record<string, unknown>) };
+        }
+        return { value: [entry as number, 0] };
+      });
+    });
+
+    const buckets = Array.from(bucketSet).sort((a, b) => a - b);
+
+    barSeries.forEach((serie, serieIndex) => {
+      const baseItemStyle = {
+        ...(serie.itemStyle ?? {}),
+      } as Record<string, any>;
+      const dataMap = new Map<number, any>();
+      (serie.data as any[] | undefined)?.forEach((item) => {
+        const tuple = Array.isArray(item?.value) ? item.value : undefined;
+        if (!tuple) {
+          return;
+        }
+        dataMap.set(Number(tuple[0]), {
+          ...item,
+          value: [tuple[0], tuple[1]],
+          itemStyle: {
+            ...baseItemStyle,
+            ...(item.itemStyle ?? {}),
+          },
+        });
+      });
+
+      serie.data = buckets.map((bucket) => {
+        const existing = dataMap.get(bucket);
+        if (existing) {
+          return existing;
+        }
+        return {
+          value: [bucket, 0],
+          itemStyle: {
+            ...baseItemStyle,
+            borderWidth: 0,
+            borderRadius: [0, 0, 0, 0],
+          },
+        };
+      });
+
+      // Ensure series color applies to default item style as well.
+      serie.itemStyle = {
+        ...baseItemStyle,
+      };
+      serie.barMaxWidth = serie.barMaxWidth ?? 28;
+    });
+
+    buckets.forEach((_bucket, bucketIndex) => {
+      const roundedPositive = new Set<string>();
+      const roundedNegative = new Set<string>();
+
+      for (let idx = barSeries.length - 1; idx >= 0; idx--) {
+        const serie = barSeries[idx];
+        const dataItem = (serie.data as any[])[bucketIndex];
+        const tuple = Array.isArray(dataItem?.value)
+          ? dataItem.value
+          : undefined;
+        const value = tuple ? Number(tuple[1] ?? 0) : 0;
+        const stackKey = serie.stack ?? `__stack_${idx}`;
+
+        const itemStyle = {
+          ...(serie.itemStyle ?? {}),
+          ...(dataItem?.itemStyle ?? {}),
+        } as Record<string, any>;
+
+        if (!tuple) {
+          continue;
+        }
+
+        if (!Array.isArray(itemStyle.borderRadius)) {
+          itemStyle.borderRadius = [0, 0, 0, 0];
+        }
+
+        if (!value) {
+          itemStyle.borderWidth = 0;
+          itemStyle.borderRadius = [0, 0, 0, 0];
+          dataItem.itemStyle = itemStyle;
+          continue;
+        }
+
+        itemStyle.borderWidth = BAR_BORDER_WIDTH;
+
+        if (value > 0) {
+          if (!roundedPositive.has(stackKey)) {
+            itemStyle.borderRadius = [4, 4, 0, 0];
+            roundedPositive.add(stackKey);
+          } else {
+            itemStyle.borderRadius = [0, 0, 0, 0];
+          }
+        } else if (value < 0) {
+          if (!roundedNegative.has(stackKey)) {
+            itemStyle.borderRadius = [0, 0, 4, 4];
+            roundedNegative.add(stackKey);
+          } else {
+            itemStyle.borderRadius = [0, 0, 0, 0];
+          }
+        }
+
+        dataItem.itemStyle = itemStyle;
+        (serie.data as any[])[bucketIndex] = dataItem;
+      }
+    });
   }
 
   private _buildLegendOption(

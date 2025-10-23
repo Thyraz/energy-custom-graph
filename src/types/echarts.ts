@@ -2,7 +2,7 @@ export interface BaseSeriesOption {
   id?: string;
   name?: string;
   type: "line" | "bar";
-  data?: Array<[number, number | null]>;
+  data?: Array<any>;
   stack?: string;
   stackStrategy?: "all" | "samesign";
   yAxisIndex?: number;
