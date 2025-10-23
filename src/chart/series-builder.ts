@@ -43,6 +43,7 @@ export const DEFAULT_COLORS = [
 ];
 
 export const BAR_BORDER_WIDTH = 1.5;
+export const BAR_MAX_WIDTH = 50;
 const BAR_FILL_ALPHA = 0.6;
 const LINE_AREA_ALPHA = 0.2;
 
@@ -228,7 +229,7 @@ export const buildSeries = ({
           borderWidth: BAR_BORDER_WIDTH,
         },
         color: fillColor,
-        barMaxWidth: 28,
+        barMaxWidth: BAR_MAX_WIDTH,
       };
       output.push(barSeries);
     }

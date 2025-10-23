@@ -9,6 +9,7 @@ import {
   endOfYear,
   startOfDay,
   startOfYear,
+  subHours,
 } from "date-fns";
 import {
   fetchStatistics,
@@ -31,7 +32,7 @@ import type {
   YAxisOption,
   BarSeriesOption,
 } from "./types/echarts";
-import { BAR_BORDER_WIDTH } from "./chart/series-builder";
+import { BAR_BORDER_WIDTH, BAR_MAX_WIDTH } from "./chart/series-builder";
 
 interface EnergyData {
   start: Date;
@@ -568,12 +569,16 @@ export class EnergyCustomGraphCard extends LitElement {
 
     const legendOption = this._buildLegendOption(legend);
 
+    const axisMax = this._periodEnd
+      ? this._computeSuggestedXAxisMax(this._periodStart, this._periodEnd)
+      : (this._periodEnd ?? new Date()).getTime();
+
     const xAxis = [
       {
         id: "primary",
         type: "time",
         min: this._periodStart,
-        max: this._periodEnd ?? new Date(),
+        max: axisMax,
       },
       {
         id: "secondary",
@@ -610,6 +615,26 @@ export class EnergyCustomGraphCard extends LitElement {
 
     this._chartData = series;
     this._chartOptions = options;
+  }
+
+  private _computeSuggestedXAxisMax(start: Date, end: Date): number {
+    const dayDifference = differenceInDays(end, start);
+    let suggestedMax = new Date(end);
+
+    if (dayDifference > 2 && suggestedMax.getHours() === 0) {
+      suggestedMax = subHours(suggestedMax, 1);
+    }
+
+    suggestedMax.setMinutes(0, 0, 0);
+
+    if (dayDifference > 35) {
+      suggestedMax.setDate(1);
+    }
+    if (dayDifference > 2) {
+      suggestedMax.setHours(0);
+    }
+
+    return suggestedMax.getTime();
   }
 
   private _applyBarStyling(series: SeriesOption[]): void {
@@ -690,7 +715,7 @@ export class EnergyCustomGraphCard extends LitElement {
       serie.itemStyle = {
         ...baseItemStyle,
       };
-      serie.barMaxWidth = serie.barMaxWidth ?? 28;
+      serie.barMaxWidth = serie.barMaxWidth ?? BAR_MAX_WIDTH;
     });
 
     buckets.forEach((_bucket, bucketIndex) => {
