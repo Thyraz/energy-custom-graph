@@ -23,10 +23,6 @@ import type {
   EnergyCustomGraphPeriodConfig,
   EnergyCustomGraphAxisConfig,
 } from "./types";
-import {
-  subscribeEnergyCollection,
-  type EnergyCollection,
-} from "./energy/collection";
 import { buildSeries } from "./chart/series-builder";
 import type {
   SeriesOption,
@@ -36,6 +32,21 @@ import type {
   BarSeriesOption,
 } from "./types/echarts";
 import { BAR_BORDER_WIDTH } from "./chart/series-builder";
+
+interface EnergyData {
+  start: Date;
+  end?: Date;
+  startCompare?: Date;
+  endCompare?: Date;
+}
+
+interface EnergyCollection {
+  start: Date;
+  end?: Date;
+  subscribe(callback: (data: EnergyData) => void): () => void;
+  setPeriod?(start: Date, end?: Date): void;
+  setCompare?(compare: unknown): void;
+}
 
 const DEFAULT_PERIOD: EnergyCustomGraphPeriodConfig = { mode: "energy" };
 
@@ -57,6 +68,9 @@ export class EnergyCustomGraphCard extends LitElement {
   private _energyEnd?: Date;
   private _activeFetch = 0;
   private _unitsBySeries: Map<string, string | null | undefined> = new Map();
+  private _collectionUnsub?: () => void;
+  private _collectionPollHandle?: number;
+  private _loggedEnergyFallback = false;
 
   private static readonly FALLBACK_WARNING =
     "[energy-custom-graph-card] Falling back to default period because energy date selection is unavailable.";
@@ -97,7 +111,7 @@ export class EnergyCustomGraphCard extends LitElement {
     const needsEnergyCollection = this._needsEnergyCollection(this._config);
     const neededBefore = this._needsEnergyCollection(oldConfig);
 
-    if (needsEnergyCollection || neededBefore) {
+    if (needsEnergyCollection) {
       const collectionKeyChanged =
         oldConfig?.collection_key !== this._config.collection_key;
       const selectionFlagChanged =
@@ -105,10 +119,12 @@ export class EnergyCustomGraphCard extends LitElement {
       if (
         collectionKeyChanged ||
         selectionFlagChanged ||
-        (!this._energyCollection && needsEnergyCollection)
+        (!this._energyCollection && !this._collectionPollHandle)
       ) {
         this._setupEnergyCollection();
       }
+    } else if (neededBefore) {
+      this._teardownEnergyCollection();
     }
 
     const periodChanged = this._recalculatePeriod();
@@ -127,30 +143,76 @@ export class EnergyCustomGraphCard extends LitElement {
     return Boolean(config?.energy_date_selection);
   }
 
-  private _setupEnergyCollection(): void {
-    this._teardownEnergyCollection();
+  private _setupEnergyCollection(attempt = 0): void {
     if (!this._config?.energy_date_selection || !this.hass) {
       return;
     }
 
-    this._energyCollection = subscribeEnergyCollection(
-      this.hass,
-      (data) => {
+    if (attempt === 0) {
+      this._teardownEnergyCollection();
+    } else if (this._collectionPollHandle) {
+      window.clearTimeout(this._collectionPollHandle);
+      this._collectionPollHandle = undefined;
+    }
+
+    const key = this._config.collection_key
+      ? `_${this._config.collection_key}`
+      : "_energy";
+    const connection = this.hass.connection as Record<string, unknown> | undefined;
+    const candidate = connection?.[key] as EnergyCollection | undefined;
+
+    if (candidate && typeof candidate.subscribe === "function") {
+      if (this._collectionUnsub) {
+        this._collectionUnsub();
+        this._collectionUnsub = undefined;
+      }
+      this._energyCollection = candidate;
+      this._loggedEnergyFallback = false;
+      this._collectionUnsub = candidate.subscribe((data) => {
         this._energyStart = data.start;
         this._energyEnd = data.end ?? undefined;
         const periodChanged = this._recalculatePeriod();
-        if (periodChanged) {
+        if (periodChanged || !this._statistics) {
           void this._loadStatistics();
         }
-      },
-      this._config.collection_key
-        ? { key: this._config.collection_key }
-        : undefined
+      });
+      return;
+    }
+
+    const MAX_ATTEMPTS = 50;
+    if (attempt >= MAX_ATTEMPTS) {
+      if (!this._loggedEnergyFallback) {
+        console.warn(EnergyCustomGraphCard.FALLBACK_WARNING);
+        this._loggedEnergyFallback = true;
+      }
+      this._energyCollection = undefined;
+      this._collectionUnsub = undefined;
+      const periodChanged = this._recalculatePeriod();
+      if (periodChanged || !this._statistics) {
+        void this._loadStatistics();
+      }
+      this._collectionPollHandle = window.setTimeout(
+        () => this._setupEnergyCollection(MAX_ATTEMPTS),
+        1000
+      );
+      return;
+    }
+
+    this._collectionPollHandle = window.setTimeout(
+      () => this._setupEnergyCollection(attempt + 1),
+      200
     );
   }
 
   private _teardownEnergyCollection(): void {
-    this._energyCollection?.unsubscribe();
+    if (this._collectionPollHandle) {
+      window.clearTimeout(this._collectionPollHandle);
+      this._collectionPollHandle = undefined;
+    }
+    if (this._collectionUnsub) {
+      this._collectionUnsub();
+      this._collectionUnsub = undefined;
+    }
     this._energyCollection = undefined;
     this._energyStart = undefined;
     this._energyEnd = undefined;
@@ -189,13 +251,12 @@ export class EnergyCustomGraphCard extends LitElement {
         if (this._config.energy_date_selection) {
           const energyRange = this._getEnergyRange();
           if (!energyRange) {
+            if (this._loggedEnergyFallback) {
+              return this._defaultEnergyRange();
+            }
             return undefined;
           }
           return energyRange;
-        }
-        if (!this._loggedEnergyFallback) {
-          console.warn(EnergyCustomGraphCard.FALLBACK_WARNING);
-          this._loggedEnergyFallback = true;
         }
         return this._defaultEnergyRange();
       }
@@ -250,8 +311,6 @@ export class EnergyCustomGraphCard extends LitElement {
       end: endOfDay(new Date()),
     };
   }
-
-  private _loggedEnergyFallback = false;
 
   private _defaultRelativeBase(unit: "year"): { start: Date; end: Date } {
     if (unit === "year") {
