@@ -162,7 +162,7 @@ export const buildSeries = ({
       (entry: StatisticValue) => {
         const statKey = statType as keyof StatisticValue;
         const value = entry[statKey];
-        const date = entry.end ?? entry.start;
+        const date = entry.start ?? entry.end;
         if (typeof value !== "number" || Number.isNaN(value)) {
           return [date, null];
         }
