@@ -133,23 +133,6 @@ Each term accepts the following options:
 | `operation` | `"add"`, `"subtract"`, `"multiply"`, `"divide"` | `"add"` | Operation applied to the running total. |
 | `constant` | number | – | Use a constant instead of a statistic. |
 
-Example: PV direct use = total solar production − grid export − battery charge.
-
-```yaml
-series:
-  - name: PV direct use
-    chart_type: line
-    calculation:
-      unit: kWh
-      terms:
-        - statistic_id: sensor.solar_energy_produced
-          operation: add
-        - statistic_id: sensor.energy_grid_exported
-          operation: subtract
-        - statistic_id: sensor.energy_battery_charged
-          operation: subtract
-```
-
 ### `y_axes` options
 
 | Key | Type | Default | Description |
@@ -178,26 +161,7 @@ series:
 
 ## Examples
 
-### 1. Mirror the energy dashboard
-
-```yaml
-type: custom:energy-custom-graph-card
-title: Daily energy breakdown
-energy_date_selection: true
-series:
-  - statistic_id: sensor.grid_import_kwh
-    name: Grid import
-    stat_type: change
-  - statistic_id: sensor.solar_yield_kwh
-    name: Solar production
-    stat_type: change
-    stack: solar
-  - statistic_id: sensor.home_consumption_kwh
-    name: Consumption
-    stat_type: sum
-```
-
-### 2. Manual fixed window with dual axes
+### 1. Manual fixed window with dual axes
 
 ```yaml
 type: custom:energy-custom-graph-card
@@ -224,7 +188,7 @@ series:
     y_axis: right
 ```
 
-### 3. Shift the period for a previous year view
+### 2. Shift the period for a previous year view
 
 ```yaml
 type: custom:energy-custom-graph-card
@@ -240,7 +204,7 @@ series:
     stat_type: change
 ```
 
-### 4. Fill the range between minimum and maximum
+### 3. Fill the range between minimum and maximum
 
 ```yaml
 type: custom:energy-custom-graph-card
@@ -258,6 +222,50 @@ series:
     stat_type: min
     chart_type: line
     smooth: 0
+```
+
+### 4. Recreate the energy dashboard usage card
+
+```yaml
+type: custom:energy-custom-graph-card
+hide_legend: true
+series:
+  - name: Solar self consumed
+    chart_type: bar
+    color: "--energy-solar-color"
+    stack: energy
+    clip_min: 0
+    calculation:
+      unit: kWh
+      terms:
+        - statistic_id: sensor.total_solar_production
+          operation: add
+        - statistic_id: sensor.total_grid_export
+          operation: subtract
+        - statistic_id: sensor.total_battery_charge
+          operation: subtract
+  - statistic_id: sensor.total_grid_import
+    name: Imported
+    chart_type: bar
+    color: "--energy-grid-consumption-color"
+    stack: energy
+  - statistic_id: sensor.total_battery_discharge
+    name: Battery discharge
+    chart_type: bar
+    color: "--energy-battery-out-color"
+    stack: energy
+  - statistic_id: sensor.total_grid_export
+    name: Exported
+    chart_type: bar
+    multiply: -1
+    color: "--energy-grid-return-color"
+    stack: energy
+  - statistic_id: sensor.total_battery_charge
+    name: Battery charge
+    chart_type: bar
+    multiply: -1
+    color: "--energy-battery-in-color"
+    stack: energy
 ```
 
 ## Tips
