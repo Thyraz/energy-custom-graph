@@ -81,7 +81,7 @@ The card automatically selects the recorder statistics period (5-minute, hourly,
 
 | Key | Type | Default | Description |
 | --- | ---- | ------- | ----------- |
-| `statistic_id` | string | – | Required recorder statistic identifier (`sensor.entity_id` etc.). |
+| `statistic_id` | string | – | Recorder statistic identifier (`sensor.entity_id` etc.). Required unless `calculation` is provided. |
 | `name` | string | entity name | Display name shown in tooltip and legend. |
 | `stat_type` | `"change"`, `"sum"`, `"mean"`, `"min"`, `"max"`, `"state"` | `"change"` | Statistic sampled from Home Assistant. |
 | `chart_type` | `"bar"`, `"line"` | `"bar"` | Presentation type. |
@@ -95,8 +95,11 @@ The card automatically selects the recorder statistics period (5-minute, hourly,
 | `show_legend` | boolean | `true` | Hide or show this series in the legend. |
 | `multiply` | number | `1` | Apply a multiplier to the statistic value. |
 | `add` | number | `0` | Apply an additive offset after multiplication. |
+| `clip_min` | number | – | Clamp the processed value to be no lower than this threshold. |
+| `clip_max` | number | – | Clamp the processed value to be no higher than this threshold. |
 | `smooth` | boolean or number | `true` | Control line smoothing. Use `false` to disable, or a value between 0 and 1 to tune the spline tightness. |
 | `fill_to_series` | string | – | For line charts only: name of another line series to fill towards. Both series must avoid stacking. |
+| `calculation` | object | – | Build a derived series from multiple statistics (see below). |
 
 #### Fill between line series
 
@@ -106,6 +109,46 @@ Set `fill_to_series` on a line series to shade the area between it and another l
 - The referenced `name` has to be unique within the card.
 - When the upper series drops below the lower one, the card clamps the fill to zero and logs a warning so you can inspect the data.
 - The fill area inherits the upper series' `fill_opacity` (or its default if unspecified).
+
+#### Calculated series
+
+Define `calculation` to synthesise a series from multiple statistics. Terms are processed sequentially, starting from `initial_value` (default `0`).
+
+| Key | Type | Default | Description |
+| --- | ---- | ------- | ----------- |
+| `terms` | list | – | Ordered list of calculation steps. |
+| `initial_value` | number | `0` | Seed value before the first term runs. |
+| `unit` | string | inferred | Unit for the resulting series (falls back to the first statistic). |
+
+Each term accepts the following options:
+
+| Key | Type | Default | Description |
+| --- | ---- | ------- | ----------- |
+| `statistic_id` | string | – | Statistic to read. Optional if `constant` is provided. |
+| `stat_type` | `"change"`, `"sum"`, `"mean"`, `"min"`, `"max"`, `"state"` | inherit | Field to read from the statistic. |
+| `multiply` | number | `1` | Multiply the statistic before applying the operation. |
+| `add` | number | `0` | Offset applied after multiplication. |
+| `clip_min` | number | – | Clamp the term value to be no lower than this threshold. |
+| `clip_max` | number | – | Clamp the term value to be no higher than this threshold. |
+| `operation` | `"add"`, `"subtract"`, `"multiply"`, `"divide"` | `"add"` | Operation applied to the running total. |
+| `constant` | number | – | Use a constant instead of a statistic. |
+
+Example: PV direct use = total solar production − grid export − battery charge.
+
+```yaml
+series:
+  - name: PV direct use
+    chart_type: line
+    calculation:
+      unit: kWh
+      terms:
+        - statistic_id: sensor.solar_energy_produced
+          operation: add
+        - statistic_id: sensor.energy_grid_exported
+          operation: subtract
+        - statistic_id: sensor.energy_battery_charged
+          operation: subtract
+```
 
 ### `y_axes` options
 

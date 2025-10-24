@@ -10,8 +10,31 @@ export type EnergyCustomGraphStatisticType =
   | "max"
   | "state";
 
+export type EnergyCustomGraphCalculationOperation =
+  | "add"
+  | "subtract"
+  | "multiply"
+  | "divide";
+
+export interface EnergyCustomGraphCalculationTerm {
+  statistic_id?: string;
+  stat_type?: EnergyCustomGraphStatisticType;
+  multiply?: number;
+  add?: number;
+  operation?: EnergyCustomGraphCalculationOperation;
+  constant?: number;
+  clip_min?: number;
+  clip_max?: number;
+}
+
+export interface EnergyCustomGraphCalculationConfig {
+  terms: EnergyCustomGraphCalculationTerm[];
+  initial_value?: number;
+  unit?: string | null;
+}
+
 export interface EnergyCustomGraphSeriesConfig {
-  statistic_id: string;
+  statistic_id?: string;
   name?: string;
   stat_type?: EnergyCustomGraphStatisticType;
   chart_type?: EnergyCustomGraphChartType;
@@ -27,6 +50,9 @@ export interface EnergyCustomGraphSeriesConfig {
   line_opacity?: number;
   fill_opacity?: number;
   fill_to_series?: string;
+  calculation?: EnergyCustomGraphCalculationConfig;
+  clip_min?: number;
+  clip_max?: number;
 }
 
 export type EnergyCustomGraphPeriodConfig =

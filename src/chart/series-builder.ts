@@ -19,6 +19,8 @@ interface SeriesBuildParams {
   configSeries: EnergyCustomGraphSeriesConfig[];
   colorPalette: string[];
   computedStyle: CSSStyleDeclaration;
+  calculatedData?: Map<string, StatisticValue[]>;
+  calculatedUnits?: Map<string, string | null | undefined>;
 }
 
 export interface BuiltSeriesResult {
@@ -47,8 +49,25 @@ export const BAR_MAX_WIDTH = 50;
 const BAR_FILL_ALPHA = 0.6;
 const LINE_AREA_ALPHA = 0.2;
 
+const getCalculationKey = (index: number) => `calculation_${index}`;
+
 const clampAlpha = (value: number) =>
   Math.max(0, Math.min(1, Number.isFinite(value) ? value : 1));
+
+const clampValue = (
+  value: number,
+  min?: number,
+  max?: number
+): number => {
+  let result = value;
+  if (min !== undefined) {
+    result = Math.max(result, min);
+  }
+  if (max !== undefined) {
+    result = Math.min(result, max);
+  }
+  return result;
+};
 
 const hexToRgb = (
   value: string
@@ -119,6 +138,8 @@ export const buildSeries = ({
   configSeries,
   colorPalette,
   computedStyle,
+  calculatedData,
+  calculatedUnits,
 }: SeriesBuildParams): BuiltSeriesResult => {
   const palette = colorPalette.length ? colorPalette : DEFAULT_COLORS;
 
@@ -153,12 +174,42 @@ export const buildSeries = ({
   };
 
   configSeries.forEach((seriesConfig, index) => {
-    const raw = statistics?.[seriesConfig.statistic_id];
-    if (!raw?.length) {
+    const calculationKey = seriesConfig.calculation
+      ? getCalculationKey(index)
+      : undefined;
+    let raw: StatisticValue[] | undefined;
+    let calcUnit: string | null | undefined;
+
+    if (calculationKey) {
+      raw = calculatedData?.get(calculationKey);
+      calcUnit = calculatedUnits?.get(calculationKey);
+      if (!raw?.length) {
+        warnOnce(
+          `calculation-empty-${index}`,
+          `Calculation for series "${seriesConfig.name ?? calculationKey}" produced no data.`
+        );
+        return;
+      }
+    } else if (seriesConfig.statistic_id) {
+      raw = statistics?.[seriesConfig.statistic_id];
+      if (!raw?.length) {
+        warnOnce(
+          `statistics-empty-${seriesConfig.statistic_id}`,
+          `No statistics available for "${seriesConfig.statistic_id}".`
+        );
+        return;
+      }
+    } else {
+      warnOnce(
+        `series-misconfigured-${index}`,
+        `Series at index ${index} is missing both statistic_id and calculation.`
+      );
       return;
     }
 
-    const meta = metadata?.[seriesConfig.statistic_id];
+    const meta = seriesConfig.statistic_id
+      ? metadata?.[seriesConfig.statistic_id]
+      : undefined;
     const statType = seriesConfig.stat_type ?? "change";
     const chartType = seriesConfig.chart_type ?? "bar";
     const multiplier = seriesConfig.multiply ?? 1;
@@ -171,8 +222,10 @@ export const buildSeries = ({
     const name =
       seriesConfig.name ??
       meta?.name ??
-      hass.states[seriesConfig.statistic_id]?.attributes.friendly_name ??
-      seriesConfig.statistic_id;
+      (seriesConfig.statistic_id
+        ? hass.states[seriesConfig.statistic_id]?.attributes.friendly_name ??
+          seriesConfig.statistic_id
+        : `Series ${index + 1}`);
 
     const colorToken =
       seriesConfig.color ??
@@ -212,8 +265,13 @@ export const buildSeries = ({
     const defaultBarFillOpacity = BAR_FILL_ALPHA;
     const defaultLineFillOpacity = LINE_AREA_ALPHA;
 
-    const id = `${seriesConfig.statistic_id}:${statType}:${chartType}:${index}`;
-    unitBySeries.set(id, meta?.statistics_unit_of_measurement);
+    const baseKey =
+      seriesConfig.statistic_id ?? calculationKey ?? `series_${index}`;
+    const id = `${baseKey}:${statType}:${chartType}:${index}`;
+    unitBySeries.set(
+      id,
+      calcUnit ?? meta?.statistics_unit_of_measurement
+    );
     seriesById.set(id, seriesConfig);
 
     const dataPoints: [number, number | null][] = raw.map(
@@ -225,7 +283,12 @@ export const buildSeries = ({
           return [date, null];
         }
         const transformed = value * multiplier + offset;
-        return [date, transformed];
+        const clamped = clampValue(
+          transformed,
+          seriesConfig.clip_min,
+          seriesConfig.clip_max
+        );
+        return [date, clamped];
       }
     );
 

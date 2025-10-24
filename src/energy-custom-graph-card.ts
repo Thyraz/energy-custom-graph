@@ -21,6 +21,7 @@ import {
 import {
   fetchStatistics,
   getStatisticMetadata,
+  type StatisticValue,
   type Statistics,
   type StatisticsMetaData,
   type StatisticsPeriod,
@@ -30,6 +31,9 @@ import type {
   EnergyCustomGraphSeriesConfig,
   EnergyCustomGraphPeriodConfig,
   EnergyCustomGraphAxisConfig,
+  EnergyCustomGraphStatisticType,
+  EnergyCustomGraphCalculationConfig,
+  EnergyCustomGraphCalculationTerm,
 } from "./types";
 import { buildSeries } from "./chart/series-builder";
 import type {
@@ -79,11 +83,27 @@ export class EnergyCustomGraphCard extends LitElement {
   private _collectionUnsub?: () => void;
   private _collectionPollHandle?: number;
   private _loggedEnergyFallback = false;
+  private _calculatedSeriesData = new Map<string, StatisticValue[]>();
+  private _calculatedSeriesUnits = new Map<string, string | null | undefined>();
 
   private static readonly FALLBACK_WARNING =
     "[energy-custom-graph-card] Falling back to default period because energy date selection is unavailable.";
 
   private static readonly DEFAULT_STAT_TYPE = "change";
+  private static readonly clampValue = (
+    value: number,
+    min?: number,
+    max?: number
+  ): number => {
+    let result = value;
+    if (min !== undefined) {
+      result = Math.max(result, min);
+    }
+    if (max !== undefined) {
+      result = Math.min(result, max);
+    }
+    return result;
+  };
 
   public connectedCallback(): void {
     super.connectedCallback();
@@ -374,22 +394,30 @@ export class EnergyCustomGraphCard extends LitElement {
       return;
     }
 
-    const statisticIds = Array.from(
-      new Set(this._config.series.map((item) => item.statistic_id))
-    );
-    if (!statisticIds.length) {
-      this._statistics = undefined;
-      this._metadata = undefined;
-      return;
-    }
+    const statisticIdSet = new Set<string>();
+    const statTypeSet = new Set<EnergyCustomGraphStatisticType>();
+    this._config.series.forEach((series) => {
+      const defaultStatType =
+        series.stat_type ?? EnergyCustomGraphCard.DEFAULT_STAT_TYPE;
+      if (series.statistic_id) {
+        statisticIdSet.add(series.statistic_id);
+        statTypeSet.add(defaultStatType);
+      }
+      series.calculation?.terms?.forEach((term) => {
+        const termStatType =
+          term.stat_type ?? defaultStatType ?? EnergyCustomGraphCard.DEFAULT_STAT_TYPE;
+        if (term.statistic_id) {
+          statisticIdSet.add(term.statistic_id);
+          statTypeSet.add(termStatType);
+        }
+      });
+    });
 
-    const statTypes = Array.from(
-      new Set(
-        this._config.series.map(
-          (series) => series.stat_type ?? EnergyCustomGraphCard.DEFAULT_STAT_TYPE
-        )
-      )
-    );
+    const statisticIds = Array.from(statisticIdSet);
+    const statTypesRaw = Array.from(statTypeSet);
+    const statTypes = statTypesRaw.length
+      ? statTypesRaw
+      : [EnergyCustomGraphCard.DEFAULT_STAT_TYPE];
 
     const statsPeriod = this._determineStatisticsPeriod(
       this._periodStart,
@@ -403,18 +431,23 @@ export class EnergyCustomGraphCard extends LitElement {
     }
 
     try {
-      const [metadataArray, statistics] = await Promise.all([
-        getStatisticMetadata(this.hass, statisticIds),
-        fetchStatistics(
-          this.hass,
-          this._periodStart,
-          this._periodEnd,
-          statisticIds,
-          statsPeriod,
-          undefined,
-          statTypes
-        ),
-      ]);
+      let metadataArray: StatisticsMetaData[] = [];
+      let statistics: Statistics = {};
+
+      if (statisticIds.length) {
+        [metadataArray, statistics] = await Promise.all([
+          getStatisticMetadata(this.hass, statisticIds),
+          fetchStatistics(
+            this.hass,
+            this._periodStart,
+            this._periodEnd,
+            statisticIds,
+            statsPeriod,
+            undefined,
+            statTypes
+          ),
+        ]);
+      }
 
       if (fetchId !== this._activeFetch) {
         return;
@@ -427,6 +460,7 @@ export class EnergyCustomGraphCard extends LitElement {
 
       this._metadata = metadata;
       this._statistics = statistics;
+      this._rebuildCalculatedSeries(statistics, metadata);
     } catch (error) {
       if (fetchId === this._activeFetch) {
         console.error(
@@ -435,12 +469,252 @@ export class EnergyCustomGraphCard extends LitElement {
         );
         this._metadata = undefined;
         this._statistics = undefined;
+        this._calculatedSeriesData = new Map();
+        this._calculatedSeriesUnits = new Map();
       }
     } finally {
       if (fetchId === this._activeFetch && loadingAtStart) {
         this._isLoading = false;
       }
     }
+  }
+
+  private _getCalculationKey(index: number): string {
+    return `calculation_${index}`;
+  }
+
+  private _rebuildCalculatedSeries(
+    statistics: Statistics,
+    metadata: Record<string, StatisticsMetaData>
+  ): void {
+    const data = new Map<string, StatisticValue[]>();
+    const units = new Map<string, string | null | undefined>();
+
+    if (!this._config) {
+      this._calculatedSeriesData = data;
+      this._calculatedSeriesUnits = units;
+      return;
+    }
+
+    this._config.series.forEach((series, index) => {
+      if (!series.calculation) {
+        return;
+      }
+      const result = this._evaluateCalculationSeries(
+        series,
+        series.calculation,
+        statistics,
+        metadata,
+        index
+      );
+      if (!result) {
+        return;
+      }
+      const key = this._getCalculationKey(index);
+      data.set(key, result.values);
+      units.set(key, result.unit);
+    });
+
+    this._calculatedSeriesData = data;
+    this._calculatedSeriesUnits = units;
+  }
+
+  private _evaluateCalculationSeries(
+    series: EnergyCustomGraphSeriesConfig,
+    calculation: EnergyCustomGraphCalculationConfig,
+    statistics: Statistics,
+    metadata: Record<string, StatisticsMetaData>,
+    seriesIndex: number
+  ): { values: StatisticValue[]; unit?: string | null } | undefined {
+    if (!calculation.terms?.length) {
+      return undefined;
+    }
+
+    type TermResolvedData = {
+      term: EnergyCustomGraphCalculationTerm;
+      data?: Map<
+        number,
+        { value: number | null; start?: number; end?: number }
+      >;
+      constant?: number;
+      unit?: string | null;
+    };
+
+    const timestampSet = new Set<number>();
+    const termData: TermResolvedData[] = [];
+    const missingStatWarnings = new Set<string>();
+    const seriesLabel =
+      series.name ??
+      series.statistic_id ??
+      `series_${seriesIndex}`;
+
+    calculation.terms.forEach((term) => {
+      const multiplier = term.multiply ?? 1;
+      const addition = term.add ?? 0;
+
+      if (term.statistic_id) {
+        const raw = statistics?.[term.statistic_id];
+        const statKey =
+          term.stat_type ??
+          series.stat_type ??
+          EnergyCustomGraphCard.DEFAULT_STAT_TYPE;
+        const map = new Map<
+          number,
+          { value: number | null; start?: number; end?: number }
+        >();
+
+        if (!raw?.length) {
+          if (!missingStatWarnings.has(term.statistic_id)) {
+            console.warn(
+              `[energy-custom-graph-card] Calculation series "${seriesLabel}" references statistic "${term.statistic_id}" but no data was loaded. Missing values will be treated as zero.`
+            );
+            missingStatWarnings.add(term.statistic_id);
+          }
+        } else {
+          raw.forEach((entry) => {
+            const timestamp = entry.end ?? entry.start;
+            if (timestamp === undefined) {
+              return;
+            }
+            const rawValue = entry[statKey];
+            const numeric =
+              typeof rawValue === "number" && Number.isFinite(rawValue)
+                ? rawValue
+                : null;
+            const processed =
+              numeric === null
+                ? null
+                : EnergyCustomGraphCard.clampValue(
+                    numeric * multiplier + addition,
+                    term.clip_min,
+                    term.clip_max
+                  );
+            map.set(timestamp, {
+              value: processed,
+              start: entry.start,
+              end: entry.end,
+            });
+            timestampSet.add(timestamp);
+          });
+        }
+
+        termData.push({
+          term,
+          data: map,
+          unit:
+            metadata?.[term.statistic_id]?.statistics_unit_of_measurement ??
+            undefined,
+        });
+      } else {
+        const constantValue = EnergyCustomGraphCard.clampValue(
+          (term.constant ?? 0) * multiplier + addition,
+          term.clip_min,
+          term.clip_max
+        );
+        termData.push({
+          term,
+          constant: constantValue,
+        });
+      }
+    });
+
+    const timestamps = Array.from(timestampSet).sort((a, b) => a - b);
+    if (!timestamps.length) {
+      return undefined;
+    }
+
+    const initialValue = calculation.initial_value ?? 0;
+    const values: StatisticValue[] = [];
+    const missingValueWarnings = new Set<string>();
+    let divisionWarningLogged = false;
+
+    timestamps.forEach((timestamp) => {
+      let total = initialValue;
+      let start: number | undefined;
+      let end: number | undefined;
+      let valid = true;
+
+      termData.forEach((item) => {
+        if (!valid) {
+          return;
+        }
+
+        let termValue: number;
+        if (item.data) {
+          const entry = item.data.get(timestamp);
+          if (entry?.start !== undefined && start === undefined) {
+            start = entry.start;
+          }
+          if (entry?.end !== undefined && end === undefined) {
+            end = entry.end;
+          }
+
+          if (entry?.value === null || entry === undefined) {
+            termValue = 0;
+            const statId = item.term.statistic_id;
+            if (statId && !missingValueWarnings.has(statId)) {
+              console.warn(
+                `[energy-custom-graph-card] Missing value for statistic "${statId}" in calculation series "${seriesLabel}". Using 0 for this timestamp.`
+              );
+              missingValueWarnings.add(statId);
+            }
+          } else {
+            termValue = entry.value;
+          }
+        } else {
+          termValue = item.constant ?? 0;
+        }
+
+        switch (item.term.operation ?? "add") {
+          case "subtract":
+            total -= termValue;
+            break;
+          case "multiply":
+            total *= termValue;
+            break;
+          case "divide":
+            if (termValue === 0) {
+              valid = false;
+              if (!divisionWarningLogged) {
+                console.warn(
+                  `[energy-custom-graph-card] Division by zero encountered in calculation series "${seriesLabel}". The affected timestamp will be rendered as empty.`
+                );
+                divisionWarningLogged = true;
+              }
+            } else {
+              total /= termValue;
+            }
+            break;
+          case "add":
+          default:
+            total += termValue;
+            break;
+        }
+      });
+
+      const numericTotal =
+        valid && Number.isFinite(total) ? total : null;
+      const pointStart = start ?? timestamp;
+      const pointEnd = end ?? timestamp;
+
+      values.push({
+        start: pointStart,
+        end: pointEnd,
+        change: numericTotal,
+        sum: numericTotal,
+        mean: numericTotal,
+        min: numericTotal,
+        max: numericTotal,
+        state: numericTotal,
+      });
+    });
+
+    const unit =
+      calculation.unit ??
+      termData.find((item) => item.unit !== undefined)?.unit ??
+      null;
+
+    return { values, unit };
   }
 
   private _determineStatisticsPeriod(
@@ -471,8 +745,38 @@ export class EnergyCustomGraphCard extends LitElement {
     }
 
     config.series.forEach((series: EnergyCustomGraphSeriesConfig, index) => {
-      if (!series || !series.statistic_id) {
-        throw new Error(`Series at index ${index} is missing a statistic_id`);
+      if (!series) {
+        throw new Error(`Series at index ${index} is not defined`);
+      }
+      const hasStatistic = typeof series.statistic_id === "string";
+      const hasCalculation = !!series.calculation;
+      if (hasStatistic && hasCalculation) {
+        throw new Error(
+          `Series at index ${index} cannot define both statistic_id and calculation`
+        );
+      }
+      if (!hasStatistic && !hasCalculation) {
+        throw new Error(
+          `Series at index ${index} must define either statistic_id or calculation`
+        );
+      }
+      if (hasCalculation) {
+        const terms = series.calculation?.terms ?? [];
+        if (!terms.length) {
+          throw new Error(
+            `Series at index ${index} defines a calculation without any terms`
+          );
+        }
+        terms.forEach((term, termIndex) => {
+          if (
+            term.statistic_id === undefined &&
+            term.constant === undefined
+          ) {
+            throw new Error(
+              `Calculation term ${termIndex} of series ${index} must define either statistic_id or constant`
+            );
+          }
+        });
       }
     });
 
@@ -590,6 +894,8 @@ export class EnergyCustomGraphCard extends LitElement {
       configSeries: this._config.series,
       colorPalette: this._config.color_cycle ?? [],
       computedStyle,
+      calculatedData: this._calculatedSeriesData,
+      calculatedUnits: this._calculatedSeriesUnits,
     });
 
     this._applyBarStyling(series);
