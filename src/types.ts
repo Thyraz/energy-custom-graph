@@ -15,7 +15,7 @@ export interface EnergyCustomGraphSeriesConfig {
   name?: string;
   stat_type?: EnergyCustomGraphStatisticType;
   chart_type?: EnergyCustomGraphChartType;
-  area?: boolean;
+  fill?: boolean;
   stack?: string;
   stack_strategy?: "all" | "samesign";
   color?: string;
@@ -24,6 +24,8 @@ export interface EnergyCustomGraphSeriesConfig {
   multiply?: number;
   add?: number;
   smooth?: boolean | number;
+  line_opacity?: number;
+  fill_opacity?: number;
   fill_to_series?: string;
 }
 

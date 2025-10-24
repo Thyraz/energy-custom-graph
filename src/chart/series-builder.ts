@@ -50,7 +50,9 @@ const LINE_AREA_ALPHA = 0.2;
 const clampAlpha = (value: number) =>
   Math.max(0, Math.min(1, Number.isFinite(value) ? value : 1));
 
-const hexToRgb = (value: string): { r: number; g: number; b: number } | null => {
+const hexToRgb = (
+  value: string
+): { r: number; g: number; b: number } | null => {
   const hex = value.replace("#", "").trim();
   if (hex.length === 3) {
     const r = parseInt(hex[0] + hex[0], 16);
@@ -58,7 +60,19 @@ const hexToRgb = (value: string): { r: number; g: number; b: number } | null => 
     const b = parseInt(hex[2] + hex[2], 16);
     return { r, g, b };
   }
+  if (hex.length === 4) {
+    const r = parseInt(hex[0] + hex[0], 16);
+    const g = parseInt(hex[1] + hex[1], 16);
+    const b = parseInt(hex[2] + hex[2], 16);
+    return { r, g, b };
+  }
   if (hex.length === 6) {
+    const r = parseInt(hex.substring(0, 2), 16);
+    const g = parseInt(hex.substring(2, 4), 16);
+    const b = parseInt(hex.substring(4, 6), 16);
+    return { r, g, b };
+  }
+  if (hex.length === 8) {
     const r = parseInt(hex.substring(0, 2), 16);
     const g = parseInt(hex.substring(2, 4), 16);
     const b = parseInt(hex.substring(4, 6), 16);
@@ -118,7 +132,9 @@ export const buildSeries = ({
     name: string;
     config: EnergyCustomGraphSeriesConfig;
     dataPoints: [number, number | null][];
-    color: string;
+    lineColor: string;
+    fillColor: string;
+    fillOpacity: number;
     series: LineSeriesOption;
   };
 
@@ -151,6 +167,7 @@ export const buildSeries = ({
       typeof seriesConfig.smooth === "number"
         ? Math.max(0, Math.min(1, seriesConfig.smooth))
         : seriesConfig.smooth;
+    const shouldFill = seriesConfig.fill === true;
     const name =
       seriesConfig.name ??
       meta?.name ??
@@ -179,8 +196,21 @@ export const buildSeries = ({
     }
     colorValue = colorValue.trim();
 
-    const fillColor = applyAlpha(colorValue, BAR_FILL_ALPHA);
-    const hoverColor = applyAlpha(colorValue, Math.min(1, BAR_FILL_ALPHA + 0.2));
+    const lineOpacityOverride =
+      typeof seriesConfig.line_opacity === "number"
+        ? clampAlpha(seriesConfig.line_opacity)
+        : undefined;
+    const lineColor =
+      lineOpacityOverride !== undefined
+        ? applyAlpha(colorValue, lineOpacityOverride)
+        : colorValue;
+    const lineHoverAlpha = Math.min(1, (lineOpacityOverride ?? 1) + 0.2);
+    let lineHoverColor = applyAlpha(colorValue, lineHoverAlpha);
+    if (lineHoverColor === colorValue) {
+      lineHoverColor = lineColor;
+    }
+    const defaultBarFillOpacity = BAR_FILL_ALPHA;
+    const defaultLineFillOpacity = LINE_AREA_ALPHA;
 
     const id = `${seriesConfig.statistic_id}:${statType}:${chartType}:${index}`;
     unitBySeries.set(id, meta?.statistics_unit_of_measurement);
@@ -200,16 +230,22 @@ export const buildSeries = ({
     );
 
     if (chartType === "line") {
+      const fillOpacity =
+        typeof seriesConfig.fill_opacity === "number"
+          ? clampAlpha(seriesConfig.fill_opacity)
+          : defaultLineFillOpacity;
+      const fillColor = applyAlpha(colorValue, fillOpacity);
+
       const lineItemStyle = {
-        color: colorValue,
-        borderColor: colorValue,
+        color: lineColor,
+        borderColor: lineColor,
       } as const;
       const lineSeries: LineSeriesOption = {
         id,
         name,
         type: "line",
         smooth: smoothValue ?? true,
-        areaStyle: seriesConfig.area ? {} : undefined,
+        areaStyle: shouldFill ? {} : undefined,
         data: dataPoints,
         stack: seriesConfig.stack,
         stackStrategy: seriesConfig.stack_strategy,
@@ -217,20 +253,21 @@ export const buildSeries = ({
         emphasis: {
           focus: "series",
           itemStyle: {
-            color: hoverColor,
+            color: lineHoverColor,
+            borderColor: lineHoverColor,
           },
         },
         lineStyle: {
           width: 2,
-          color: colorValue,
+          color: lineColor,
         },
         itemStyle: { ...lineItemStyle },
-        color: colorValue,
+        color: lineColor,
       };
-      if (seriesConfig.area) {
+      if (shouldFill) {
         lineSeries.areaStyle = {
           ...(lineSeries.areaStyle ?? {}),
-          color: applyAlpha(colorValue, LINE_AREA_ALPHA),
+          color: fillColor,
         };
       }
       output.push(lineSeries);
@@ -247,7 +284,9 @@ export const buildSeries = ({
           name: nameKey,
           config: seriesConfig,
           dataPoints,
-          color: colorValue,
+          lineColor,
+          fillColor,
+          fillOpacity,
           series: lineSeries,
         });
       }
@@ -260,6 +299,16 @@ export const buildSeries = ({
         });
       }
     } else {
+      const fillOpacity =
+        typeof seriesConfig.fill_opacity === "number"
+          ? clampAlpha(seriesConfig.fill_opacity)
+          : defaultBarFillOpacity;
+      const fillColor = applyAlpha(colorValue, fillOpacity);
+      const hoverColor = applyAlpha(
+        colorValue,
+        Math.min(1, fillOpacity + 0.2)
+      );
+
       const barSeries: BarSeriesOption = {
         id,
         name,
@@ -296,7 +345,7 @@ export const buildSeries = ({
     legend.push({
       id,
       name,
-      color: colorValue,
+      color: chartType === "line" ? lineColor : colorValue,
       hidden: seriesConfig.show_legend === false,
     });
   });
@@ -410,6 +459,24 @@ export const buildSeries = ({
     const baseId = `${sourceMeta.id}__fill_base`;
     const fillId = `${sourceMeta.id}__fill_area`;
 
+    const defaultLineZ = 2;
+    const sourceLineZ =
+      typeof sourceMeta.series.z === "number"
+        ? sourceMeta.series.z
+        : defaultLineZ;
+    const targetLineZ =
+      typeof targetMeta.series.z === "number"
+        ? targetMeta.series.z
+        : defaultLineZ;
+    let areaZ = sourceLineZ - 0.1;
+    if (areaZ < 0) {
+      areaZ = sourceLineZ + 0.1;
+    }
+    let baseZ = Math.min(areaZ - 0.01, targetLineZ - 0.1);
+    if (baseZ < 0) {
+      baseZ = Math.max(areaZ - 0.02, 0);
+    }
+
     const baseSeries: LineSeriesOption = {
       id: baseId,
       name: `${sourceName}__fill_base`,
@@ -419,7 +486,7 @@ export const buildSeries = ({
       smooth: targetMeta.series.smooth,
       lineStyle: {
         width: 0,
-        color: "rgba(0,0,0,0)",
+        color: targetMeta.lineColor,
       },
       areaStyle: {
         opacity: 0,
@@ -434,9 +501,7 @@ export const buildSeries = ({
       },
       xAxisIndex: targetMeta.series.xAxisIndex,
       yAxisIndex: targetMeta.series.yAxisIndex,
-      z: (typeof targetMeta.series.z === "number"
-        ? targetMeta.series.z
-        : 0) - 1,
+      z: baseZ,
       legendHoverLink: false,
     };
 
@@ -449,13 +514,13 @@ export const buildSeries = ({
       smooth: sourceMeta.series.smooth,
       lineStyle: {
         width: 0,
-        color: sourceMeta.color,
+        color: sourceMeta.lineColor,
       },
       areaStyle: {
-        color: applyAlpha(sourceMeta.color, LINE_AREA_ALPHA),
+        color: sourceMeta.fillColor,
       },
       itemStyle: {
-        color: sourceMeta.color,
+        color: sourceMeta.fillColor,
       },
       showSymbol: false,
       silent: true,
@@ -467,9 +532,7 @@ export const buildSeries = ({
       },
       xAxisIndex: sourceMeta.series.xAxisIndex,
       yAxisIndex: sourceMeta.series.yAxisIndex,
-      z: (typeof sourceMeta.series.z === "number"
-        ? sourceMeta.series.z
-        : 0) - 1,
+      z: areaZ,
       legendHoverLink: false,
     };
 

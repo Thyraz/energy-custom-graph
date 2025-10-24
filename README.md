@@ -10,7 +10,7 @@ Unlike the default `energy-usage-graph`, this card is not limited to the energy 
 - Supports any entity that exposes long-term statistics, not only energy sources.
 - Shares the core energy colour palette and styling so mixed dashboards look consistent.
 - Uses Home Assistant's bundled ECharts runtime – no extra frameworks are loaded.
-- Per-series control over aggregation statistic, chart type (bar or line), stacking, colour, unit scaling, and offsets.
+- Per-series control over aggregation statistic, chart type (bar or line), stacking, color, unit scaling and offsets.
 - Optional fill-between-rendering for line series to highlight the space between two signals.
 - Optional manual period selection (fixed ranges or relative day/week/month/year offsets) when you do not want to use the energy picker.
 
@@ -47,7 +47,7 @@ series:
   - statistic_id: sensor.energy_grid_export
     stat_type: change
     chart_type: line
-    area: true
+    fill: true
 ```
 
 The card supports the energy date picker out of the box. Place an `energy-date-selection` control on the same view, set `energy_date_selection: true` (which is the default), and the card will mirror the currently selected range. If you prefer manual control, set the flag to `false` and configure the `period` section instead.
@@ -85,10 +85,12 @@ The card automatically selects the recorder statistics period (5-minute, hourly,
 | `name` | string | entity name | Display name shown in tooltip and legend. |
 | `stat_type` | `"change"`, `"sum"`, `"mean"`, `"min"`, `"max"`, `"state"` | `"change"` | Statistic sampled from Home Assistant. |
 | `chart_type` | `"bar"`, `"line"` | `"bar"` | Presentation type. |
-| `area` | boolean | `false` | Fill the area underneath line charts. |
+| `fill` | boolean | `false` | Fill the area underneath the line. |
 | `stack` | string | – | Stack key for combining series; identical keys stack together. |
 | `stack_strategy` | `"all"`, `"samesign"` | `"all"` | ECharts stacking behaviour. |
-| `color` | string | palette order | Specific colour (hex, rgb, CSS variable). |
+| `color` | string | palette order | Specific colour (supports hex/hex-alpha, `rgb()`, `rgba()`, or CSS variables). |
+| `line_opacity` | number | `1` | Override line opacity (0–1). |
+| `fill_opacity` | number | style default | Override fill opacity (0–1). Defaults to 0.2 for line areas and 0.6 for bars. |
 | `y_axis` | `"left"`, `"right"` | `"left"` | Axis assignment. |
 | `show_legend` | boolean | `true` | Hide or show this series in the legend. |
 | `multiply` | number | `1` | Apply a multiplier to the statistic value. |
@@ -103,6 +105,7 @@ Set `fill_to_series` on a line series to shade the area between it and another l
 - Both series must be rendered as lines (no bars) and must not use `stack`.
 - The referenced `name` has to be unique within the card.
 - When the upper series drops below the lower one, the card clamps the fill to zero and logs a warning so you can inspect the data.
+- The fill area inherits the upper series' `fill_opacity` (or its default if unspecified).
 
 ### `y_axes` options
 
@@ -219,6 +222,7 @@ series:
 - Ensure recorder and long-term statistics are enabled for every entity you plan to plot.
 - Use the relative period mode with positive or negative offsets to jump by whole days, weeks, months, or years.
 - When using `fill_to_series`, keep `name` values unique and avoid stacking on the involved series.
+- Mix solid line colours with partial `fill_opacity` to highlight envelopes without hiding underlying charts; rgba/hex-alpha colours are fully supported.
 - When using multiple energy date pickers on a single dashboard, provide the appropriate `collection_key` so the card links to the correct selection.
 - Combine `multiply` and `add` to convert units (e.g. Wh to kWh) without creating extra template sensors.
 
