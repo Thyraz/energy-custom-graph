@@ -23,13 +23,14 @@ export interface EnergyCustomGraphSeriesConfig {
   show_legend?: boolean;
   multiply?: number;
   add?: number;
+  smooth?: boolean | number;
 }
 
 export type EnergyCustomGraphPeriodConfig =
   | { mode: "energy" }
   | {
       mode: "relative";
-      unit: "year";
+      unit: "day" | "week" | "month" | "year";
       offset?: number;
     }
   | {

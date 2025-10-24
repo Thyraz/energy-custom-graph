@@ -124,6 +124,10 @@ export const buildSeries = ({
     const chartType = seriesConfig.chart_type ?? "bar";
     const multiplier = seriesConfig.multiply ?? 1;
     const offset = seriesConfig.add ?? 0;
+    const smoothValue =
+      typeof seriesConfig.smooth === "number"
+        ? Math.max(0, Math.min(1, seriesConfig.smooth))
+        : seriesConfig.smooth;
     const name =
       seriesConfig.name ??
       meta?.name ??
@@ -181,7 +185,7 @@ export const buildSeries = ({
         id,
         name,
         type: "line",
-        smooth: true,
+        smooth: smoothValue ?? true,
         areaStyle: seriesConfig.area ? {} : undefined,
         data: dataPoints,
         stack: seriesConfig.stack,

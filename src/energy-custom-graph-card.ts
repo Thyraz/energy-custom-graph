@@ -3,11 +3,18 @@ import type { PropertyValues } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import type { HomeAssistant } from "custom-card-helpers";
 import {
+  addDays,
+  addMonths,
+  addWeeks,
   addYears,
   differenceInDays,
   endOfDay,
+  endOfMonth,
+  endOfWeek,
   endOfYear,
   startOfDay,
+  startOfMonth,
+  startOfWeek,
   startOfYear,
   subHours,
 } from "date-fns";
@@ -269,14 +276,37 @@ export class EnergyCustomGraphCard extends LitElement {
           return undefined;
         }
         const offset = periodConfig.offset ?? 0;
-        if (periodConfig.unit === "year") {
-          const start = addYears(base.start, offset);
-          const end = base.end
-            ? addYears(base.end, offset)
-            : endOfYear(addYears(base.start, offset));
-          return { start, end };
+        switch (periodConfig.unit) {
+          case "day": {
+            const start = addDays(base.start, offset);
+            const end = base.end
+              ? addDays(base.end, offset)
+              : endOfDay(addDays(base.start, offset));
+            return { start, end };
+          }
+          case "week": {
+            const start = addWeeks(base.start, offset);
+            const end = base.end
+              ? addWeeks(base.end, offset)
+              : endOfWeek(addWeeks(base.start, offset));
+            return { start, end };
+          }
+          case "month": {
+            const start = addMonths(base.start, offset);
+            const end = base.end
+              ? addMonths(base.end, offset)
+              : endOfMonth(addMonths(base.start, offset));
+            return { start, end };
+          }
+          case "year":
+          default: {
+            const start = addYears(base.start, offset);
+            const end = base.end
+              ? addYears(base.end, offset)
+              : endOfYear(addYears(base.start, offset));
+            return { start, end };
+          }
         }
-        return base;
       }
       case "fixed": {
         const start = new Date(periodConfig.start);
@@ -313,15 +343,30 @@ export class EnergyCustomGraphCard extends LitElement {
     };
   }
 
-  private _defaultRelativeBase(unit: "year"): { start: Date; end: Date } {
-    if (unit === "year") {
-      const now = new Date();
-      return {
-        start: startOfYear(now),
-        end: endOfYear(now),
-      };
+  private _defaultRelativeBase(
+    unit: "day" | "week" | "month" | "year"
+  ): { start: Date; end: Date } {
+    const now = new Date();
+    switch (unit) {
+      case "day":
+        return this._defaultEnergyRange();
+      case "week":
+        return {
+          start: startOfWeek(now),
+          end: endOfWeek(now),
+        };
+      case "month":
+        return {
+          start: startOfMonth(now),
+          end: endOfMonth(now),
+        };
+      case "year":
+      default:
+        return {
+          start: startOfYear(now),
+          end: endOfYear(now),
+        };
     }
-    return this._defaultEnergyRange();
   }
 
   private async _loadStatistics(): Promise<void> {
