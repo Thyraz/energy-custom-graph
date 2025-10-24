@@ -8,6 +8,7 @@ import {
   addWeeks,
   addYears,
   differenceInDays,
+  differenceInHours,
   endOfDay,
   endOfMonth,
   endOfWeek,
@@ -419,7 +420,7 @@ export class EnergyCustomGraphCard extends LitElement {
       ? statTypesRaw
       : [EnergyCustomGraphCard.DEFAULT_STAT_TYPE];
 
-    const statsPeriod = this._determineStatisticsPeriod(
+    const aggregationPlan = this._resolveAggregationPlan(
       this._periodStart,
       this._periodEnd
     );
@@ -431,32 +432,66 @@ export class EnergyCustomGraphCard extends LitElement {
     }
 
     try {
-      let metadataArray: StatisticsMetaData[] = [];
+      const metadata: Record<string, StatisticsMetaData> = {};
+
+      if (statisticIds.length) {
+        try {
+          const metadataArray = await getStatisticMetadata(
+            this.hass,
+            statisticIds
+          );
+          metadataArray.forEach((item) => {
+            metadata[item.statistic_id] = item;
+          });
+        } catch (error) {
+          console.error(
+            "[energy-custom-graph-card] Failed to load statistics metadata",
+            error
+          );
+        }
+      }
+
       let statistics: Statistics = {};
 
       if (statisticIds.length) {
-        [metadataArray, statistics] = await Promise.all([
-          getStatisticMetadata(this.hass, statisticIds),
-          fetchStatistics(
-            this.hass,
-            this._periodStart,
-            this._periodEnd,
-            statisticIds,
-            statsPeriod,
-            undefined,
-            statTypes
-          ),
-        ]);
+        for (let idx = 0; idx < aggregationPlan.length; idx++) {
+          const aggregation = aggregationPlan[idx];
+          try {
+            const fetched = await fetchStatistics(
+              this.hass,
+              this._periodStart,
+              this._periodEnd,
+              statisticIds,
+              aggregation,
+              undefined,
+              statTypes
+            );
+            statistics = fetched;
+            if (this._statisticsHaveData(fetched, statisticIds)) {
+              if (idx > 0) {
+                console.warn(
+                  `[energy-custom-graph-card] Aggregation "${aggregationPlan[0]}" returned no data. Using fallback "${aggregation}".`
+                );
+              }
+              break;
+            }
+            if (idx < aggregationPlan.length - 1) {
+              console.warn(
+                `[energy-custom-graph-card] Aggregation "${aggregation}" returned no data. Trying fallback "${aggregationPlan[idx + 1]}".`
+              );
+            }
+          } catch (error) {
+            console.error(
+              `[energy-custom-graph-card] Failed to load statistics for aggregation "${aggregation}"`,
+              error
+            );
+          }
+        }
       }
 
       if (fetchId !== this._activeFetch) {
         return;
       }
-
-      const metadata: Record<string, StatisticsMetaData> = {};
-      metadataArray.forEach((item) => {
-        metadata[item.statistic_id] = item;
-      });
 
       this._metadata = metadata;
       this._statistics = statistics;
@@ -717,7 +752,45 @@ export class EnergyCustomGraphCard extends LitElement {
     return { values, unit };
   }
 
-  private _determineStatisticsPeriod(
+  private _statisticsHaveData(
+    statistics: Statistics,
+    ids: string[]
+  ): boolean {
+    if (!ids.length) {
+      return true;
+    }
+    return ids.some((id) => statistics?.[id]?.length);
+  }
+
+  private _resolveAggregationPlan(
+    start: Date,
+    end?: Date
+  ): StatisticsPeriod[] {
+    const cfg = this._config?.aggregation;
+    const usesPicker = this._needsEnergyCollection(this._config);
+    const auto = this._deriveAutoStatisticsPeriod(start, end);
+    const plan: StatisticsPeriod[] = [];
+
+    const pushUnique = (period?: StatisticsPeriod) => {
+      if (period && !plan.includes(period)) {
+        plan.push(period);
+      }
+    };
+
+    if (usesPicker) {
+      const key = this._getEnergyPickerRangeKey(start, end);
+      pushUnique(cfg?.energy_picker?.[key]);
+    } else {
+      pushUnique(cfg?.manual);
+    }
+
+    pushUnique(auto);
+    pushUnique(cfg?.fallback);
+
+    return plan.length ? plan : [auto];
+  }
+
+  private _deriveAutoStatisticsPeriod(
     start: Date,
     end?: Date
   ): StatisticsPeriod {
@@ -730,6 +803,35 @@ export class EnergyCustomGraphCard extends LitElement {
       return "day";
     }
     return "hour";
+  }
+
+  private _getEnergyPickerRangeKey(
+    start: Date,
+    end?: Date
+  ): "hour" | "day" | "week" | "month" | "year" {
+    const effectiveEnd = end ?? new Date();
+    const hourDifference = Math.max(
+      differenceInHours(effectiveEnd, start),
+      0
+    );
+    const dayDifference = Math.max(
+      differenceInDays(effectiveEnd, start),
+      0
+    );
+
+    if (hourDifference <= 6) {
+      return "hour";
+    }
+    if (dayDifference <= 1) {
+      return "day";
+    }
+    if (dayDifference <= 7) {
+      return "week";
+    }
+    if (dayDifference <= 35) {
+      return "month";
+    }
+    return "year";
   }
 
   public static getStubConfig(): EnergyCustomGraphCardConfig {

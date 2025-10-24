@@ -55,6 +55,12 @@ export interface EnergyCustomGraphSeriesConfig {
   clip_max?: number;
 }
 
+export interface EnergyCustomGraphAggregationConfig {
+  manual?: StatisticsPeriod;
+  fallback?: StatisticsPeriod;
+  energy_picker?: Partial<Record<"hour" | "day" | "week" | "month" | "year", StatisticsPeriod>>;
+}
+
 export type EnergyCustomGraphPeriodConfig =
   | { mode: "energy" }
   | {
@@ -94,4 +100,5 @@ export interface EnergyCustomGraphCardConfig extends LovelaceCardConfig {
   y_axes?: EnergyCustomGraphAxisConfig[];
   tooltip_precision?: number;
   show_unit?: boolean;
+  aggregation?: EnergyCustomGraphAggregationConfig;
 }
