@@ -483,6 +483,7 @@ export const buildSeries = ({
       type: "line",
       data: baselineData,
       stack: stackId,
+      stackStrategy: "all",
       smooth: targetMeta.series.smooth,
       lineStyle: {
         width: 0,
@@ -511,6 +512,7 @@ export const buildSeries = ({
       type: "line",
       data: fillData,
       stack: stackId,
+      stackStrategy: "all",
       smooth: sourceMeta.series.smooth,
       lineStyle: {
         width: 0,

@@ -1035,12 +1035,12 @@ export class EnergyCustomGraphCard extends LitElement {
 
     .card-header {
       margin: 0;
-      padding: 16px;
+      padding: 16px 16px 0px 16px;
     }
 
     .content {
       flex: 1;
-      padding: 16px;
+      padding: 0px 16px 16px 16px;
       display: flex;
       flex-direction: column;
       gap: 8px;
