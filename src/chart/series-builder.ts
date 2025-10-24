@@ -113,6 +113,29 @@ export const buildSeries = ({
   const seriesById = new Map<string, EnergyCustomGraphSeriesConfig>();
   const output: (LineSeriesOption | BarSeriesOption)[] = [];
 
+  type LineSeriesMeta = {
+    id: string;
+    name: string;
+    config: EnergyCustomGraphSeriesConfig;
+    dataPoints: [number, number | null][];
+    color: string;
+    series: LineSeriesOption;
+  };
+
+  const lineSeriesByName = new Map<string, LineSeriesMeta>();
+  const fillRequests: Array<{
+    sourceName: string;
+    targetName: string;
+  }> = [];
+  const warned = new Set<string>();
+  const warnOnce = (key: string, message: string) => {
+    if (warned.has(key)) {
+      return;
+    }
+    warned.add(key);
+    console.warn(`[energy-custom-graph] ${message}`);
+  };
+
   configSeries.forEach((seriesConfig, index) => {
     const raw = statistics?.[seriesConfig.statistic_id];
     if (!raw?.length) {
@@ -211,6 +234,31 @@ export const buildSeries = ({
         };
       }
       output.push(lineSeries);
+
+      const nameKey = name;
+      if (lineSeriesByName.has(nameKey)) {
+        warnOnce(
+          `duplicate-name-${nameKey}`,
+          `Multiple series share the name "${nameKey}". fill_to_series references will be ambiguous.`
+        );
+      } else {
+        lineSeriesByName.set(nameKey, {
+          id,
+          name: nameKey,
+          config: seriesConfig,
+          dataPoints,
+          color: colorValue,
+          series: lineSeries,
+        });
+      }
+
+      const targetName = seriesConfig.fill_to_series?.trim();
+      if (targetName) {
+        fillRequests.push({
+          sourceName: nameKey,
+          targetName,
+        });
+      }
     } else {
       const barSeries: BarSeriesOption = {
         id,
@@ -236,6 +284,13 @@ export const buildSeries = ({
         barMaxWidth: BAR_MAX_WIDTH,
       };
       output.push(barSeries);
+
+      if (seriesConfig.fill_to_series) {
+        warnOnce(
+          `fill-bar-${name}`,
+          `Series "${name}" is configured as bar chart and cannot use fill_to_series.`
+        );
+      }
     }
 
     legend.push({
@@ -244,6 +299,181 @@ export const buildSeries = ({
       color: colorValue,
       hidden: seriesConfig.show_legend === false,
     });
+  });
+
+  fillRequests.forEach(({ sourceName, targetName }) => {
+    const sourceMeta = lineSeriesByName.get(sourceName);
+    if (!sourceMeta) {
+      warnOnce(
+        `fill-source-missing-${sourceName}`,
+        `Series "${sourceName}" could not be found for fill_to_series processing.`
+      );
+      return;
+    }
+
+    if (sourceMeta.config.stack) {
+      warnOnce(
+        `fill-source-stack-${sourceName}`,
+        `Series "${sourceName}" uses stack together with fill_to_series. Stacking is not supported for fill areas.`
+      );
+      return;
+    }
+
+    const targetMeta = lineSeriesByName.get(targetName);
+    if (!targetMeta) {
+      warnOnce(
+        `fill-target-missing-${sourceName}-${targetName}`,
+        `fill_to_series for "${sourceName}" references "${targetName}", which does not exist or is not a line series.`
+      );
+      return;
+    }
+
+    if (targetMeta.config.stack) {
+      warnOnce(
+        `fill-target-stack-${sourceName}-${targetName}`,
+        `Series "${targetName}" uses stack and cannot be used as fill target.`
+      );
+      return;
+    }
+
+    if (sourceMeta.name === targetMeta.name) {
+      warnOnce(
+        `fill-same-series-${sourceName}`,
+        `Series "${sourceName}" references itself in fill_to_series.`
+      );
+      return;
+    }
+
+    const sourceMap = new Map<number, number | null>();
+    sourceMeta.dataPoints.forEach(([timestamp, value]) => {
+      sourceMap.set(
+        timestamp,
+        typeof value === "number" && !Number.isNaN(value) ? value : null
+      );
+    });
+
+    const targetMap = new Map<number, number | null>();
+    targetMeta.dataPoints.forEach(([timestamp, value]) => {
+      targetMap.set(
+        timestamp,
+        typeof value === "number" && !Number.isNaN(value) ? value : null
+      );
+    });
+
+    const buckets = new Set<number>();
+    sourceMap.forEach((_value, key) => buckets.add(key));
+    targetMap.forEach((_value, key) => buckets.add(key));
+    const sortedBuckets = Array.from(buckets).sort((a, b) => a - b);
+
+    const baselineData: [number, number | null][] = [];
+    const fillData: [number, number | null][] = [];
+    let clamped = false;
+
+    sortedBuckets.forEach((bucket) => {
+      const upper = sourceMap.get(bucket);
+      const lower = targetMap.get(bucket);
+      if (
+        upper === undefined ||
+        lower === undefined ||
+        upper === null ||
+        lower === null
+      ) {
+        baselineData.push([bucket, lower ?? null]);
+        fillData.push([bucket, null]);
+        return;
+      }
+
+      const diff = upper - lower;
+      if (diff < 0) {
+        clamped = true;
+        baselineData.push([bucket, lower]);
+        fillData.push([bucket, 0]);
+        return;
+      }
+
+      baselineData.push([bucket, lower]);
+      fillData.push([bucket, diff]);
+    });
+
+    if (!fillData.some(([, value]) => typeof value === "number" && value > 0)) {
+      return;
+    }
+
+    if (clamped) {
+      warnOnce(
+        `fill-clamped-${sourceName}-${targetName}`,
+        `fill_to_series for "${sourceName}" encountered values below "${targetName}". Negative differences were clamped to zero.`
+      );
+    }
+
+    const stackId = `__energy_fill_${sourceMeta.id}`;
+    const baseId = `${sourceMeta.id}__fill_base`;
+    const fillId = `${sourceMeta.id}__fill_area`;
+
+    const baseSeries: LineSeriesOption = {
+      id: baseId,
+      name: `${sourceName}__fill_base`,
+      type: "line",
+      data: baselineData,
+      stack: stackId,
+      smooth: targetMeta.series.smooth,
+      lineStyle: {
+        width: 0,
+        color: "rgba(0,0,0,0)",
+      },
+      areaStyle: {
+        opacity: 0,
+      },
+      showSymbol: false,
+      silent: true,
+      tooltip: {
+        show: false,
+      },
+      emphasis: {
+        disabled: true,
+      },
+      xAxisIndex: targetMeta.series.xAxisIndex,
+      yAxisIndex: targetMeta.series.yAxisIndex,
+      z: (typeof targetMeta.series.z === "number"
+        ? targetMeta.series.z
+        : 0) - 1,
+      legendHoverLink: false,
+    };
+
+    const areaSeries: LineSeriesOption = {
+      id: fillId,
+      name: `${sourceName}__fill_area`,
+      type: "line",
+      data: fillData,
+      stack: stackId,
+      smooth: sourceMeta.series.smooth,
+      lineStyle: {
+        width: 0,
+        color: sourceMeta.color,
+      },
+      areaStyle: {
+        color: applyAlpha(sourceMeta.color, LINE_AREA_ALPHA),
+      },
+      itemStyle: {
+        color: sourceMeta.color,
+      },
+      showSymbol: false,
+      silent: true,
+      tooltip: {
+        show: false,
+      },
+      emphasis: {
+        disabled: true,
+      },
+      xAxisIndex: sourceMeta.series.xAxisIndex,
+      yAxisIndex: sourceMeta.series.yAxisIndex,
+      z: (typeof sourceMeta.series.z === "number"
+        ? sourceMeta.series.z
+        : 0) - 1,
+      legendHoverLink: false,
+    };
+
+    output.push(baseSeries, areaSeries);
   });
 
   return {

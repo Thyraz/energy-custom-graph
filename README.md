@@ -1,6 +1,6 @@
 # Energy Custom Graph
 
-Energy Custom Graph is a lightweight Lovelace card that plugs straight into Home Assistant's energy date picker to let you browse historical statistics without duplicating charting libraries. It reuses the built-in ECharts instance shipped with Home Assistant, so you get native styling, minimal overhead, and a layout that mirrors the core energy cards.
+Energy Custom Graph is a lightweight Lovelace card that plugs straight into Home Assistant's energy date picker. It reuses the built-in ECharts instance shipped with Home Assistant, so you get native styling, minimal overhead, and a layout that mirrors the core energy cards.
 
 Unlike the default `energy-usage-graph`, this card is not limited to the energy dashboard entities. Any long-term statistic available in the recorder can be visualised and combined, whether it comes from energy, climate, sensors, or custom integrations. Each series can pick the statistic type (`change`, `sum`, `mean`, `min`, `max`, `state`) and presentation style so you always see the numbers you care about.
 
@@ -9,8 +9,9 @@ Unlike the default `energy-usage-graph`, this card is not limited to the energy 
 - Drops into dashboards that already use the Home Assistant energy date picker (`energy-date-selection`) for instant period syncing.
 - Supports any entity that exposes long-term statistics, not only energy sources.
 - Shares the core energy colour palette and styling so mixed dashboards look consistent.
-- Uses Home Assistant's bundled ECharts runtime – no extra JavaScript payload.
+- Uses Home Assistant's bundled ECharts runtime – no extra frameworks are loaded.
 - Per-series control over aggregation statistic, chart type (bar or line), stacking, colour, unit scaling, and offsets.
+- Optional fill-between-rendering for line series to highlight the space between two signals.
 - Optional manual period selection (fixed ranges or relative day/week/month/year offsets) when you do not want to use the energy picker.
 
 ## Installation
@@ -49,7 +50,7 @@ series:
     area: true
 ```
 
-The card supports the energy date picker out of the box. Place an `energy-date-selection` control on the same view, set `energy_date_selection: true`, and the card will mirror the currently selected range. If you prefer manual control, set the flag to `false` and configure the `period` section instead.
+The card supports the energy date picker out of the box. Place an `energy-date-selection` control on the same view, set `energy_date_selection: true` (which is the default), and the card will mirror the currently selected range. If you prefer manual control, set the flag to `false` and configure the `period` section instead.
 
 ## Configuration Reference
 
@@ -93,6 +94,15 @@ The card automatically selects the recorder statistics period (5-minute, hourly,
 | `multiply` | number | `1` | Apply a multiplier to the statistic value. |
 | `add` | number | `0` | Apply an additive offset after multiplication. |
 | `smooth` | boolean or number | `true` | Control line smoothing. Use `false` to disable, or a value between 0 and 1 to tune the spline tightness. |
+| `fill_to_series` | string | – | For line charts only: name of another line series to fill towards. Both series must avoid stacking. |
+
+#### Fill between line series
+
+Set `fill_to_series` on a line series to shade the area between it and another line. The value must match the `name` of the target series. Requirements:
+
+- Both series must be rendered as lines (no bars) and must not use `stack`.
+- The referenced `name` has to be unique within the card.
+- When the upper series drops below the lower one, the card clamps the fill to zero and logs a warning so you can inspect the data.
 
 ### `y_axes` options
 
@@ -184,10 +194,31 @@ series:
     stat_type: change
 ```
 
+### 4. Fill the range between minimum and maximum
+
+```yaml
+type: custom:energy-custom-graph-card
+title: Outdoor temperature band
+energy_date_selection: true
+series:
+  - statistic_id: sensor.outdoor_temperature
+    name: Max temperature
+    stat_type: max
+    chart_type: line
+    fill_to_series: Min temperature
+    smooth: 0
+  - statistic_id: sensor.outdoor_temperature
+    name: Min temperature
+    stat_type: min
+    chart_type: line
+    smooth: 0
+```
+
 ## Tips
 
 - Ensure recorder and long-term statistics are enabled for every entity you plan to plot.
 - Use the relative period mode with positive or negative offsets to jump by whole days, weeks, months, or years.
+- When using `fill_to_series`, keep `name` values unique and avoid stacking on the involved series.
 - When using multiple energy date pickers on a single dashboard, provide the appropriate `collection_key` so the card links to the correct selection.
 - Combine `multiply` and `add` to convert units (e.g. Wh to kWh) without creating extra template sensors.
 

@@ -24,6 +24,7 @@ export interface EnergyCustomGraphSeriesConfig {
   multiply?: number;
   add?: number;
   smooth?: boolean | number;
+  fill_to_series?: string;
 }
 
 export type EnergyCustomGraphPeriodConfig =
