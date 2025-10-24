@@ -54,7 +54,7 @@ The card supports the energy date picker out of the box. Place an `energy-date-s
 
 ## Configuration Reference
 
-The card automatically selects the recorder statistics period (5-minute, hourly, daily, or monthly) based on the chosen timeframe so every series shares aligned buckets.
+By default the card mirrors the core energy cards and automatically selects the recorder statistics period (5-minute, hourly, daily, or monthly) based on the chosen timeframe so every series shares aligned buckets. You can override this behaviour via the `aggregation` options described below.
 
 ### Card options
 
@@ -76,6 +76,7 @@ The card automatically selects the recorder statistics period (5-minute, hourly,
 | `y_axes` | list | – | Additional axis overrides (see below). |
 | `tooltip_precision` | number | – | Override numeric precision in the tooltip. |
 | `show_unit` | boolean | `true` | Show units derived from statistics metadata (per series) in tooltips and axes. |
+| `aggregation` | object | auto | Control recorder aggregation intervals. See below. |
 
 ### `series` options
 
@@ -132,6 +133,28 @@ Each term accepts the following options:
 | `clip_max` | number | – | Clamp the term value to be no higher than this threshold. |
 | `operation` | `"add"`, `"subtract"`, `"multiply"`, `"divide"` | `"add"` | Operation applied to the running total. |
 | `constant` | number | – | Use a constant instead of a statistic. |
+
+### Aggregation options
+
+Override the recorder aggregation interval if needed. By default, the card mirrors HA’s energy cards (hours for daily ranges, days for weekly/monthly views, months for yearly views). Use the `aggregation` block to customise this behaviour:
+
+```yaml
+aggregation:
+  manual: hour          # Used when the card is not linked to the energy date picker
+  fallback: day         # Used if the preferred aggregation returns no data
+  energy_picker:
+    day: 5minute
+    week: hour
+    month: day
+    year: month
+```
+
+- `manual` applies to fixed periods (`energy_date_selection: false`).
+- `energy_picker` sets the aggregation used when the energy date picker selects `hour`, `day`, `week`, `month`, or `year` ranges. Any range not listed keeps the automatic behaviour.
+- `fallback` is used if the preferred interval yields no data. Omit it to keep the current error behaviour.
+- Valid intervals: `"5minute"`, `"hour"`, `"day"`, `"week"`, `"month"`.
+
+Tip: use very fine intervals (e.g. 5 minutes) only for short ranges to avoid excessive data volumes.
 
 ### `y_axes` options
 
