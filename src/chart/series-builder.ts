@@ -46,8 +46,10 @@ export const DEFAULT_COLORS = [
 
 export const BAR_BORDER_WIDTH = 1.5;
 export const BAR_MAX_WIDTH = 50;
-const BAR_FILL_ALPHA = 0.6;
-const LINE_AREA_ALPHA = 0.2;
+const BAR_FILL_ALPHA = 0.45;
+const LINE_AREA_ALPHA = 0.15;
+const DEFAULT_LINE_OPACITY = 0.85;
+const DEFAULT_BAR_BORDER_OPACITY = 0.75;
 
 const getCalculationKey = (index: number) => `calculation_${index}`;
 
@@ -253,11 +255,12 @@ export const buildSeries = ({
       typeof seriesConfig.line_opacity === "number"
         ? clampAlpha(seriesConfig.line_opacity)
         : undefined;
-    const lineColor =
+    const resolvedLineOpacity =
       lineOpacityOverride !== undefined
-        ? applyAlpha(colorValue, lineOpacityOverride)
-        : colorValue;
-    const lineHoverAlpha = Math.min(1, (lineOpacityOverride ?? 1) + 0.2);
+        ? lineOpacityOverride
+        : DEFAULT_LINE_OPACITY;
+    const lineColor = applyAlpha(colorValue, resolvedLineOpacity);
+    const lineHoverAlpha = Math.min(1, resolvedLineOpacity + 0.15);
     let lineHoverColor = applyAlpha(colorValue, lineHoverAlpha);
     if (lineHoverColor === colorValue) {
       lineHoverColor = lineColor;
@@ -372,6 +375,12 @@ export const buildSeries = ({
         Math.min(1, fillOpacity + 0.2)
       );
 
+      const borderOpacity =
+        lineOpacityOverride !== undefined
+          ? lineOpacityOverride
+          : DEFAULT_BAR_BORDER_OPACITY;
+      const borderColor = applyAlpha(colorValue, borderOpacity);
+
       const barSeries: BarSeriesOption = {
         id,
         name,
@@ -384,12 +393,12 @@ export const buildSeries = ({
           focus: "series",
           itemStyle: {
             color: hoverColor,
-            borderColor: colorValue,
+            borderColor,
           },
         },
         itemStyle: {
           color: fillColor,
-          borderColor: colorValue,
+          borderColor,
           borderWidth: BAR_BORDER_WIDTH,
         },
         color: fillColor,

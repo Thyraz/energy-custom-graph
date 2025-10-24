@@ -89,8 +89,8 @@ The card automatically selects the recorder statistics period (5-minute, hourly,
 | `stack` | string | – | Stack key for combining series; identical keys stack together. |
 | `stack_strategy` | `"all"`, `"samesign"` | `"all"` | ECharts stacking behaviour. |
 | `color` | string | palette order | Specific colour (supports hex/hex-alpha, `rgb()`, `rgba()`, or CSS variables). |
-| `line_opacity` | number | `1` | Override line opacity (0–1). |
-| `fill_opacity` | number | style default | Override fill opacity (0–1). Defaults to 0.2 for line areas and 0.6 for bars. |
+| `line_opacity` | number | style default | Override stroke opacity (0–1). Defaults to 0.85 for line charts and 0.75 for bar outlines. |
+| `fill_opacity` | number | style default | Override fill opacity (0–1). Defaults to 0.15 for line areas and 0.45 for bars. |
 | `y_axis` | `"left"`, `"right"` | `"left"` | Axis assignment. |
 | `show_legend` | boolean | `true` | Hide or show this series in the legend. |
 | `multiply` | number | `1` | Apply a multiplier to the statistic value. |
