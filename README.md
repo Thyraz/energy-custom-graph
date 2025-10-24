@@ -234,8 +234,8 @@ series:
     chart_type: bar
     color: "--energy-solar-color"
     stack: energy
-    clip_min: 0
-    calculation:
+    clip_min: 0   # self-consumption should never get negative. Clip in case the value is zero and gets a little bit negative due to rounding errors
+    calculation:  # self-consumption is total pv production - export to grid - batterx charge
       unit: kWh
       terms:
         - statistic_id: sensor.total_solar_production
