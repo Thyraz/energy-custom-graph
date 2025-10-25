@@ -10,6 +10,7 @@
     "module": {
       "distDir": "./dist",
       "publicUrl": "/hacsfiles/energy-custom-graph/",
+      "optimize": true,
       "includeNodeModules": true
     },
     "debug": {
