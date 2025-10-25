@@ -5,6 +5,7 @@ declare global {
 }
 
 import "./energy-custom-graph-card";
+import "./energy-custom-graph-card-editor";
 
 window.customCards = window.customCards || [];
 window.customCards.push({
@@ -13,4 +14,3 @@ window.customCards.push({
   description:
     "Flexible energy statistics chart with custom stacking, axes, and colors.",
 });
-

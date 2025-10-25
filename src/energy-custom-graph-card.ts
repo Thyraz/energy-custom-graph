@@ -1,7 +1,7 @@
 import { html, css, LitElement, nothing } from "lit";
 import type { PropertyValues } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import type { HomeAssistant } from "custom-card-helpers";
+import type { HomeAssistant, LovelaceCardEditor } from "custom-card-helpers";
 import {
   addDays,
   addMonths,
@@ -400,15 +400,16 @@ export class EnergyCustomGraphCard extends LitElement {
     this._config.series.forEach((series) => {
       const defaultStatType =
         series.stat_type ?? EnergyCustomGraphCard.DEFAULT_STAT_TYPE;
-      if (series.statistic_id) {
-        statisticIdSet.add(series.statistic_id);
+      if (series.statistic_id && series.statistic_id.trim()) {
+        const id = series.statistic_id.trim();
+        statisticIdSet.add(id);
         statTypeSet.add(defaultStatType);
       }
       series.calculation?.terms?.forEach((term) => {
         const termStatType =
           term.stat_type ?? defaultStatType ?? EnergyCustomGraphCard.DEFAULT_STAT_TYPE;
-        if (term.statistic_id) {
-          statisticIdSet.add(term.statistic_id);
+        if (term.statistic_id && term.statistic_id.trim()) {
+          statisticIdSet.add(term.statistic_id.trim());
           statTypeSet.add(termStatType);
         }
       });
@@ -841,6 +842,11 @@ export class EnergyCustomGraphCard extends LitElement {
     };
   }
 
+  public static async getConfigElement(): Promise<LovelaceCardEditor> {
+    await import("./energy-custom-graph-card-editor");
+    return document.createElement("energy-custom-graph-card-editor");
+  }
+
   public setConfig(config: EnergyCustomGraphCardConfig): void {
     if (!config.series || !Array.isArray(config.series) || !config.series.length) {
       throw new Error("At least one series must be configured");
@@ -848,34 +854,34 @@ export class EnergyCustomGraphCard extends LitElement {
 
     config.series.forEach((series: EnergyCustomGraphSeriesConfig, index) => {
       if (!series) {
-        throw new Error(`Series at index ${index} is not defined`);
+        console.warn(
+          `[energy-custom-graph-card] Series at index ${index} is not defined and will be ignored.`
+        );
+        return;
       }
-      const hasStatistic = typeof series.statistic_id === "string";
+      const hasStatistic = typeof series.statistic_id === "string" && series.statistic_id.trim() !== "";
       const hasCalculation = !!series.calculation;
       if (hasStatistic && hasCalculation) {
-        throw new Error(
-          `Series at index ${index} cannot define both statistic_id and calculation`
+        console.warn(
+          `[energy-custom-graph-card] Series at index ${index} defines both statistic_id and calculation. The statistic will be ignored.`
         );
       }
       if (!hasStatistic && !hasCalculation) {
-        throw new Error(
-          `Series at index ${index} must define either statistic_id or calculation`
+        console.warn(
+          `[energy-custom-graph-card] Series at index ${index} is missing both statistic_id and calculation. The series will be skipped until configured.`
         );
       }
       if (hasCalculation) {
         const terms = series.calculation?.terms ?? [];
         if (!terms.length) {
-          throw new Error(
-            `Series at index ${index} defines a calculation without any terms`
+          console.warn(
+            `[energy-custom-graph-card] Calculation for series ${index} has no terms. The series will be skipped.`
           );
         }
         terms.forEach((term, termIndex) => {
-          if (
-            term.statistic_id === undefined &&
-            term.constant === undefined
-          ) {
-            throw new Error(
-              `Calculation term ${termIndex} of series ${index} must define either statistic_id or constant`
+          if (term.statistic_id === undefined && term.constant === undefined) {
+            console.warn(
+              `[energy-custom-graph-card] Calculation term ${termIndex} of series ${index} is missing both statistic_id and constant. This term will be ignored.`
             );
           }
         });

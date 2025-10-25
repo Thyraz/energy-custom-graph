@@ -176,6 +176,7 @@ export const buildSeries = ({
   };
 
   configSeries.forEach((seriesConfig, index) => {
+    const statisticId = seriesConfig.statistic_id?.trim();
     const calculationKey = seriesConfig.calculation
       ? getCalculationKey(index)
       : undefined;
@@ -192,12 +193,12 @@ export const buildSeries = ({
         );
         return;
       }
-    } else if (seriesConfig.statistic_id) {
-      raw = statistics?.[seriesConfig.statistic_id];
+    } else if (statisticId) {
+      raw = statistics?.[statisticId];
       if (!raw?.length) {
         warnOnce(
-          `statistics-empty-${seriesConfig.statistic_id}`,
-          `No statistics available for "${seriesConfig.statistic_id}".`
+          `statistics-empty-${statisticId}`,
+          `No statistics available for "${statisticId}".`
         );
         return;
       }
@@ -209,8 +210,8 @@ export const buildSeries = ({
       return;
     }
 
-    const meta = seriesConfig.statistic_id
-      ? metadata?.[seriesConfig.statistic_id]
+    const meta = statisticId
+      ? metadata?.[statisticId]
       : undefined;
     const statType = seriesConfig.stat_type ?? "change";
     const chartType = seriesConfig.chart_type ?? "bar";
@@ -224,9 +225,9 @@ export const buildSeries = ({
     const name =
       seriesConfig.name ??
       meta?.name ??
-      (seriesConfig.statistic_id
-        ? hass.states[seriesConfig.statistic_id]?.attributes.friendly_name ??
-          seriesConfig.statistic_id
+      (statisticId
+        ? hass.states[statisticId]?.attributes.friendly_name ??
+          statisticId
         : `Series ${index + 1}`);
 
     const colorToken =
@@ -268,8 +269,7 @@ export const buildSeries = ({
     const defaultBarFillOpacity = BAR_FILL_ALPHA;
     const defaultLineFillOpacity = LINE_AREA_ALPHA;
 
-    const baseKey =
-      seriesConfig.statistic_id ?? calculationKey ?? `series_${index}`;
+    const baseKey = statisticId ?? calculationKey ?? `series_${index}`;
     const id = `${baseKey}:${statType}:${chartType}:${index}`;
     unitBySeries.set(
       id,
