@@ -314,7 +314,6 @@ export const buildSeries = ({
         areaStyle: shouldFill ? {} : undefined,
         data: dataPoints,
         stack: seriesConfig.stack,
-        stackStrategy: seriesConfig.stack_strategy,
         yAxisIndex: seriesConfig.y_axis === "right" ? 1 : 0,
         emphasis: {
           focus: "series",
@@ -386,7 +385,6 @@ export const buildSeries = ({
         name,
         type: "bar",
         stack: seriesConfig.stack,
-        stackStrategy: seriesConfig.stack_strategy,
         data: dataPoints,
         yAxisIndex: seriesConfig.y_axis === "right" ? 1 : 0,
         emphasis: {

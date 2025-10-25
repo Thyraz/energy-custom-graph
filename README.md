@@ -88,7 +88,6 @@ By default the card mirrors the core energy cards and automatically selects the 
 | `chart_type` | `"bar"`, `"line"` | `"bar"` | Presentation type. |
 | `fill` | boolean | `false` | Fill the area underneath the line. |
 | `stack` | string | – | Stack key for combining series; identical keys stack together. |
-| `stack_strategy` | `"all"`, `"samesign"` | `"all"` | ECharts stacking behaviour. |
 | `color` | string | palette order | Specific colour (supports hex/hex-alpha, `rgb()`, `rgba()`, or CSS variables). |
 | `line_opacity` | number | style default | Override stroke opacity (0–1). Defaults to 0.85 for line charts and 0.75 for bar outlines. |
 | `fill_opacity` | number | style default | Override fill opacity (0–1). Defaults to 0.15 for line areas and 0.45 for bars. |
@@ -125,14 +124,14 @@ Each term accepts the following options:
 
 | Key | Type | Default | Description |
 | --- | ---- | ------- | ----------- |
-| `statistic_id` | string | – | Statistic to read. Optional if `constant` is provided. |
-| `stat_type` | `"change"`, `"sum"`, `"mean"`, `"min"`, `"max"`, `"state"` | inherit | Field to read from the statistic. |
-| `multiply` | number | `1` | Multiply the statistic before applying the operation. |
-| `add` | number | `0` | Offset applied after multiplication. |
-| `clip_min` | number | – | Clamp the term value to be no lower than this threshold. |
-| `clip_max` | number | – | Clamp the term value to be no higher than this threshold. |
+| `statistic_id` | string | – | Statistic to read. Mutually exclusive with `constant`. |
+| `stat_type` | `"change"`, `"sum"`, `"mean"`, `"min"`, `"max"`, `"state"` | inherit | Field to read from the statistic. Only used when `statistic_id` is set. |
+| `multiply` | number | `1` | Multiply the statistic before applying the operation. Only used for statistics. |
+| `add` | number | `0` | Offset applied after multiplication. Only used for statistics. |
+| `clip_min` | number | – | Clamp the statistic value to be no lower than this threshold. |
+| `clip_max` | number | – | Clamp the statistic value to be no higher than this threshold. |
 | `operation` | `"add"`, `"subtract"`, `"multiply"`, `"divide"` | `"add"` | Operation applied to the running total. |
-| `constant` | number | – | Use a constant instead of a statistic. |
+| `constant` | number | – | Constant that replaces the statistic. Mutually exclusive with `statistic_id`. |
 
 ### Aggregation options
 

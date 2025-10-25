@@ -40,7 +40,6 @@ export interface EnergyCustomGraphSeriesConfig {
   chart_type?: EnergyCustomGraphChartType;
   fill?: boolean;
   stack?: string;
-  stack_strategy?: "all" | "samesign";
   color?: string;
   y_axis?: "left" | "right";
   show_legend?: boolean;

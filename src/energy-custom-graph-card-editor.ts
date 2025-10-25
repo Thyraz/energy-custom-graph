@@ -428,13 +428,11 @@ export class EnergyCustomGraphCardEditor
         ${expanded
           ? html`
               <div class="collapsible-body">
-                ${this._renderSeriesBasics(series, index)}
-                ${usingCalculation
-                  ? this._renderCalculationEditor(series, index)
-                  : this._renderStatisticEditor(series, index)}
-                ${this._renderDisplayOptions(series, index)}
-                ${this._renderTransformOptions(series, index)}
-                <div class="section-footer">
+                ${this._renderSeriesBasicsGroup(series, index)}
+                ${this._renderSeriesSourceGroup(series, index)}
+                ${this._renderSeriesDisplayGroup(series, index)}
+                ${this._renderSeriesTransformGroup(series, index)}
+                <div class="section-footer series-footer">
                   <button
                     type="button"
                     class="text warning"
@@ -453,163 +451,171 @@ export class EnergyCustomGraphCardEditor
     `;
   }
 
-  private _renderSeriesBasics(series: EnergyCustomGraphSeriesConfig, index: number) {
+  private _renderSeriesBasicsGroup(series: EnergyCustomGraphSeriesConfig, index: number) {
+    const chartType = series.chart_type ?? "bar";
+    const chartButtons: Array<{ value: EnergyCustomGraphChartType; label: string }> = [
+      { value: "bar", label: "Bar" },
+      { value: "line", label: "Line" },
+    ];
     return html`
-      <div class="subsection">
-        <ha-textfield
-          label="Series name"
-          .value=${series.name ?? ""}
-          @input=${(ev: Event) =>
-            this._updateSeries(index, "name", (ev.target as HTMLInputElement).value || undefined)}
-        ></ha-textfield>
-        <div class="field">
-          <label>Chart type</label>
-          ${(() => {
-            const current = series.chart_type ?? "bar";
-            return html`<select
-              @change=${(ev: Event) =>
-                this._updateSeries(
-                  index,
-                  "chart_type",
-                  (ev.target as HTMLSelectElement).value as EnergyCustomGraphChartType
-                )}
-            >
-              <option value="bar" ?selected=${current === "bar"}>Bar</option>
-              <option value="line" ?selected=${current === "line"}>Line</option>
-            </select>`;
-          })()}
+      <div class="group-card">
+        <div class="group-header">
+          <span class="group-title">Basics</span>
         </div>
-        <div class="row">
-          <ha-switch
-            .checked=${series.show_legend !== false}
+        <div class="group-body">
+          <ha-textfield
+            label="Series name"
+            .value=${series.name ?? ""}
+            @input=${(ev: Event) =>
+              this._updateSeries(index, "name", (ev.target as HTMLInputElement).value || undefined)}
+          ></ha-textfield>
+          <div class="field">
+            <label>Chart type</label>
+            <div class="segment-group" role="group" aria-label="Chart type">
+              ${chartButtons.map(
+                (button) => html`
+                  <button
+                    type="button"
+                    class=${classMap({
+                      "segment-button": true,
+                      active: chartType === button.value,
+                    })}
+                    @click=${() => this._setSeriesChartType(index, button.value)}
+                  >
+                    ${button.label}
+                  </button>
+                `
+              )}
+            </div>
+          </div>
+          <div class="field">
+            <label>Y axis</label>
+            ${(() => {
+              const current = series.y_axis ?? "left";
+              return html`<select
+                @change=${(ev: Event) =>
+                  this._updateSeries(
+                    index,
+                    "y_axis",
+                    (ev.target as HTMLSelectElement).value as "left" | "right"
+                  )}
+              >
+                <option value="left" ?selected=${current === "left"}>Left</option>
+                <option value="right" ?selected=${current === "right"}>Right</option>
+              </select>`;
+            })()}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  private _renderSeriesSourceGroup(series: EnergyCustomGraphSeriesConfig, index: number) {
+    const source = series.calculation ? "calculation" : "statistic";
+    return html`
+      <div class="group-card">
+        <div class="group-header">
+          <span class="group-title">Data source</span>
+        </div>
+        <div class="group-body series-source-body">
+          <div class="segment-group" role="group" aria-label="Data source">
+            ${(["statistic", "calculation"] as const).map(
+              (mode) => html`
+                <button
+                  type="button"
+                  class=${classMap({
+                    "segment-button": true,
+                    active: source === mode,
+                  })}
+                  @click=${() => this._setSeriesSource(index, mode)}
+                >
+                  ${mode === "statistic" ? "Statistic" : "Calculation"}
+                </button>
+              `
+            )}
+          </div>
+          ${source === "calculation"
+            ? this._renderSeriesCalculationContent(series, index)
+            : this._renderSeriesStatisticContent(series, index)}
+        </div>
+      </div>
+    `;
+  }
+
+  private _renderSeriesStatisticContent(series: EnergyCustomGraphSeriesConfig, index: number) {
+    return html`
+      <ha-textfield
+        label="Statistic ID"
+        .value=${series.statistic_id ?? ""}
+        @input=${(ev: Event) =>
+          this._updateSeries(
+            index,
+            "statistic_id",
+            (ev.target as HTMLInputElement).value || undefined
+          )}
+      ></ha-textfield>
+      <div class="field">
+        <label>Statistic type</label>
+        ${(() => {
+          const current = series.stat_type ?? "change";
+          return html`<select
             @change=${(ev: Event) =>
               this._updateSeries(
                 index,
-                "show_legend",
-                (ev.target as HTMLInputElement).checked
+                "stat_type",
+                (ev.target as HTMLSelectElement).value as EnergyCustomGraphStatisticType
               )}
-          ></ha-switch>
-          <span>Show in legend</span>
-        </div>
-        <div class="field">
-          <label>Y axis</label>
-          ${(() => {
-            const current = series.y_axis ?? "left";
-            return html`<select
-              @change=${(ev: Event) =>
-                this._updateSeries(
-                  index,
-                  "y_axis",
-                  (ev.target as HTMLSelectElement).value as "left" | "right"
-                )}
-            >
-              <option value="left" ?selected=${current === "left"}>Left</option>
-              <option value="right" ?selected=${current === "right"}>Right</option>
-            </select>`;
-          })()}
-        </div>
-      </div>
-    `;
-  }
-
-  private _renderStatisticEditor(series: EnergyCustomGraphSeriesConfig, index: number) {
-    return html`
-      <div class="subsection">
-          <div class="row space-between">
-            <span class="subtitle">Statistic series</span>
-            <button
-              type="button"
-              class="text"
-              @click=${() => this._convertSeriesToCalculation(index)}
-            >
-              Convert to calculation
-            </button>
-          </div>
-        <ha-textfield
-          label="Statistic ID"
-          .value=${series.statistic_id ?? ""}
-          @input=${(ev: Event) =>
-            this._updateSeries(
-              index,
-              "statistic_id",
-              (ev.target as HTMLInputElement).value || undefined
+          >
+            ${STAT_TYPE_OPTIONS.map(
+              (option) =>
+                html`<option value=${option.value} ?selected=${current === option.value}
+                  >${option.label}</option
+                >`
             )}
-        ></ha-textfield>
-        <div class="field">
-          <label>Statistic type</label>
-          ${(() => {
-            const current = series.stat_type ?? "change";
-            return html`<select
-              @change=${(ev: Event) =>
-                this._updateSeries(
-                  index,
-                  "stat_type",
-                  (ev.target as HTMLSelectElement).value as EnergyCustomGraphStatisticType
-                )}
-            >
-              ${STAT_TYPE_OPTIONS.map(
-                (option) =>
-                  html`<option value=${option.value} ?selected=${current === option.value}
-                    >${option.label}</option
-                  >`
-              )}
-            </select>`;
-          })()}
-        </div>
+          </select>`;
+        })()}
       </div>
     `;
   }
 
-  private _renderCalculationEditor(series: EnergyCustomGraphSeriesConfig, index: number) {
+  private _renderSeriesCalculationContent(series: EnergyCustomGraphSeriesConfig, index: number) {
     const calculation: EnergyCustomGraphCalculationConfig = series.calculation ?? {
       terms: [],
     };
     return html`
-      <div class="subsection">
-        <div class="row space-between">
-          <span class="subtitle">Calculation</span>
-          <button
-            type="button"
-            class="text"
-            @click=${() => this._convertSeriesToStatistic(index)}
-          >
-            Switch to statistic
-          </button>
-        </div>
-        <ha-textfield
-          label="Calculation unit"
-          .value=${calculation.unit ?? ""}
-          @input=${(ev: Event) =>
-            this._updateCalculation(index, {
-              ...calculation,
-              unit: (ev.target as HTMLInputElement).value || undefined,
-            })}
-        ></ha-textfield>
-        <ha-textfield
-          label="Initial value"
-          type="number"
-          .value=${calculation.initial_value !== undefined
-            ? String(calculation.initial_value)
-            : "0"}
-          @input=${(ev: Event) =>
-            this._updateCalculation(index, {
-              ...calculation,
-              initial_value: (ev.target as HTMLInputElement).value
-                ? Number((ev.target as HTMLInputElement).value)
-                : 0,
-            })}
-        ></ha-textfield>
-        <div class="terms-list">
-          ${calculation.terms?.length
-            ? calculation.terms.map((term, termIndex) =>
-                this._renderCalculationTerm(index, termIndex, term)
-              )
-            : html`<p class="hint">Add at least one term to build the calculation.</p>`}
-        </div>
-        <button type="button" class="outlined" @click=${() => this._addCalculationTerm(index)}>
-          Add term
-        </button>
+      <ha-textfield
+        label="Calculation unit"
+        .value=${calculation.unit ?? ""}
+        @input=${(ev: Event) =>
+          this._updateCalculation(index, {
+            ...calculation,
+            unit: (ev.target as HTMLInputElement).value || undefined,
+          })}
+      ></ha-textfield>
+      <ha-textfield
+        label="Initial value"
+        type="number"
+        .value=${calculation.initial_value !== undefined
+          ? String(calculation.initial_value)
+          : "0"}
+        @input=${(ev: Event) =>
+          this._updateCalculation(index, {
+            ...calculation,
+            initial_value: (ev.target as HTMLInputElement).value
+              ? Number((ev.target as HTMLInputElement).value)
+              : 0,
+          })}
+      ></ha-textfield>
+      <div class="terms-list">
+        ${calculation.terms?.length
+          ? calculation.terms.map((term, termIndex) =>
+              this._renderCalculationTerm(index, termIndex, term)
+            )
+          : html`<p class="hint">Add at least one term to build the calculation.</p>`}
       </div>
+      <button type="button" class="outlined" @click=${() => this._addCalculationTerm(index)}>
+        Add term
+      </button>
     `;
   }
 
@@ -641,126 +647,10 @@ export class EnergyCustomGraphCardEditor
         ${expanded
           ? html`
               <div class="nested-body">
-                <div class="term-body">
-                  <div class="field">
-                    <label>Operation</label>
-                    ${(() => {
-                      const current = operation;
-                      return html`<select
-                        @change=${(ev: Event) =>
-                          this._updateTerm(
-                            seriesIndex,
-                            termIndex,
-                            "operation",
-                            (ev.target as HTMLSelectElement).value as any
-                          )}
-                      >
-                        <option value="add" ?selected=${current === "add"}>Add</option>
-                        <option value="subtract" ?selected=${current === "subtract"}
-                          >Subtract</option
-                        >
-                        <option value="multiply" ?selected=${current === "multiply"}
-                          >Multiply</option
-                        >
-                        <option value="divide" ?selected=${current === "divide"}>Divide</option>
-                      </select>`;
-                    })()}
-                  </div>
-                  <ha-textfield
-                    label="Statistic ID"
-                    helper="Leave empty to use constant"
-                    .value=${term.statistic_id ?? ""}
-                    @input=${(ev: Event) =>
-                      this._updateTerm(
-                        seriesIndex,
-                        termIndex,
-                        "statistic_id",
-                        (ev.target as HTMLInputElement).value || undefined
-                      )}
-                  ></ha-textfield>
-                  <div class="field">
-                    <label>Statistic type</label>
-                    ${(() => {
-                      const current = term.stat_type ?? "change";
-                      return html`<select
-                        @change=${(ev: Event) =>
-                          this._updateTerm(
-                            seriesIndex,
-                            termIndex,
-                            "stat_type",
-                            (ev.target as HTMLSelectElement).value as EnergyCustomGraphStatisticType
-                          )}
-                      >
-                        ${STAT_TYPE_OPTIONS.map(
-                          (option) =>
-                            html`<option value=${option.value} ?selected=${current === option.value}
-                              >${option.label}</option
-                            >`
-                        )}
-                      </select>`;
-                    })()}
-                  </div>
-                  <ha-textfield
-                    label="Constant"
-                    helper="Used when no statistic is set"
-                    type="number"
-                    .value=${term.constant !== undefined ? String(term.constant) : ""}
-                    @input=${(ev: Event) =>
-                      this._updateTermNumber(
-                        seriesIndex,
-                        termIndex,
-                        "constant",
-                        (ev.target as HTMLInputElement).value
-                      )}
-                  ></ha-textfield>
-                  <ha-textfield
-                    label="Multiply"
-                    type="number"
-                    .value=${term.multiply !== undefined ? String(term.multiply) : ""}
-                    @input=${(ev: Event) =>
-                      this._updateTermNumber(
-                        seriesIndex,
-                        termIndex,
-                        "multiply",
-                        (ev.target as HTMLInputElement).value
-                      )}
-                  ></ha-textfield>
-                  <ha-textfield
-                    label="Add"
-                    type="number"
-                    .value=${term.add !== undefined ? String(term.add) : ""}
-                    @input=${(ev: Event) =>
-                      this._updateTermNumber(
-                        seriesIndex,
-                        termIndex,
-                        "add",
-                        (ev.target as HTMLInputElement).value
-                      )}
-                  ></ha-textfield>
-                  <ha-textfield
-                    label="Clip min"
-                    type="number"
-                    .value=${term.clip_min !== undefined ? String(term.clip_min) : ""}
-                    @input=${(ev: Event) =>
-                      this._updateTermNumber(
-                        seriesIndex,
-                        termIndex,
-                        "clip_min",
-                        (ev.target as HTMLInputElement).value
-                      )}
-                  ></ha-textfield>
-                  <ha-textfield
-                    label="Clip max"
-                    type="number"
-                    .value=${term.clip_max !== undefined ? String(term.clip_max) : ""}
-                    @input=${(ev: Event) =>
-                      this._updateTermNumber(
-                        seriesIndex,
-                        termIndex,
-                        "clip_max",
-                        (ev.target as HTMLInputElement).value
-                      )}
-                  ></ha-textfield>
+                <div class="term-body column">
+                  ${this._renderTermOperationField(seriesIndex, termIndex, operation)}
+                  ${this._renderTermSourceFields(seriesIndex, termIndex, term)}
+                  ${this._renderTermTransformFields(seriesIndex, termIndex, term)}
                 </div>
                 <div class="nested-footer">
                   <button
@@ -781,65 +671,265 @@ export class EnergyCustomGraphCardEditor
     `;
   }
 
-  private _renderDisplayOptions(series: EnergyCustomGraphSeriesConfig, index: number) {
+  private _renderTermOperationField(
+    seriesIndex: number,
+    termIndex: number,
+    operation: EnergyCustomGraphCalculationTerm["operation"]
+  ) {
+    const current = operation ?? "add";
     return html`
-      <div class="subsection">
-        <span class="subtitle">Display</span>
-        <div class="color-row">
-        <div class="field">
-          <label>Preset color</label>
-          ${(() => {
-            const current = ENERGY_COLOR_PRESETS.find((item) => item.value === series.color)?.value ?? "";
-            return html`<select
-              @change=${(ev: Event) =>
-                this._updateSeries(
-                  index,
-                  "color",
-                  (ev.target as HTMLSelectElement).value || undefined
-                )}
-            >
-              <option value="" ?selected=${current === ""}>Custom</option>
-              ${ENERGY_COLOR_PRESETS.map(
-                (preset) =>
-                  html`<option value=${preset.value} ?selected=${current === preset.value}
-                    >${preset.label}</option
-                  >`
-              )}
-            </select>`;
-          })()}
-        </div>
-          <ha-textfield
-            label="Custom color"
-            .value=${series.color ?? ""}
-            @input=${(ev: Event) =>
-              this._updateSeries(
-                index,
-                "color",
-                (ev.target as HTMLInputElement).value || undefined
-              )}
-          ></ha-textfield>
-        </div>
-        <div class="row">
-          <ha-switch
-            .checked=${series.fill === true}
-            ?disabled=${series.chart_type === "bar"}
-            @change=${(ev: Event) =>
-              this._updateSeries(index, "fill", (ev.target as HTMLInputElement).checked)}
-          ></ha-switch>
-          <span>Fill area (lines only)</span>
-        </div>
-        <ha-textfield
-          label="Line opacity"
-          type="number"
-          helper="Default 0.85 for lines, 0.75 for bars"
-          .value=${series.line_opacity !== undefined ? String(series.line_opacity) : ""}
-          @input=${(ev: Event) =>
-            this._updateSeriesNumber(
-              index,
-              "line_opacity",
-              (ev.target as HTMLInputElement).value
+      <div class="field">
+        <label>Operation</label>
+        <select
+          @change=${(ev: Event) =>
+            this._updateTerm(
+              seriesIndex,
+              termIndex,
+              "operation",
+              (ev.target as HTMLSelectElement).value as EnergyCustomGraphCalculationTerm["operation"]
             )}
-        ></ha-textfield>
+        >
+          <option value="add" ?selected=${current === "add"}>Add</option>
+          <option value="subtract" ?selected=${current === "subtract"}>Subtract</option>
+          <option value="multiply" ?selected=${current === "multiply"}>Multiply</option>
+          <option value="divide" ?selected=${current === "divide"}>Divide</option>
+        </select>
+      </div>
+    `;
+  }
+
+  private _renderTermSourceFields(
+    seriesIndex: number,
+    termIndex: number,
+    term: EnergyCustomGraphCalculationTerm
+  ) {
+    const mode: "statistic" | "constant" =
+      term.constant !== undefined ? "constant" : "statistic";
+    const buttons: Array<{ value: "statistic" | "constant"; label: string }> = [
+      { value: "statistic", label: "Statistic" },
+      { value: "constant", label: "Constant" },
+    ];
+    return html`
+      <div class="field full-width">
+        <label>Input type</label>
+        <div class="segment-group" role="group" aria-label="Term input type">
+          ${buttons.map(
+            (button) => html`
+              <button
+                type="button"
+                class=${classMap({
+                  "segment-button": true,
+                  active: mode === button.value,
+                })}
+                @click=${() => this._setTermMode(seriesIndex, termIndex, button.value)}
+              >
+                ${button.label}
+              </button>
+            `
+          )}
+        </div>
+      </div>
+      ${mode === "statistic"
+        ? html`
+            <ha-textfield
+              label="Statistic ID"
+              helper="Recorder statistic (e.g. sensor.energy_import)"
+              .value=${term.statistic_id ?? ""}
+              @input=${(ev: Event) =>
+                this._updateTerm(
+                  seriesIndex,
+                  termIndex,
+                  "statistic_id",
+                  (ev.target as HTMLInputElement).value || undefined
+                )}
+            ></ha-textfield>
+            <div class="field">
+              <label>Statistic type</label>
+              <select
+                @change=${(ev: Event) =>
+                  this._updateTerm(
+                    seriesIndex,
+                    termIndex,
+                    "stat_type",
+                    (ev.target as HTMLSelectElement).value as EnergyCustomGraphStatisticType
+                  )}
+              >
+                ${STAT_TYPE_OPTIONS.map(
+                  (option) =>
+                    html`<option value=${option.value} ?selected=${(term.stat_type ?? "change") === option.value}>
+                      ${option.label}
+                    </option>`
+                )}
+              </select>
+            </div>
+          `
+        : html`
+            <ha-textfield
+              label="Constant"
+              helper="Fixed value added every step"
+              type="number"
+              .value=${term.constant !== undefined ? String(term.constant) : ""}
+              @input=${(ev: Event) =>
+                this._updateTermNumber(
+                  seriesIndex,
+                  termIndex,
+                  "constant",
+                  (ev.target as HTMLInputElement).value
+                )}
+            ></ha-textfield>
+          `}
+    `;
+  }
+
+  private _renderTermTransformFields(
+    seriesIndex: number,
+    termIndex: number,
+    term: EnergyCustomGraphCalculationTerm
+  ) {
+    if (term.constant !== undefined) {
+      return nothing;
+    }
+    return html`
+      <span class="subtitle term-transform-title">Transform</span>
+      <ha-textfield
+        label="Multiply"
+        type="number"
+        .value=${term.multiply !== undefined ? String(term.multiply) : ""}
+        @input=${(ev: Event) =>
+          this._updateTermNumber(
+            seriesIndex,
+            termIndex,
+            "multiply",
+            (ev.target as HTMLInputElement).value
+          )}
+      ></ha-textfield>
+      <ha-textfield
+        label="Add"
+        type="number"
+        .value=${term.add !== undefined ? String(term.add) : ""}
+        @input=${(ev: Event) =>
+          this._updateTermNumber(seriesIndex, termIndex, "add", (ev.target as HTMLInputElement).value)}
+      ></ha-textfield>
+      <ha-textfield
+        label="Clip min"
+        type="number"
+        .value=${term.clip_min !== undefined ? String(term.clip_min) : ""}
+        @input=${(ev: Event) =>
+          this._updateTermNumber(
+            seriesIndex,
+            termIndex,
+            "clip_min",
+            (ev.target as HTMLInputElement).value
+          )}
+      ></ha-textfield>
+      <ha-textfield
+        label="Clip max"
+        type="number"
+        .value=${term.clip_max !== undefined ? String(term.clip_max) : ""}
+        @input=${(ev: Event) =>
+          this._updateTermNumber(
+            seriesIndex,
+            termIndex,
+            "clip_max",
+            (ev.target as HTMLInputElement).value
+          )}
+      ></ha-textfield>
+    `;
+  }
+
+  private _setTermMode(
+    seriesIndex: number,
+    termIndex: number,
+    mode: "statistic" | "constant"
+  ) {
+    this._mutateTerm(seriesIndex, termIndex, (draft) => {
+      if (mode === "statistic") {
+        draft.constant = undefined;
+        if (!draft.statistic_id) {
+          draft.statistic_id = "";
+        }
+        if (!draft.stat_type) {
+          draft.stat_type = "change";
+        }
+      } else {
+        draft.statistic_id = undefined;
+        draft.stat_type = undefined;
+        draft.multiply = undefined;
+        draft.add = undefined;
+        draft.clip_min = undefined;
+        draft.clip_max = undefined;
+        if (draft.constant === undefined) {
+          draft.constant = 0;
+        }
+      }
+    });
+  }
+
+  private _renderSeriesDisplayGroup(series: EnergyCustomGraphSeriesConfig, index: number) {
+    const chartType = series.chart_type ?? "bar";
+    const fillEnabled = chartType === "line";
+    const fillActive = fillEnabled && series.fill === true;
+    const presetValue =
+      ENERGY_COLOR_PRESETS.find((item) => item.value === series.color)?.value ?? "";
+    return html`
+      <div class="group-card">
+        <div class="group-header">
+          <span class="group-title">Display</span>
+        </div>
+        <div class="group-body">
+          <div class="color-row">
+            <div class="field">
+              <label>Preset color</label>
+              <select
+                @change=${(ev: Event) =>
+                  this._updateSeries(
+                    index,
+                    "color",
+                    (ev.target as HTMLSelectElement).value || undefined
+                  )}
+              >
+                <option value="" ?selected=${presetValue === ""}>Custom</option>
+                ${ENERGY_COLOR_PRESETS.map(
+                  (preset) =>
+                    html`<option value=${preset.value} ?selected=${presetValue === preset.value}>
+                      ${preset.label}
+                    </option>`
+                )}
+              </select>
+            </div>
+            ${presetValue === ""
+              ? html`<ha-textfield
+                  label="Custom color"
+                  .value=${series.color ?? ""}
+                  @input=${(ev: Event) =>
+                    this._updateSeries(
+                      index,
+                      "color",
+                      (ev.target as HTMLInputElement).value || undefined
+                    )}
+                ></ha-textfield>`
+              : nothing}
+          </div>
+          <div class="row">
+            <ha-switch
+              .checked=${series.show_legend !== false}
+              @change=${(ev: Event) =>
+                this._updateSeries(index, "show_legend", (ev.target as HTMLInputElement).checked)}
+            ></ha-switch>
+            <span>Show in legend</span>
+          </div>
+          ${fillEnabled
+            ? html`
+                <div class="row">
+                  <ha-switch
+                    .checked=${series.fill === true}
+                    @change=${(ev: Event) =>
+                      this._updateSeries(index, "fill", (ev.target as HTMLInputElement).checked)}
+                  ></ha-switch>
+                  <span>Fill area</span>
+                </div>
+              `
+            : nothing}
         <ha-textfield
           label="Fill opacity"
           type="number"
@@ -852,92 +942,112 @@ export class EnergyCustomGraphCardEditor
               (ev.target as HTMLInputElement).value
             )}
         ></ha-textfield>
-        <ha-textfield
-          label="Stack group"
-          .value=${series.stack ?? ""}
-          @input=${(ev: Event) =>
-            this._updateSeries(
-              index,
-              "stack",
-              (ev.target as HTMLInputElement).value || undefined
-            )}
-        ></ha-textfield>
-        <div class="field">
-          <label>Stack strategy</label>
-          ${(() => {
-            const current = series.stack_strategy ?? "";
-            return html`<select
-              @change=${(ev: Event) =>
-                this._updateSeries(
-                  index,
-                  "stack_strategy",
-                  (ev.target as HTMLSelectElement).value || undefined
-                )}
-            >
-              <option value="" ?selected=${current === ""}>Default</option>
-              <option value="all" ?selected=${current === "all"}>All</option>
-              <option value="samesign" ?selected=${current === "samesign"}
-                >Same sign</option
-              >
-            </select>`;
-          })()}
+        ${fillActive
+          ? html`
+                <ha-textfield
+                  label="Fill to series"
+                  helper="Name of the line series to fill towards"
+                  .value=${series.fill_to_series ?? ""}
+                  @input=${(ev: Event) =>
+                    this._updateSeries(
+                      index,
+                      "fill_to_series",
+                      (ev.target as HTMLInputElement).value || undefined
+                    )}
+                ></ha-textfield>
+              `
+            : nothing}
+          <ha-textfield
+            label="Line opacity"
+            type="number"
+            helper="Default 0.85 for lines, 0.75 for bars"
+            .value=${series.line_opacity !== undefined ? String(series.line_opacity) : ""}
+            @input=${(ev: Event) =>
+              this._updateSeriesNumber(index, "line_opacity", (ev.target as HTMLInputElement).value)}
+          ></ha-textfield>
+          <ha-textfield
+            label="Stack group"
+            helper="Series using the same name will stack together"
+            .value=${series.stack ?? ""}
+            @input=${(ev: Event) =>
+              this._updateSeries(index, "stack", (ev.target as HTMLInputElement).value || undefined)}
+          ></ha-textfield>
         </div>
-        <ha-textfield
-          label="Clip min"
-          type="number"
-          .value=${series.clip_min !== undefined ? String(series.clip_min) : ""}
-          @input=${(ev: Event) =>
-            this._updateSeriesNumber(index, "clip_min", (ev.target as HTMLInputElement).value)}
-        ></ha-textfield>
-        <ha-textfield
-          label="Clip max"
-          type="number"
-          .value=${series.clip_max !== undefined ? String(series.clip_max) : ""}
-          @input=${(ev: Event) =>
-            this._updateSeriesNumber(index, "clip_max", (ev.target as HTMLInputElement).value)}
-        ></ha-textfield>
       </div>
     `;
   }
 
-  private _renderTransformOptions(series: EnergyCustomGraphSeriesConfig, index: number) {
+  private _renderSeriesTransformGroup(series: EnergyCustomGraphSeriesConfig, index: number) {
     return html`
-      <div class="subsection">
-        <span class="subtitle">Transform</span>
-        <ha-textfield
-          label="Multiply"
-          type="number"
-          .value=${series.multiply !== undefined ? String(series.multiply) : ""}
-          @input=${(ev: Event) =>
-            this._updateSeriesNumber(index, "multiply", (ev.target as HTMLInputElement).value)}
-        ></ha-textfield>
-        <ha-textfield
-          label="Add"
-          type="number"
-          .value=${series.add !== undefined ? String(series.add) : ""}
-          @input=${(ev: Event) =>
-            this._updateSeriesNumber(index, "add", (ev.target as HTMLInputElement).value)}
-        ></ha-textfield>
-        <ha-textfield
-          label="Smooth"
-          helper="Boolean or number (0-1). Leave empty for default."
-          .value=${series.smooth !== undefined ? String(series.smooth) : ""}
-          @input=${(ev: Event) =>
-            this._updateSeriesSmooth(index, (ev.target as HTMLInputElement).value)}
-        ></ha-textfield>
-        <ha-textfield
-          label="Fill to series"
-          helper="Name of the line series to fill towards"
-          .value=${series.fill_to_series ?? ""}
-          @input=${(ev: Event) =>
-            this._updateSeries(
-              index,
-              "fill_to_series",
-              (ev.target as HTMLInputElement).value || undefined
-            )}
-        ></ha-textfield>
+      <div class="group-card">
+        <div class="group-header">
+          <span class="group-title">Transform</span>
+        </div>
+        <div class="group-body">
+          <ha-textfield
+            label="Multiply"
+            type="number"
+            .value=${series.multiply !== undefined ? String(series.multiply) : ""}
+            @input=${(ev: Event) =>
+              this._updateSeriesNumber(index, "multiply", (ev.target as HTMLInputElement).value)}
+          ></ha-textfield>
+          <ha-textfield
+            label="Add"
+            type="number"
+            .value=${series.add !== undefined ? String(series.add) : ""}
+            @input=${(ev: Event) =>
+              this._updateSeriesNumber(index, "add", (ev.target as HTMLInputElement).value)}
+          ></ha-textfield>
+          <ha-textfield
+            label="Smooth"
+            helper="Boolean or number (0-1). Leave empty for default."
+            .value=${series.smooth !== undefined ? String(series.smooth) : ""}
+            @input=${(ev: Event) =>
+              this._updateSeriesSmooth(index, (ev.target as HTMLInputElement).value)}
+          ></ha-textfield>
+          <ha-textfield
+            label="Clip min"
+            type="number"
+            .value=${series.clip_min !== undefined ? String(series.clip_min) : ""}
+            @input=${(ev: Event) =>
+              this._updateSeriesNumber(index, "clip_min", (ev.target as HTMLInputElement).value)}
+          ></ha-textfield>
+          <ha-textfield
+            label="Clip max"
+            type="number"
+            .value=${series.clip_max !== undefined ? String(series.clip_max) : ""}
+            @input=${(ev: Event) =>
+              this._updateSeriesNumber(index, "clip_max", (ev.target as HTMLInputElement).value)}
+          ></ha-textfield>
+        </div>
       </div>
     `;
+  }
+
+  private _setSeriesChartType(index: number, type: EnergyCustomGraphChartType) {
+    const series = this._config!.series ?? [];
+    if (series[index]?.chart_type === type) {
+      return;
+    }
+    this._updateSeries(index, "chart_type", type);
+  }
+
+  private _setSeriesSource(index: number, mode: "statistic" | "calculation") {
+    const series = this._config!.series ?? [];
+    const current = series[index];
+    if (!current) {
+      return;
+    }
+    const isCalculation = !!current.calculation;
+    if (mode === "calculation") {
+      if (!isCalculation) {
+        this._convertSeriesToCalculation(index);
+      }
+      return;
+    }
+    if (isCalculation) {
+      this._convertSeriesToStatistic(index);
+    }
   }
 
   private _renderAdvancedTab() {
@@ -1054,20 +1164,20 @@ export class EnergyCustomGraphCardEditor
     key: keyof EnergyCustomGraphCalculationTerm,
     value: unknown
   ) {
-    const series = [...(this._config!.series ?? [])];
-    const target = { ...series[seriesIndex] };
-    if (!target.calculation?.terms) {
-      return;
-    }
-    const terms = [...target.calculation.terms];
-    const updated: EnergyCustomGraphCalculationTerm = { ...terms[termIndex] };
-    (updated as any)[key] = value === "" ? undefined : value;
-    terms[termIndex] = updated;
-    target.calculation = { ...target.calculation, terms };
-    series[seriesIndex] = target;
-    this._updateConfig("series", series);
-    this._expandedSeries = new Set(this._expandedSeries).add(seriesIndex);
-    this._expandedTermKeys = new Set(this._expandedTermKeys).add(`${seriesIndex}-${termIndex}`);
+    this._mutateTerm(seriesIndex, termIndex, (draft) => {
+      if (key === "constant" && value !== undefined && value !== "") {
+        draft.statistic_id = undefined;
+        draft.stat_type = undefined;
+        draft.multiply = undefined;
+        draft.add = undefined;
+        draft.clip_min = undefined;
+        draft.clip_max = undefined;
+      }
+      if (key === "statistic_id" && (value === undefined || value === "")) {
+        draft.constant = undefined;
+      }
+      (draft as any)[key] = value === "" ? undefined : value;
+    });
   }
 
   private _updateTermNumber(
@@ -1078,6 +1188,28 @@ export class EnergyCustomGraphCardEditor
   ) {
     const parsed = value === "" ? undefined : Number(value);
     this._updateTerm(seriesIndex, termIndex, key, parsed);
+  }
+
+  private _mutateTerm(
+    seriesIndex: number,
+    termIndex: number,
+    mutator: (term: EnergyCustomGraphCalculationTerm) => void
+  ) {
+    const series = [...(this._config!.series ?? [])];
+    const target = { ...series[seriesIndex] };
+    const calculation = target.calculation;
+    if (!calculation?.terms || termIndex < 0 || termIndex >= calculation.terms.length) {
+      return;
+    }
+    const terms = [...calculation.terms];
+    const draft = { ...terms[termIndex] };
+    mutator(draft);
+    terms[termIndex] = draft;
+    target.calculation = { ...calculation, terms };
+    series[seriesIndex] = target;
+    this._updateConfig("series", series);
+    this._expandedSeries = new Set(this._expandedSeries).add(seriesIndex);
+    this._expandedTermKeys = new Set(this._expandedTermKeys).add(`${seriesIndex}-${termIndex}`);
   }
 
   private _updateCalculation(index: number, calculation: EnergyCustomGraphCalculationConfig) {
@@ -1542,6 +1674,10 @@ export class EnergyCustomGraphCardEditor
       justify-content: flex-end;
     }
 
+    .series-footer {
+      margin-top: 12px;
+    }
+
     .hint {
       margin: 0;
       color: var(--secondary-text-color);
@@ -1651,6 +1787,20 @@ export class EnergyCustomGraphCardEditor
       display: grid;
       gap: 12px;
       grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    }
+
+    .term-body.column {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .term-body .full-width {
+      grid-column: 1 / -1;
+    }
+
+    .term-transform-title {
+      margin-top: 4px;
     }
   `;
 }
