@@ -53,6 +53,7 @@ export class EnergyCustomGraphCardEditor
   @state() private _activeTab: "general" | "series" | "advanced" = "general";
   @state() private _expandedSeries = new Set<number>();
   @state() private _expandedTermKeys = new Set<string>();
+  @state() private _aggregationExpanded = false;
 
   public setConfig(config: EnergyCustomGraphCardConfig): void {
     const hadConfig = this._config !== undefined;
@@ -95,129 +96,174 @@ export class EnergyCustomGraphCardEditor
     `;
   }
 
-  private _renderTabButton(tab: typeof this._activeTab, label: string) {
+  private _renderLegendSection(cfg: EnergyCustomGraphCardConfig) {
+    const legendSort = cfg.legend_sort ?? "none";
+    const hideLegend = cfg.hide_legend === true;
+    const buttons: Array<{ value: "none" | "asc" | "desc"; label: string }> = [
+      { value: "none", label: "None" },
+      { value: "asc", label: "Asc" },
+      { value: "desc", label: "Desc" },
+    ];
     return html`
-      <button
-        type="button"
-        class=${classMap({ tab: true, active: this._activeTab === tab })}
-        @click=${() => this._setActiveTab(tab)}
-      >
-        ${label}
-      </button>
+      <div class="group-card">
+        <div class="group-header">
+          <span class="group-title">Legend</span>
+        </div>
+        <div class="group-body">
+          <div class="row">
+            <ha-switch
+              .checked=${hideLegend}
+              @change=${(ev: Event) =>
+                this._updateBooleanConfig("hide_legend", (ev.target as HTMLInputElement).checked)}
+            ></ha-switch>
+            <span>Hide legend</span>
+          </div>
+          ${hideLegend
+            ? nothing
+            : html`
+                <div class="field">
+                  <label>Legend sort</label>
+                  <div class="segment-group" role="group" aria-label="Legend sort">
+                    ${buttons.map(
+                      (button) => html`
+                        <button
+                          type="button"
+                          class=${classMap({
+                            "segment-button": true,
+                            active: legendSort === button.value,
+                          })}
+                          @click=${() => this._setLegendSort(button.value)}
+                        >
+                          ${button.label}
+                        </button>
+                      `
+                    )}
+                  </div>
+                </div>
+                <div class="row">
+                  <ha-switch
+                    .checked=${cfg.expand_legend === true}
+                    @change=${(ev: Event) =>
+                      this._updateBooleanConfig(
+                        "expand_legend",
+                        (ev.target as HTMLInputElement).checked
+                      )}
+                  ></ha-switch>
+                  <span>Expand legend by default</span>
+                </div>
+              `}
+        </div>
+      </div>
     `;
   }
 
-  private _renderGeneralTab() {
-    const cfg = this._config!;
-    const aggregation = cfg.aggregation ?? {};
-    const pickerAggregation = aggregation.energy_picker ?? {};
+  private _renderAxesSection(cfg: EnergyCustomGraphCardConfig) {
+    return html`
+      <div class="group-card">
+        <div class="group-header">
+          <span class="group-title">Axes</span>
+        </div>
+        <div class="group-body">
+          <div class="row">
+            <ha-switch
+              .checked=${cfg.fit_y_data === true}
+              @change=${(ev: Event) =>
+                this._updateBooleanConfig("fit_y_data", (ev.target as HTMLInputElement).checked)}
+            ></ha-switch>
+            <span>Fit primary Y axis to data</span>
+          </div>
+          <div class="row">
+            <ha-switch
+              .checked=${cfg.logarithmic_scale === true}
+              @change=${(ev: Event) =>
+                this._updateBooleanConfig(
+                  "logarithmic_scale",
+                  (ev.target as HTMLInputElement).checked
+                )}
+            ></ha-switch>
+            <span>Primary Y axis logarithmic</span>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  private _renderTooltipSection(cfg: EnergyCustomGraphCardConfig) {
+    return html`
+      <div class="group-card">
+        <div class="group-header">
+          <span class="group-title">Tooltip</span>
+        </div>
+        <div class="group-body">
+          <div class="row">
+            <ha-switch
+              .checked=${cfg.show_unit !== false}
+              @change=${(ev: Event) =>
+                this._updateConfig("show_unit", (ev.target as HTMLInputElement).checked)}
+            ></ha-switch>
+            <span>Show units</span>
+          </div>
+          <ha-textfield
+            label="Tooltip precision"
+            type="number"
+            .value=${cfg.tooltip_precision !== undefined ? String(cfg.tooltip_precision) : ""}
+            @input=${(ev: Event) =>
+              this._updateNumericConfig(
+                "tooltip_precision",
+                (ev.target as HTMLInputElement).value
+              )}
+          ></ha-textfield>
+        </div>
+      </div>
+    `;
+  }
+
+  private _renderAggregationPickerOptions(
+    pickerAggregation: NonNullable<EnergyCustomGraphAggregationConfig["energy_picker"]> | {}
+  ) {
+    const picker = pickerAggregation as Partial<Record<AggregationPickerKey, StatisticsPeriod>>;
     return html`
       <div class="section">
-        <ha-textfield
-          .label=${this.hass.localize("ui.panel.lovelace.editor.card.generic.title")}
-          .value=${cfg.title ?? ""}
-          @input=${(ev: Event) =>
-            this._updateConfig("title", (ev.target as HTMLInputElement).value)}
-        ></ha-textfield>
-        <ha-textfield
-          label="Chart height"
-          helper="CSS height (e.g. 320px, 20rem)"
-          .value=${cfg.chart_height ?? ""}
-          @input=${(ev: Event) =>
-            this._updateConfig("chart_height", (ev.target as HTMLInputElement).value || undefined)}
-        ></ha-textfield>
-        <div class="row">
-          <ha-switch
-            .checked=${cfg.energy_date_selection !== false}
-            @change=${(ev: Event) =>
-              this._updateConfig("energy_date_selection", (ev.target as HTMLInputElement).checked)}
-          ></ha-switch>
-          <span>Use energy date picker</span>
+        <p class="hint">
+          Override the interval used when requesting statistics via the energy date picker.
+        </p>
+        <div class="picker-grid">
+          ${(["hour", "day", "week", "month", "year"] as AggregationPickerKey[]).map(
+            (key) => html`
+              <div class="field">
+                <label>${`Energy picker → ${key}`}</label>
+                ${(() => {
+                  const current = picker[key] ?? "";
+                  return html`<select
+                    @change=${(ev: Event) =>
+                      this._updateAggregationPicker(key, (ev.target as HTMLSelectElement).value || "")}
+                  >
+                    <option value="" ?selected=${current === ""}>Automatic</option>
+                    ${AGGREGATION_OPTIONS.map(
+                      (option) =>
+                        html`<option value=${option.value} ?selected=${current === option.value}
+                          >${option.label}</option
+                        >`
+                    )}
+                  </select>`;
+                })()}
+              </div>
+            `
+          )}
         </div>
-        <ha-textfield
-          label="Collection key"
-          helper="Optional key when multiple energy pickers are present"
-          .value=${cfg.collection_key ?? ""}
-          .disabled=${cfg.energy_date_selection === false}
-          @input=${(ev: Event) =>
-            this._updateConfig(
-              "collection_key",
-              (ev.target as HTMLInputElement).value || undefined
-            )}
-        ></ha-textfield>
-        <div class="field">
-          <label>Legend sort</label>
-          ${(() => {
-            const current = cfg.legend_sort ?? "none";
-            return html`<select
-              @change=${(ev: Event) =>
-                this._updateConfig(
-                  "legend_sort",
-                  (ev.target as HTMLSelectElement).value as any
-                )}
-            >
-              <option value="none" ?selected=${current === "none"}>None</option>
-              <option value="asc" ?selected=${current === "asc"}>Ascending</option>
-              <option value="desc" ?selected=${current === "desc"}>Descending</option>
-            </select>`;
-          })()}
-        </div>
-        <div class="row">
-          <ha-switch
-            .checked=${cfg.hide_legend === true}
-            @change=${(ev: Event) =>
-              this._updateBooleanConfig("hide_legend", (ev.target as HTMLInputElement).checked)}
-          ></ha-switch>
-          <span>Hide legend</span>
-        </div>
-        <div class="row">
-          <ha-switch
-            .checked=${cfg.expand_legend === true}
-            @change=${(ev: Event) =>
-              this._updateBooleanConfig("expand_legend", (ev.target as HTMLInputElement).checked)}
-          ></ha-switch>
-          <span>Expand legend by default</span>
-        </div>
-        <div class="row">
-          <ha-switch
-            .checked=${cfg.fit_y_data === true}
-            @change=${(ev: Event) =>
-              this._updateBooleanConfig("fit_y_data", (ev.target as HTMLInputElement).checked)}
-          ></ha-switch>
-          <span>Fit primary Y axis to data</span>
-        </div>
-        <div class="row">
-          <ha-switch
-            .checked=${cfg.logarithmic_scale === true}
-            @change=${(ev: Event) =>
-              this._updateBooleanConfig(
-                "logarithmic_scale",
-                (ev.target as HTMLInputElement).checked
-              )}
-          ></ha-switch>
-          <span>Primary Y axis logarithmic</span>
-        </div>
-        <div class="row">
-          <ha-switch
-            .checked=${cfg.show_unit !== false}
-            @change=${(ev: Event) =>
-              this._updateConfig("show_unit", (ev.target as HTMLInputElement).checked)}
-          ></ha-switch>
-          <span>Show units</span>
-        </div>
-        <ha-textfield
-          label="Tooltip precision"
-          type="number"
-          .value=${cfg.tooltip_precision !== undefined ? String(cfg.tooltip_precision) : ""}
-          @input=${(ev: Event) =>
-            this._updateNumericConfig(
-              "tooltip_precision",
-              (ev.target as HTMLInputElement).value
-            )}
-        ></ha-textfield>
       </div>
+    `;
+  }
+
+  private _setLegendSort(value: "none" | "asc" | "desc") {
+    this._updateConfig("legend_sort", value as any);
+  }
+
+  private _renderAggregationManualOptions(
+    aggregation: EnergyCustomGraphAggregationConfig | undefined
+  ) {
+    return html`
       <div class="section">
-        <h4>Aggregation</h4>
         <p class="hint">
           Override the interval used when requesting recorder statistics. Leave empty to keep the
           automatic behaviour.
@@ -225,7 +271,7 @@ export class EnergyCustomGraphCardEditor
         <div class="field">
           <label>Manual period aggregation</label>
           ${(() => {
-            const current = aggregation.manual ?? "";
+            const current = aggregation?.manual ?? "";
             return html`<select
               @change=${(ev: Event) =>
                 this._updateAggregation("manual", (ev.target as HTMLSelectElement).value || "")}
@@ -243,13 +289,10 @@ export class EnergyCustomGraphCardEditor
         <div class="field">
           <label>Fallback aggregation</label>
           ${(() => {
-            const current = aggregation.fallback ?? "";
+            const current = aggregation?.fallback ?? "";
             return html`<select
               @change=${(ev: Event) =>
-                this._updateAggregation(
-                  "fallback",
-                  (ev.target as HTMLSelectElement).value || ""
-                )}
+                this._updateAggregation("fallback", (ev.target as HTMLSelectElement).value || "")}
             >
               <option value="" ?selected=${current === ""}>None</option>
               ${AGGREGATION_OPTIONS.map(
@@ -261,37 +304,89 @@ export class EnergyCustomGraphCardEditor
             </select>`;
           })()}
         </div>
-        ${this._config?.energy_date_selection === false
-          ? nothing
-          : html`
-              <div class="picker-grid">
-                ${(["hour", "day", "week", "month", "year"] as AggregationPickerKey[]).map(
-                  (key) => html`
-                    <div class="field">
-                      <label>${`Energy picker → ${key}`}</label>
-                      ${(() => {
-                        const current = pickerAggregation[key] ?? "";
-                        return html`<select
-                          @change=${(ev: Event) =>
-                            this._updateAggregationPicker(
-                              key,
-                              (ev.target as HTMLSelectElement).value || ""
-                            )}
-                        >
-                          <option value="" ?selected=${current === ""}>Automatic</option>
-                          ${AGGREGATION_OPTIONS.map(
-                            (option) =>
-                              html`<option value=${option.value} ?selected=${current === option.value}
-                                >${option.label}</option
-                              >`
-                          )}
-                        </select>`;
-                      })()}
-                    </div>
-                  `
+      </div>
+    `;
+  }
+
+  private _renderTabButton(tab: typeof this._activeTab, label: string) {
+    return html`
+      <button
+        type="button"
+        class=${classMap({ tab: true, active: this._activeTab === tab })}
+        @click=${() => this._setActiveTab(tab)}
+      >
+        ${label}
+      </button>
+    `;
+  }
+
+  private _renderGeneralTab() {
+    const cfg = this._config!;
+    const useEnergyPicker = cfg.energy_date_selection !== false;
+    const aggregationConfig = cfg.aggregation;
+    const pickerAggregation = aggregationConfig?.energy_picker ?? {};
+    const aggregationExpanded = this._aggregationExpanded;
+    const aggregationSummary = this._formatAggregationSummary(aggregationConfig, useEnergyPicker);
+    return html`
+      <div class="section">
+        <ha-textfield
+          .label=${this.hass.localize("ui.panel.lovelace.editor.card.generic.title")}
+          .value=${cfg.title ?? ""}
+          @input=${(ev: Event) =>
+            this._updateConfig("title", (ev.target as HTMLInputElement).value)}
+        ></ha-textfield>
+        <ha-textfield
+          label="Chart height"
+          helper="CSS height (e.g. 320px, 20rem)"
+          .value=${cfg.chart_height ?? ""}
+          @input=${(ev: Event) =>
+            this._updateConfig("chart_height", (ev.target as HTMLInputElement).value || undefined)}
+        ></ha-textfield>
+        <div class="row">
+          <ha-switch
+            .checked=${useEnergyPicker}
+            @change=${(ev: Event) =>
+              this._updateConfig("energy_date_selection", (ev.target as HTMLInputElement).checked)}
+          ></ha-switch>
+          <span>Use energy date picker</span>
+        </div>
+        ${useEnergyPicker
+          ? html`<ha-textfield
+              label="Collection key"
+              helper="Optional key when multiple energy pickers are present"
+              .value=${cfg.collection_key ?? ""}
+              @input=${(ev: Event) =>
+                this._updateConfig(
+                  "collection_key",
+                  (ev.target as HTMLInputElement).value || undefined
                 )}
+            ></ha-textfield>`
+          : nothing}
+      </div>
+      ${this._renderLegendSection(cfg)}
+      ${this._renderAxesSection(cfg)}
+      ${this._renderTooltipSection(cfg)}
+      <div class="collapsible general-collapsible ${aggregationExpanded ? "expanded" : "collapsed"}">
+        <button type="button" class="collapsible-header" @click=${this._toggleAggregationExpanded}>
+          <div class="collapsible-title">
+            <span class="title">Aggregation</span>
+            ${aggregationSummary
+              ? html`<span class="subtitle">${aggregationSummary}</span>`
+              : nothing}
+          </div>
+          <span class="chevron">
+            <ha-icon icon=${aggregationExpanded ? "mdi:chevron-down" : "mdi:chevron-right"}></ha-icon>
+          </span>
+        </button>
+        ${aggregationExpanded
+          ? html`
+              <div class="collapsible-body aggregation-body">
+                ${useEnergyPicker
+                  ? this._renderAggregationPickerOptions(pickerAggregation)
+                  : this._renderAggregationManualOptions(aggregationConfig)}
               </div>
-            `}
+            `
+          : nothing}
       </div>
     `;
   }
@@ -312,38 +407,49 @@ export class EnergyCustomGraphCardEditor
     const usingCalculation = !!series.calculation;
     const expanded = this._expandedSeries.has(index);
     return html`
-      <ha-card outlined class="series-card">
-        <div class="series-header">
-          <div>
-            <h3>${series.name ?? series.statistic_id ?? `Series ${index + 1}`}</h3>
-            <p class="hint">
+      <div class="collapsible ${expanded ? "expanded" : "collapsed"}">
+        <button
+          type="button"
+          class="collapsible-header"
+          @click=${() => this._toggleSeriesExpanded(index)}
+        >
+          <div class="collapsible-title">
+            <span class="title">${series.name ?? series.statistic_id ?? `Series ${index + 1}`}</span>
+            <span class="subtitle">
               ${usingCalculation
                 ? "Calculation series"
                 : series.statistic_id || "No statistic selected"}
-            </p>
+            </span>
           </div>
-          <div class="series-actions">
-            <button type="button" class="text" @click=${() => this._toggleSeriesExpanded(index)}>
-              ${expanded ? "Collapse" : "Expand"}
-            </button>
-            <button type="button" class="text" @click=${() => this._removeSeries(index)}>
-              Delete
-            </button>
-          </div>
-        </div>
+          <span class="chevron">
+            <ha-icon icon=${expanded ? "mdi:chevron-down" : "mdi:chevron-right"}></ha-icon>
+          </span>
+        </button>
         ${expanded
           ? html`
-              <div class="series-body">
+              <div class="collapsible-body">
                 ${this._renderSeriesBasics(series, index)}
                 ${usingCalculation
                   ? this._renderCalculationEditor(series, index)
                   : this._renderStatisticEditor(series, index)}
                 ${this._renderDisplayOptions(series, index)}
                 ${this._renderTransformOptions(series, index)}
+                <div class="section-footer">
+                  <button
+                    type="button"
+                    class="text warning"
+                    @click=${(ev: Event) => {
+                      ev.stopPropagation();
+                      this._removeSeries(index);
+                    }}
+                  >
+                    Delete series
+                  </button>
+                </div>
               </div>
             `
           : nothing}
-      </ha-card>
+      </div>
     `;
   }
 
@@ -522,151 +628,156 @@ export class EnergyCustomGraphCardEditor
         ? `Constant: ${term.constant}`
         : "No input selected";
     return html`
-      <ha-card outlined class="term-card">
-        <div class="term-header">
-          <div class="term-title">
+      <div class="nested-collapsible ${expanded ? "expanded" : "collapsed"}">
+        <button type="button" class="nested-header" @click=${() => this._toggleTermExpanded(termKey)}>
+          <div class="nested-title">
             <strong>${operationLabel}</strong>
             <p class="hint">${descriptor}</p>
           </div>
-          <div class="term-actions">
-            <button type="button" class="text" @click=${() => this._toggleTermExpanded(termKey)}>
-              ${expanded ? "Collapse" : "Expand"}
-            </button>
-            <button
-              type="button"
-              class="text"
-              @click=${() => this._removeCalculationTerm(seriesIndex, termIndex)}
-            >
-              Remove
-            </button>
-          </div>
-        </div>
+          <span class="chevron">
+            <ha-icon icon=${expanded ? "mdi:chevron-down" : "mdi:chevron-right"}></ha-icon>
+          </span>
+        </button>
         ${expanded
           ? html`
-              <div class="term-body">
-                <div class="field">
-                  <label>Operation</label>
-                  ${(() => {
-                    const current = operation;
-                    return html`<select
-                      @change=${(ev: Event) =>
-                        this._updateTerm(
-                          seriesIndex,
-                          termIndex,
-                          "operation",
-                          (ev.target as HTMLSelectElement).value as any
+              <div class="nested-body">
+                <div class="term-body">
+                  <div class="field">
+                    <label>Operation</label>
+                    ${(() => {
+                      const current = operation;
+                      return html`<select
+                        @change=${(ev: Event) =>
+                          this._updateTerm(
+                            seriesIndex,
+                            termIndex,
+                            "operation",
+                            (ev.target as HTMLSelectElement).value as any
+                          )}
+                      >
+                        <option value="add" ?selected=${current === "add"}>Add</option>
+                        <option value="subtract" ?selected=${current === "subtract"}
+                          >Subtract</option
+                        >
+                        <option value="multiply" ?selected=${current === "multiply"}
+                          >Multiply</option
+                        >
+                        <option value="divide" ?selected=${current === "divide"}>Divide</option>
+                      </select>`;
+                    })()}
+                  </div>
+                  <ha-textfield
+                    label="Statistic ID"
+                    helper="Leave empty to use constant"
+                    .value=${term.statistic_id ?? ""}
+                    @input=${(ev: Event) =>
+                      this._updateTerm(
+                        seriesIndex,
+                        termIndex,
+                        "statistic_id",
+                        (ev.target as HTMLInputElement).value || undefined
+                      )}
+                  ></ha-textfield>
+                  <div class="field">
+                    <label>Statistic type</label>
+                    ${(() => {
+                      const current = term.stat_type ?? "change";
+                      return html`<select
+                        @change=${(ev: Event) =>
+                          this._updateTerm(
+                            seriesIndex,
+                            termIndex,
+                            "stat_type",
+                            (ev.target as HTMLSelectElement).value as EnergyCustomGraphStatisticType
+                          )}
+                      >
+                        ${STAT_TYPE_OPTIONS.map(
+                          (option) =>
+                            html`<option value=${option.value} ?selected=${current === option.value}
+                              >${option.label}</option
+                            >`
                         )}
-                    >
-                      <option value="add" ?selected=${current === "add"}>Add</option>
-                      <option value="subtract" ?selected=${current === "subtract"}
-                        >Subtract</option
-                      >
-                      <option value="multiply" ?selected=${current === "multiply"}
-                        >Multiply</option
-                      >
-                      <option value="divide" ?selected=${current === "divide"}>Divide</option>
-                    </select>`;
-                  })()}
+                      </select>`;
+                    })()}
+                  </div>
+                  <ha-textfield
+                    label="Constant"
+                    helper="Used when no statistic is set"
+                    type="number"
+                    .value=${term.constant !== undefined ? String(term.constant) : ""}
+                    @input=${(ev: Event) =>
+                      this._updateTermNumber(
+                        seriesIndex,
+                        termIndex,
+                        "constant",
+                        (ev.target as HTMLInputElement).value
+                      )}
+                  ></ha-textfield>
+                  <ha-textfield
+                    label="Multiply"
+                    type="number"
+                    .value=${term.multiply !== undefined ? String(term.multiply) : ""}
+                    @input=${(ev: Event) =>
+                      this._updateTermNumber(
+                        seriesIndex,
+                        termIndex,
+                        "multiply",
+                        (ev.target as HTMLInputElement).value
+                      )}
+                  ></ha-textfield>
+                  <ha-textfield
+                    label="Add"
+                    type="number"
+                    .value=${term.add !== undefined ? String(term.add) : ""}
+                    @input=${(ev: Event) =>
+                      this._updateTermNumber(
+                        seriesIndex,
+                        termIndex,
+                        "add",
+                        (ev.target as HTMLInputElement).value
+                      )}
+                  ></ha-textfield>
+                  <ha-textfield
+                    label="Clip min"
+                    type="number"
+                    .value=${term.clip_min !== undefined ? String(term.clip_min) : ""}
+                    @input=${(ev: Event) =>
+                      this._updateTermNumber(
+                        seriesIndex,
+                        termIndex,
+                        "clip_min",
+                        (ev.target as HTMLInputElement).value
+                      )}
+                  ></ha-textfield>
+                  <ha-textfield
+                    label="Clip max"
+                    type="number"
+                    .value=${term.clip_max !== undefined ? String(term.clip_max) : ""}
+                    @input=${(ev: Event) =>
+                      this._updateTermNumber(
+                        seriesIndex,
+                        termIndex,
+                        "clip_max",
+                        (ev.target as HTMLInputElement).value
+                      )}
+                  ></ha-textfield>
                 </div>
-          <ha-textfield
-            label="Statistic ID"
-            helper="Leave empty to use constant"
-            .value=${term.statistic_id ?? ""}
-            @input=${(ev: Event) =>
-              this._updateTerm(
-                seriesIndex,
-                termIndex,
-                "statistic_id",
-                (ev.target as HTMLInputElement).value || undefined
-              )}
-          ></ha-textfield>
-          <div class="field">
-            <label>Statistic type</label>
-            ${(() => {
-              const current = term.stat_type ?? "change";
-              return html`<select
-                @change=${(ev: Event) =>
-                  this._updateTerm(
-                    seriesIndex,
-                    termIndex,
-                    "stat_type",
-                    (ev.target as HTMLSelectElement).value as EnergyCustomGraphStatisticType
-                  )}
-              >
-                ${STAT_TYPE_OPTIONS.map(
-                  (option) =>
-                    html`<option value=${option.value} ?selected=${current === option.value}
-                      >${option.label}</option
-                    >`
-                )}
-              </select>`;
-            })()}
-          </div>
-          <ha-textfield
-            label="Constant"
-            helper="Used when no statistic is set"
-            type="number"
-            .value=${term.constant !== undefined ? String(term.constant) : ""}
-            @input=${(ev: Event) =>
-              this._updateTermNumber(
-                seriesIndex,
-                termIndex,
-                "constant",
-                (ev.target as HTMLInputElement).value
-              )}
-          ></ha-textfield>
-          <ha-textfield
-            label="Multiply"
-            type="number"
-            .value=${term.multiply !== undefined ? String(term.multiply) : ""}
-            @input=${(ev: Event) =>
-              this._updateTermNumber(
-                seriesIndex,
-                termIndex,
-                "multiply",
-                (ev.target as HTMLInputElement).value
-              )}
-          ></ha-textfield>
-          <ha-textfield
-            label="Add"
-            type="number"
-            .value=${term.add !== undefined ? String(term.add) : ""}
-            @input=${(ev: Event) =>
-              this._updateTermNumber(
-                seriesIndex,
-                termIndex,
-                "add",
-                (ev.target as HTMLInputElement).value
-              )}
-          ></ha-textfield>
-          <ha-textfield
-            label="Clip min"
-            type="number"
-            .value=${term.clip_min !== undefined ? String(term.clip_min) : ""}
-            @input=${(ev: Event) =>
-              this._updateTermNumber(
-                seriesIndex,
-                termIndex,
-                "clip_min",
-                (ev.target as HTMLInputElement).value
-              )}
-          ></ha-textfield>
-          <ha-textfield
-            label="Clip max"
-            type="number"
-            .value=${term.clip_max !== undefined ? String(term.clip_max) : ""}
-            @input=${(ev: Event) =>
-              this._updateTermNumber(
-                seriesIndex,
-                termIndex,
-                "clip_max",
-                (ev.target as HTMLInputElement).value
-              )}
-          ></ha-textfield>
+                <div class="nested-footer">
+                  <button
+                    type="button"
+                    class="text warning"
+                    @click=${(ev: Event) => {
+                      ev.stopPropagation();
+                      this._removeCalculationTerm(seriesIndex, termIndex);
+                    }}
+                  >
+                    Remove term
+                  </button>
+                </div>
               </div>
             `
           : nothing}
-      </ha-card>
+      </div>
     `;
   }
 
@@ -1166,6 +1277,38 @@ export class EnergyCustomGraphCardEditor
     this._updateConfig(key, value as any);
   }
 
+  private _toggleAggregationExpanded() {
+    this._aggregationExpanded = !this._aggregationExpanded;
+  }
+
+  private _formatAggregationSummary(
+    aggregation: EnergyCustomGraphAggregationConfig | undefined,
+    useEnergyPicker: boolean
+  ): string | undefined {
+    if (!aggregation || Object.keys(aggregation).length === 0) {
+      return undefined;
+    }
+    const parts: string[] = [];
+    if (!useEnergyPicker && aggregation.manual) {
+      parts.push(`Manual: ${this._formatStatisticsPeriod(aggregation.manual)}`);
+    }
+    if (!useEnergyPicker && aggregation.fallback) {
+      parts.push(`Fallback: ${this._formatStatisticsPeriod(aggregation.fallback)}`);
+    }
+    if (
+      useEnergyPicker &&
+      aggregation.energy_picker &&
+      Object.keys(aggregation.energy_picker).length
+    ) {
+      parts.push("Picker overrides");
+    }
+    return parts.length ? parts.join(" • ") : undefined;
+  }
+
+  private _formatStatisticsPeriod(value: StatisticsPeriod): string {
+    return AGGREGATION_OPTIONS.find((option) => option.value === value)?.label ?? value;
+  }
+
   private _setActiveTab(tab: typeof this._activeTab) {
     if (this._activeTab === tab) {
       return;
@@ -1298,28 +1441,105 @@ export class EnergyCustomGraphCardEditor
       background: rgba(0, 0, 0, 0.05);
     }
 
-    .series-card {
-      padding: 12px;
+    button.text.warning {
+      color: var(--error-color);
+    }
+
+    button.text.warning:hover {
+      background: rgba(255, 0, 0, 0.08);
+    }
+
+    .collapsible {
+      border: 1px solid var(--divider-color, rgba(0, 0, 0, 0.12));
+      border-radius: 16px;
+      background: var(--ha-card-background, var(--card-background-color, #fff));
+    }
+
+    .collapsible-header {
+      border: none;
+      background: none;
+      font: inherit;
+      display: flex;
+      align-items: center;
+      width: 100%;
+      justify-content: space-between;
+      cursor: pointer;
+      padding: 14px 16px;
+    }
+
+    .collapsible-header:hover {
+      background: rgba(0, 0, 0, 0.04);
+    }
+
+    .collapsible-title {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      text-align: left;
+    }
+
+    .collapsible-title .title {
+      font-weight: 600;
+      font-size: 16px;
+    }
+
+    .collapsible-title .subtitle {
+      color: var(--secondary-text-color);
+      font-size: 13px;
+    }
+
+    .chevron {
+      color: var(--secondary-text-color);
+      margin-inline-start: 12px;
+      display: flex;
+      align-items: center;
+    }
+
+    .chevron ha-icon {
+      --mdc-icon-size: 20px;
+    }
+
+    .general-collapsible {
+      margin-top: 8px;
+    }
+
+    .aggregation-body {
+      padding-top: 16px;
+    }
+
+    .group-card {
+      border: 1px solid var(--divider-color, rgba(0, 0, 0, 0.12));
+      border-radius: 12px;
+      background: var(--ha-card-background, var(--card-background-color, #fff));
+    }
+
+    .group-header {
+      padding: 12px 16px 0;
+    }
+
+    .group-title {
+      font-weight: 600;
+      font-size: 15px;
+    }
+
+    .group-body {
       display: flex;
       flex-direction: column;
       gap: 12px;
+      padding: 12px 16px 16px;
     }
 
-    .series-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-    }
-
-    .series-body {
+    .collapsible-body {
       display: flex;
       flex-direction: column;
       gap: 16px;
+      padding: 0 16px 16px;
     }
 
-    .series-actions {
+    .section-footer,
+    .nested-footer {
       display: flex;
-      gap: 8px;
+      justify-content: flex-end;
     }
 
     .hint {
@@ -1348,26 +1568,83 @@ export class EnergyCustomGraphCardEditor
       gap: 12px;
     }
 
-    .term-card {
-      padding: 12px;
+    .segment-group {
+      display: inline-flex;
+      border: 1px solid var(--divider-color, rgba(0, 0, 0, 0.12));
+      border-radius: 999px;
+      overflow: hidden;
     }
 
-    .term-header {
+    .segment-button {
+      background: none;
+      border: none;
+      padding: 6px 16px;
+      font: inherit;
+      color: var(--secondary-text-color);
+      flex: 1 1 0;
+      min-width: 0;
+      text-align: center;
+      cursor: pointer;
+      transition: background 0.2s ease, color 0.2s ease;
+    }
+
+    .segment-button + .segment-button {
+      border-inline-start: 1px solid var(--divider-color, rgba(0, 0, 0, 0.12));
+    }
+
+    .segment-button:hover {
+      background: rgba(0, 0, 0, 0.05);
+    }
+
+    .segment-button.active {
+      background: var(--primary-color);
+      color: #fff;
+      font-weight: 600;
+    }
+
+    .segment-button.active:hover {
+      background: var(--primary-color);
+    }
+
+    .nested-collapsible {
+      border: 1px solid var(--divider-color, rgba(0, 0, 0, 0.12));
+      border-radius: 12px;
+      background: var(--ha-card-background, var(--card-background-color, #fff));
+    }
+
+    .nested-header {
+      width: 100%;
       display: flex;
-      justify-content: space-between;
       align-items: center;
-      margin-bottom: 12px;
+      justify-content: space-between;
+      padding: 10px 12px;
+      border: none;
+      background: none;
+      cursor: pointer;
+      font: inherit;
     }
 
-    .term-title {
+    .nested-header:hover {
+      background: rgba(0, 0, 0, 0.04);
+    }
+
+    .nested-title {
       display: flex;
       flex-direction: column;
-      gap: 4px;
+      gap: 2px;
+      text-align: left;
     }
 
-    .term-actions {
+    .nested-title strong {
+      font-weight: 600;
+    }
+
+    .nested-body {
       display: flex;
-      gap: 8px;
+      flex-direction: column;
+      gap: 12px;
+      padding: 12px 16px 16px 20px;
+      border-top: 1px solid var(--divider-color, rgba(0, 0, 0, 0.12));
     }
 
     .term-body {
