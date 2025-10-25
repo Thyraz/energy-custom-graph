@@ -51,16 +51,27 @@ export class EnergyCustomGraphCardEditor
   @state() private _config?: EnergyCustomGraphCardConfig;
 
   @state() private _activeTab: "general" | "series" | "advanced" = "general";
+  @state() private _expandedSeries = new Set<number>();
+  @state() private _expandedTermKeys = new Set<string>();
 
   public setConfig(config: EnergyCustomGraphCardConfig): void {
+    const hadConfig = this._config !== undefined;
+    const normalizedSeries = config.series?.map((item) => ({ ...item })) ?? [];
     this._config = {
       type: "custom:energy-custom-graph-card",
       energy_date_selection: config.energy_date_selection ?? true,
       period: config.period,
       aggregation: config.aggregation,
       ...config,
-      series: config.series?.map((item) => ({ ...item })) ?? [],
+      series: normalizedSeries,
     };
+
+    if (!hadConfig) {
+      this._expandedSeries = new Set();
+      this._expandedTermKeys = new Set();
+    } else {
+      this._syncExpandedState(normalizedSeries);
+    }
   }
 
   protected render() {
@@ -299,6 +310,7 @@ export class EnergyCustomGraphCardEditor
 
   private _renderSeriesCard(series: EnergyCustomGraphSeriesConfig, index: number) {
     const usingCalculation = !!series.calculation;
+    const expanded = this._expandedSeries.has(index);
     return html`
       <ha-card outlined class="series-card">
         <div class="series-header">
@@ -311,19 +323,26 @@ export class EnergyCustomGraphCardEditor
             </p>
           </div>
           <div class="series-actions">
+            <button type="button" class="text" @click=${() => this._toggleSeriesExpanded(index)}>
+              ${expanded ? "Collapse" : "Expand"}
+            </button>
             <button type="button" class="text" @click=${() => this._removeSeries(index)}>
               Delete
             </button>
           </div>
         </div>
-        <div class="series-body">
-          ${this._renderSeriesBasics(series, index)}
-          ${usingCalculation
-            ? this._renderCalculationEditor(series, index)
-            : this._renderStatisticEditor(series, index)}
-          ${this._renderDisplayOptions(series, index)}
-          ${this._renderTransformOptions(series, index)}
-        </div>
+        ${expanded
+          ? html`
+              <div class="series-body">
+                ${this._renderSeriesBasics(series, index)}
+                ${usingCalculation
+                  ? this._renderCalculationEditor(series, index)
+                  : this._renderStatisticEditor(series, index)}
+                ${this._renderDisplayOptions(series, index)}
+                ${this._renderTransformOptions(series, index)}
+              </div>
+            `
+          : nothing}
       </ha-card>
     `;
   }
@@ -494,39 +513,61 @@ export class EnergyCustomGraphCardEditor
     term: EnergyCustomGraphCalculationTerm
   ) {
     const operation = term.operation ?? "add";
+    const termKey = `${seriesIndex}-${termIndex}`;
+    const expanded = this._expandedTermKeys.has(termKey);
+    const operationLabel = this._formatOperation(operation);
+    const descriptor = term.statistic_id && term.statistic_id.trim().length
+      ? term.statistic_id.trim()
+      : term.constant !== undefined
+        ? `Constant: ${term.constant}`
+        : "No input selected";
     return html`
       <ha-card outlined class="term-card">
         <div class="term-header">
-          <span>Term ${termIndex + 1}</span>
-          <button
-            type="button"
-            class="text"
-            @click=${() => this._removeCalculationTerm(seriesIndex, termIndex)}
-          >
-            Remove
-          </button>
-        </div>
-        <div class="term-body">
-          <div class="field">
-            <label>Operation</label>
-            ${(() => {
-              const current = operation;
-              return html`<select
-                @change=${(ev: Event) =>
-                  this._updateTerm(
-                    seriesIndex,
-                    termIndex,
-                    "operation",
-                    (ev.target as HTMLSelectElement).value as any
-                  )}
-              >
-                <option value="add" ?selected=${current === "add"}>Add</option>
-                <option value="subtract" ?selected=${current === "subtract"}>Subtract</option>
-                <option value="multiply" ?selected=${current === "multiply"}>Multiply</option>
-                <option value="divide" ?selected=${current === "divide"}>Divide</option>
-              </select>`;
-            })()}
+          <div class="term-title">
+            <strong>${operationLabel}</strong>
+            <p class="hint">${descriptor}</p>
           </div>
+          <div class="term-actions">
+            <button type="button" class="text" @click=${() => this._toggleTermExpanded(termKey)}>
+              ${expanded ? "Collapse" : "Expand"}
+            </button>
+            <button
+              type="button"
+              class="text"
+              @click=${() => this._removeCalculationTerm(seriesIndex, termIndex)}
+            >
+              Remove
+            </button>
+          </div>
+        </div>
+        ${expanded
+          ? html`
+              <div class="term-body">
+                <div class="field">
+                  <label>Operation</label>
+                  ${(() => {
+                    const current = operation;
+                    return html`<select
+                      @change=${(ev: Event) =>
+                        this._updateTerm(
+                          seriesIndex,
+                          termIndex,
+                          "operation",
+                          (ev.target as HTMLSelectElement).value as any
+                        )}
+                    >
+                      <option value="add" ?selected=${current === "add"}>Add</option>
+                      <option value="subtract" ?selected=${current === "subtract"}
+                        >Subtract</option
+                      >
+                      <option value="multiply" ?selected=${current === "multiply"}
+                        >Multiply</option
+                      >
+                      <option value="divide" ?selected=${current === "divide"}>Divide</option>
+                    </select>`;
+                  })()}
+                </div>
           <ha-textfield
             label="Statistic ID"
             helper="Leave empty to use constant"
@@ -622,7 +663,9 @@ export class EnergyCustomGraphCardEditor
                 (ev.target as HTMLInputElement).value
               )}
           ></ha-textfield>
-        </div>
+              </div>
+            `
+          : nothing}
       </ha-card>
     `;
   }
@@ -804,13 +847,43 @@ export class EnergyCustomGraphCardEditor
       chart_type: "bar",
       stat_type: "change",
     };
-    this._updateConfig("series", [...(this._config!.series ?? []), newSeries]);
+    const updated = [...(this._config!.series ?? []), newSeries];
+    this._updateConfig("series", updated);
+    this._expandedSeries = new Set(this._expandedSeries).add(updated.length - 1);
   }
 
   private _removeSeries(index: number) {
     const series = [...(this._config!.series ?? [])];
     series.splice(index, 1);
     this._updateConfig("series", series);
+    const updatedExpanded = new Set<number>();
+    this._expandedSeries.forEach((oldIndex) => {
+      if (oldIndex === index) {
+        return;
+      }
+      const newIndex = oldIndex > index ? oldIndex - 1 : oldIndex;
+      if (newIndex >= 0 && newIndex < series.length) {
+        updatedExpanded.add(newIndex);
+      }
+    });
+    this._expandedSeries = updatedExpanded;
+
+    const updatedTermKeys: string[] = [];
+    this._expandedTermKeys.forEach((key) => {
+      const [seriesPart, termPart] = key.split("-");
+      const oldSeriesIndex = Number(seriesPart);
+      if (Number.isNaN(oldSeriesIndex)) {
+        return;
+      }
+      if (oldSeriesIndex === index) {
+        return;
+      }
+      const newSeriesIndex = oldSeriesIndex > index ? oldSeriesIndex - 1 : oldSeriesIndex;
+      if (newSeriesIndex >= 0 && newSeriesIndex < series.length) {
+        updatedTermKeys.push(`${newSeriesIndex}-${termPart}`);
+      }
+    });
+    this._expandedTermKeys = new Set(updatedTermKeys);
   }
 
   private _convertSeriesToCalculation(index: number) {
@@ -820,6 +893,7 @@ export class EnergyCustomGraphCardEditor
     target.calculation = target.calculation ?? { terms: [] };
     seriesList[index] = target;
     this._updateConfig("series", seriesList);
+    this._expandedSeries = new Set(this._expandedSeries).add(index);
   }
 
   private _convertSeriesToStatistic(index: number) {
@@ -831,6 +905,7 @@ export class EnergyCustomGraphCardEditor
     }
     seriesList[index] = target;
     this._updateConfig("series", seriesList);
+    this._expandedSeries = new Set(this._expandedSeries).add(index);
   }
 
   private _addCalculationTerm(index: number) {
@@ -841,6 +916,9 @@ export class EnergyCustomGraphCardEditor
     target.calculation = calculation;
     series[index] = target;
     this._updateConfig("series", series);
+    this._expandedSeries = new Set(this._expandedSeries).add(index);
+    const newTermIndex = (calculation.terms?.length ?? 1) - 1;
+    this._expandedTermKeys = new Set(this._expandedTermKeys).add(`${index}-${newTermIndex}`);
   }
 
   private _removeCalculationTerm(seriesIndex: number, termIndex: number) {
@@ -854,6 +932,9 @@ export class EnergyCustomGraphCardEditor
     target.calculation = { ...target.calculation, terms };
     series[seriesIndex] = target;
     this._updateConfig("series", series);
+    this._expandedTermKeys = new Set(
+      Array.from(this._expandedTermKeys).filter((key) => key !== `${seriesIndex}-${termIndex}`)
+    );
   }
 
   private _updateTerm(
@@ -874,6 +955,8 @@ export class EnergyCustomGraphCardEditor
     target.calculation = { ...target.calculation, terms };
     series[seriesIndex] = target;
     this._updateConfig("series", series);
+    this._expandedSeries = new Set(this._expandedSeries).add(seriesIndex);
+    this._expandedTermKeys = new Set(this._expandedTermKeys).add(`${seriesIndex}-${termIndex}`);
   }
 
   private _updateTermNumber(
@@ -891,6 +974,7 @@ export class EnergyCustomGraphCardEditor
     const target = { ...series[index], calculation };
     series[index] = target;
     this._updateConfig("series", series);
+    this._expandedSeries = new Set(this._expandedSeries).add(index);
   }
 
   private _updateSeries(index: number, key: keyof EnergyCustomGraphSeriesConfig, value: unknown) {
@@ -902,6 +986,7 @@ export class EnergyCustomGraphCardEditor
     }
     series[index] = current;
     this._updateConfig("series", series);
+    this._expandedSeries = new Set(this._expandedSeries).add(index);
   }
 
   private _updateSeriesNumber(
@@ -962,6 +1047,77 @@ export class EnergyCustomGraphCardEditor
       delete aggregation.energy_picker;
     }
     return Object.keys(aggregation).length ? aggregation : undefined;
+  }
+
+  private _toggleSeriesExpanded(index: number) {
+    const expanded = new Set(this._expandedSeries);
+    if (expanded.has(index)) {
+      expanded.delete(index);
+      const filtered: string[] = [];
+      this._expandedTermKeys.forEach((key) => {
+        if (!key.startsWith(`${index}-`)) {
+          filtered.push(key);
+        }
+      });
+      this._expandedTermKeys = new Set(filtered);
+    } else {
+      expanded.add(index);
+    }
+    this._expandedSeries = expanded;
+  }
+
+  private _toggleTermExpanded(key: string) {
+    const expanded = new Set(this._expandedTermKeys);
+    if (expanded.has(key)) {
+      expanded.delete(key);
+    } else {
+      expanded.add(key);
+    }
+    this._expandedTermKeys = expanded;
+  }
+
+  private _syncExpandedState(series: EnergyCustomGraphSeriesConfig[]) {
+    const validSeries = new Set<number>();
+    this._expandedSeries.forEach((index) => {
+      if (index >= 0 && index < series.length) {
+        validSeries.add(index);
+      }
+    });
+    this._expandedSeries = validSeries;
+
+    const validTerms = new Set<string>();
+    this._expandedTermKeys.forEach((key) => {
+      const [seriesPart, termPart] = key.split("-");
+      const seriesIndex = Number(seriesPart);
+      const termIndex = Number(termPart);
+      if (
+        Number.isNaN(seriesIndex) ||
+        Number.isNaN(termIndex) ||
+        seriesIndex < 0 ||
+        seriesIndex >= series.length
+      ) {
+        return;
+      }
+      const termCount = series[seriesIndex]?.calculation?.terms?.length ?? 0;
+      if (termIndex >= 0 && termIndex < termCount) {
+        validTerms.add(key);
+      }
+    });
+    this._expandedTermKeys = validTerms;
+  }
+
+  private _formatOperation(operation: EnergyCustomGraphCalculationTerm["operation"]): string {
+    switch (operation) {
+      case "subtract":
+        return "Subtract";
+      case "multiply":
+        return "Multiply";
+      case "divide":
+        return "Divide";
+      case "add":
+      default:
+        return "Add";
+    }
   }
 
   private _updateConfig<K extends keyof EnergyCustomGraphCardConfig>(
@@ -1201,6 +1357,17 @@ export class EnergyCustomGraphCardEditor
       justify-content: space-between;
       align-items: center;
       margin-bottom: 12px;
+    }
+
+    .term-title {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .term-actions {
+      display: flex;
+      gap: 8px;
     }
 
     .term-body {
