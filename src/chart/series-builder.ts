@@ -42,6 +42,9 @@ export const DEFAULT_COLORS = [
   "--energy-solar-color",
   "--energy-battery-in-color",
   "--energy-battery-out-color",
+  "--energy-gas-color",
+  "--energy-water-color",
+  "--energy-non-fossil-color",
 ];
 
 export const BAR_BORDER_WIDTH = 1.5;

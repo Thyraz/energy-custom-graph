@@ -16,11 +16,14 @@ import type {
 import type { StatisticsPeriod } from "./data/statistics";
 
 const ENERGY_COLOR_PRESETS: Array<{ label: string; value: string }> = [
-  { label: "Grid consumption", value: "--energy-grid-consumption-color" },
-  { label: "Grid return", value: "--energy-grid-return-color" },
-  { label: "Solar", value: "--energy-solar-color" },
-  { label: "Battery charge", value: "--energy-battery-in-color" },
-  { label: "Battery discharge", value: "--energy-battery-out-color" },
+  { label: "Grid Import • Blue", value: "--energy-grid-consumption-color" },
+  { label: "Grid Export • Purple", value: "--energy-grid-return-color" },
+  { label: "Solar • Orange", value: "--energy-solar-color" },
+  { label: "Battery In • Pink", value: "--energy-battery-in-color" },
+  { label: "Battery Out • Teal", value: "--energy-battery-out-color" },
+  { label: "Gas • Dark Red", value: "--energy-gas-color" },
+  { label: "Water • Cyan", value: "--energy-water-color" },
+  { label: "Non-Fossil • Green", value: "--energy-non-fossil-color" },
 ];
 
 const STAT_TYPE_OPTIONS: Array<{ value: EnergyCustomGraphStatisticType; label: string }> = [
