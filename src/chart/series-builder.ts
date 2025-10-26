@@ -305,6 +305,9 @@ export const buildSeries = ({
           : defaultLineFillOpacity;
       const fillColor = applyAlpha(colorValue, fillOpacity);
 
+      const lineWidth = seriesConfig.line_width ?? 2;
+      const lineStyleType = seriesConfig.line_style ?? "solid";
+
       const lineItemStyle = {
         color: lineColor,
         borderColor: lineColor,
@@ -326,8 +329,9 @@ export const buildSeries = ({
           },
         },
         lineStyle: {
-          width: 2,
+          width: lineWidth,
           color: lineColor,
+          type: lineStyleType,
         },
         itemStyle: { ...lineItemStyle },
         color: lineColor,

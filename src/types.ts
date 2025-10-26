@@ -47,6 +47,8 @@ export interface EnergyCustomGraphSeriesConfig {
   add?: number;
   smooth?: boolean | number;
   line_opacity?: number;
+  line_width?: number;
+  line_style?: "solid" | "dashed" | "dotted";
   fill_opacity?: number;
   fill_to_series?: string;
   calculation?: EnergyCustomGraphCalculationConfig;

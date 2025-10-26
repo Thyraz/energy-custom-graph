@@ -1050,6 +1050,43 @@ export class EnergyCustomGraphCardEditor
             @input=${(ev: Event) =>
               this._updateSeriesNumber(index, "line_opacity", (ev.target as HTMLInputElement).value)}
           ></ha-textfield>
+          ${chartType === "line"
+            ? html`
+                <ha-textfield
+                  label="Line width"
+                  type="number"
+                  step="0.5"
+                  min="0.5"
+                  helper="Default 2"
+                  .value=${series.line_width !== undefined ? String(series.line_width) : ""}
+                  @input=${(ev: Event) =>
+                    this._updateSeriesNumber(
+                      index,
+                      "line_width",
+                      (ev.target as HTMLInputElement).value
+                    )}
+                ></ha-textfield>
+                <div class="field">
+                  <label>Line style</label>
+                  <div class="segment-group" role="group" aria-label="Line style">
+                    ${(["solid", "dashed", "dotted"] as const).map(
+                      (style) => html`
+                        <button
+                          type="button"
+                          class=${classMap({
+                            "segment-button": true,
+                            active: (series.line_style ?? "solid") === style,
+                          })}
+                          @click=${() => this._setSeriesLineStyle(index, style)}
+                        >
+                          ${style.charAt(0).toUpperCase() + style.slice(1)}
+                        </button>
+                      `
+                    )}
+                  </div>
+                </div>
+              `
+            : nothing}
           <ha-textfield
             label="Stack group"
             helper="Series using the same name will stack together"
@@ -1115,6 +1152,14 @@ export class EnergyCustomGraphCardEditor
       return;
     }
     this._updateSeries(index, "chart_type", type);
+  }
+
+  private _setSeriesLineStyle(index: number, style: "solid" | "dashed" | "dotted") {
+    const series = this._config!.series ?? [];
+    if (series[index]?.line_style === style) {
+      return;
+    }
+    this._updateSeries(index, "line_style", style);
   }
 
   private _setSeriesSource(index: number, mode: "statistic" | "calculation") {
