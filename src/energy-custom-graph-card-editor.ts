@@ -956,22 +956,25 @@ export class EnergyCustomGraphCardEditor
           <div class="color-row">
             <div class="field">
               <label>Preset color</label>
-              <select
-                @change=${(ev: Event) =>
-                  this._updateSeries(
-                    index,
-                    "color",
-                    (ev.target as HTMLSelectElement).value || undefined
+              <div class="color-select-wrapper">
+                ${this._renderColorPreview(series.color ?? presetValue, chartType)}
+                <select
+                  @change=${(ev: Event) =>
+                    this._updateSeries(
+                      index,
+                      "color",
+                      (ev.target as HTMLSelectElement).value || undefined
+                    )}
+                >
+                  <option value="" ?selected=${presetValue === ""}>Custom</option>
+                  ${ENERGY_COLOR_PRESETS.map(
+                    (preset) =>
+                      html`<option value=${preset.value} ?selected=${presetValue === preset.value}>
+                        ${preset.label}
+                      </option>`
                   )}
-              >
-                <option value="" ?selected=${presetValue === ""}>Custom</option>
-                ${ENERGY_COLOR_PRESETS.map(
-                  (preset) =>
-                    html`<option value=${preset.value} ?selected=${presetValue === preset.value}>
-                      ${preset.label}
-                    </option>`
-                )}
-              </select>
+                </select>
+              </div>
             </div>
             ${presetValue === ""
               ? html`<ha-textfield
@@ -1009,6 +1012,9 @@ export class EnergyCustomGraphCardEditor
         <ha-textfield
           label="Fill opacity"
           type="number"
+          step="0.01"
+          min="0"
+          max="1"
           helper="Default 0.15 (lines) / 0.45 (bars)"
           .value=${series.fill_opacity !== undefined ? String(series.fill_opacity) : ""}
           @input=${(ev: Event) =>
@@ -1036,6 +1042,9 @@ export class EnergyCustomGraphCardEditor
           <ha-textfield
             label="Line opacity"
             type="number"
+            step="0.01"
+            min="0"
+            max="1"
             helper="Default 0.85 for lines, 0.75 for bars"
             .value=${series.line_opacity !== undefined ? String(series.line_opacity) : ""}
             @input=${(ev: Event) =>
@@ -1620,6 +1629,42 @@ export class EnergyCustomGraphCardEditor
     this._activeTab = tab;
   }
 
+  private _renderColorPreview(colorVar: string | undefined, chartType: "bar" | "line") {
+    if (!colorVar) {
+      return nothing;
+    }
+
+    // Get computed color value from CSS variable
+    const computedStyle = getComputedStyle(this);
+    let colorValue = colorVar;
+
+    if (colorVar.startsWith("--")) {
+      colorValue = computedStyle.getPropertyValue(colorVar).trim() || colorVar;
+    } else if (colorVar.startsWith("var(")) {
+      const extracted = colorVar.slice(4, -1).trim();
+      colorValue = computedStyle.getPropertyValue(extracted).trim() || colorVar;
+    }
+
+    // Default opacities from series-builder.ts
+    const lineOpacity = chartType === "line" ? 0.85 : 0.75; // line stroke or bar border
+    const fillOpacity = chartType === "line" ? 0.15 : 0.45; // line area or bar fill
+
+    return html`
+      <svg class="color-preview" width="16" height="16" viewBox="0 0 16 16">
+        <circle
+          cx="8"
+          cy="8"
+          r="7"
+          fill="${colorValue}"
+          fill-opacity="${fillOpacity}"
+          stroke="${colorValue}"
+          stroke-opacity="${lineOpacity}"
+          stroke-width="1.5"
+        />
+      </svg>
+    `;
+  }
+
   static styles = css`
     .tab-bar {
       display: flex;
@@ -1994,6 +2039,21 @@ export class EnergyCustomGraphCardEditor
 
     .axis-hint {
       margin-top: 8px;
+    }
+
+    .color-select-wrapper {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .color-select-wrapper select {
+      flex: 1;
+    }
+
+    .color-preview {
+      flex-shrink: 0;
+      display: block;
     }
   `;
 }
