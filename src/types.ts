@@ -90,8 +90,6 @@ export interface EnergyCustomGraphCardConfig extends LovelaceCardConfig {
   chart_height?: string;
   hide_legend?: boolean;
   expand_legend?: boolean;
-  fit_y_data?: boolean;
-  logarithmic_scale?: boolean;
   color_cycle?: string[];
   legend_sort?: "asc" | "desc" | "none";
   energy_date_selection?: boolean;

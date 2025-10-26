@@ -71,9 +71,7 @@ By default the card mirrors the core energy cards and automatically selects the 
 | `legend_sort` | `"asc"`, `"desc"`, `"none"` | `"none"` | Sort order for the legend entries. |
 | `hide_legend` | boolean | `false` | Hide the legend entirely. |
 | `expand_legend` | boolean | `false` | Expand the legend by default. |
-| `fit_y_data` | boolean | `false` | Fit the primary Y axis tightly to its data. |
-| `logarithmic_scale` | boolean | `false` | Use logarithmic scaling on the primary Y axis. |
-| `y_axes` | list | – | Additional axis overrides (see below). |
+| `y_axes` | list | – | Y axis configuration for both left and right axes (see below). |
 | `tooltip_precision` | number | – | Override numeric precision in the tooltip. |
 | `show_unit` | boolean | `true` | Show units derived from statistics metadata (per series) in tooltips and axes. |
 | `aggregation` | object | auto | Control recorder aggregation intervals. See below. |
@@ -157,13 +155,15 @@ Tip: use very fine intervals (e.g. 5 minutes) only for short ranges to avoid e
 
 ### `y_axes` options
 
+Configure both left and right Y axes individually. The right axis appears automatically when a series uses `y_axis: right` or when an explicit `right` axis configuration exists.
+
 | Key | Type | Default | Description |
 | --- | ---- | ------- | ----------- |
 | `id` | `"left"`, `"right"` | – | Axis selector to override (`left` is primary). |
 | `min` | number | auto | Minimum axis value. |
 | `max` | number | auto | Maximum axis value. |
-| `fit_y_data` | boolean | `false` | Force this axis to fit its data range. |
-| `logarithmic_scale` | boolean | `false` | Apply log scaling to this axis only. |
+| `fit_y_data` | boolean | `false` | Force this axis to fit its data range tightly. |
+| `logarithmic_scale` | boolean | `false` | Apply logarithmic scaling to this axis. |
 | `unit` | string | metadata | Override unit label for this axis. |
 
 ### `period` modes
@@ -196,8 +196,11 @@ period:
 y_axes:
   - id: left
     unit: kWh
+    fit_y_data: true
   - id: right
     unit: °C
+    min: -10
+    max: 30
 series:
   - statistic_id: sensor.heat_pump_energy
     name: Heat pump energy

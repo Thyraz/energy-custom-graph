@@ -1292,9 +1292,8 @@ export class EnergyCustomGraphCard extends LitElement {
       axisConfig: EnergyCustomGraphAxisConfig | undefined,
       index: number
     ): YAxisOption => {
-      const fit =
-        axisConfig?.fit_y_data ?? this._config?.fit_y_data ?? false;
-      const logarithmic = axisConfig?.logarithmic_scale ?? this._config?.logarithmic_scale ?? false;
+      const fit = axisConfig?.fit_y_data ?? false;
+      const logarithmic = axisConfig?.logarithmic_scale ?? false;
       axisUnitByIndex.set(index, axisConfig?.unit);
       return {
         type: logarithmic ? "log" : "value",

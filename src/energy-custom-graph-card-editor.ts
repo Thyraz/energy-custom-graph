@@ -5,6 +5,7 @@ import type { HomeAssistant, LovelaceCardEditor } from "custom-card-helpers";
 import { fireEvent } from "custom-card-helpers";
 import type {
   EnergyCustomGraphAggregationConfig,
+  EnergyCustomGraphAxisConfig,
   EnergyCustomGraphCalculationConfig,
   EnergyCustomGraphCalculationTerm,
   EnergyCustomGraphCardConfig,
@@ -53,6 +54,7 @@ export class EnergyCustomGraphCardEditor
   @state() private _activeTab: "general" | "series" | "advanced" = "general";
   @state() private _expandedSeries = new Set<number>();
   @state() private _expandedTermKeys = new Set<string>();
+  @state() private _axesExpanded = false;
   @state() private _aggregationExpanded = false;
 
   public setConfig(config: EnergyCustomGraphCardConfig): void {
@@ -158,31 +160,102 @@ export class EnergyCustomGraphCardEditor
   }
 
   private _renderAxesSection(cfg: EnergyCustomGraphCardConfig) {
+    const axes = cfg.y_axes ?? [];
+    const leftAxis = axes.find((axis) => axis.id === "left");
+    const rightAxis = axes.find((axis) => axis.id === "right");
+
+    // Check if any series uses the right axis
+    const hasRightAxisSeries = cfg.series?.some((series) => series.y_axis === "right");
+    const showRightAxis = !!rightAxis || hasRightAxisSeries;
+
+    const axesExpanded = this._axesExpanded;
+    const axesSummary = this._formatAxesSummary(leftAxis, rightAxis, showRightAxis);
+
     return html`
-      <div class="group-card">
-        <div class="group-header">
-          <span class="group-title">Axes</span>
+      <div class="collapsible general-collapsible ${axesExpanded ? "expanded" : "collapsed"}">
+        <button type="button" class="collapsible-header" @click=${this._toggleAxesExpanded}>
+          <div class="collapsible-title">
+            <span class="title">Y Axes</span>
+            ${axesSummary ? html`<span class="subtitle">${axesSummary}</span>` : nothing}
+          </div>
+          <span class="chevron">
+            <ha-icon icon=${axesExpanded ? "mdi:chevron-down" : "mdi:chevron-right"}></ha-icon>
+          </span>
+        </button>
+        ${axesExpanded
+          ? html`
+              <div class="collapsible-body">
+                <div class="section">
+                  ${this._renderAxisConfig("left", leftAxis)}
+                  ${showRightAxis
+                    ? html`
+                        <div class="axis-separator"></div>
+                        ${this._renderAxisConfig("right", rightAxis)}
+                      `
+                    : html`
+                        <p class="hint axis-hint">
+                          The right Y axis will appear automatically when you assign a series to it.
+                        </p>
+                      `}
+                </div>
+              </div>
+            `
+          : nothing}
+      </div>
+    `;
+  }
+
+  private _renderAxisConfig(
+    axisId: "left" | "right",
+    axisConfig: EnergyCustomGraphAxisConfig | undefined
+  ) {
+    const axisLabel = axisId === "left" ? "Left Y axis" : "Right Y axis";
+    return html`
+      <div class="axis-config">
+        <span class="subtitle axis-title">${axisLabel}</span>
+        <ha-textfield
+          label="Min value"
+          type="number"
+          .value=${axisConfig?.min !== undefined ? String(axisConfig.min) : ""}
+          @input=${(ev: Event) =>
+            this._updateAxisConfig(axisId, "min", (ev.target as HTMLInputElement).value)}
+        ></ha-textfield>
+        <ha-textfield
+          label="Max value"
+          type="number"
+          .value=${axisConfig?.max !== undefined ? String(axisConfig.max) : ""}
+          @input=${(ev: Event) =>
+            this._updateAxisConfig(axisId, "max", (ev.target as HTMLInputElement).value)}
+        ></ha-textfield>
+        <ha-textfield
+          label="Unit"
+          .value=${axisConfig?.unit ?? ""}
+          @input=${(ev: Event) =>
+            this._updateAxisConfig(axisId, "unit", (ev.target as HTMLInputElement).value)}
+        ></ha-textfield>
+        <div class="row">
+          <ha-switch
+            .checked=${axisConfig?.fit_y_data === true}
+            @change=${(ev: Event) =>
+              this._updateAxisConfig(
+                axisId,
+                "fit_y_data",
+                (ev.target as HTMLInputElement).checked
+              )}
+          ></ha-switch>
+          <span>Fit to data</span>
         </div>
-        <div class="group-body">
-          <div class="row">
-            <ha-switch
-              .checked=${cfg.fit_y_data === true}
-              @change=${(ev: Event) =>
-                this._updateBooleanConfig("fit_y_data", (ev.target as HTMLInputElement).checked)}
-            ></ha-switch>
-            <span>Fit primary Y axis to data</span>
-          </div>
-          <div class="row">
-            <ha-switch
-              .checked=${cfg.logarithmic_scale === true}
-              @change=${(ev: Event) =>
-                this._updateBooleanConfig(
-                  "logarithmic_scale",
-                  (ev.target as HTMLInputElement).checked
-                )}
-            ></ha-switch>
-            <span>Primary Y axis logarithmic</span>
-          </div>
+        <div class="row">
+          <ha-switch
+            .checked=${axisConfig?.logarithmic_scale === true}
+            @change=${(ev: Event) =>
+              this._updateAxisConfig(
+                axisId,
+                "logarithmic_scale",
+                (ev.target as HTMLInputElement).checked
+              )}
+          ></ha-switch>
+          <span>Logarithmic scale</span>
         </div>
       </div>
     `;
@@ -364,8 +437,8 @@ export class EnergyCustomGraphCardEditor
           : nothing}
       </div>
       ${this._renderLegendSection(cfg)}
-      ${this._renderAxesSection(cfg)}
       ${this._renderTooltipSection(cfg)}
+      ${this._renderAxesSection(cfg)}
       <div class="collapsible general-collapsible ${aggregationExpanded ? "expanded" : "collapsed"}">
         <button type="button" class="collapsible-header" @click=${this._toggleAggregationExpanded}>
           <div class="collapsible-title">
@@ -1254,6 +1327,60 @@ export class EnergyCustomGraphCardEditor
     this._updateSeries(index, "smooth", Number.isNaN(parsed) ? undefined : parsed);
   }
 
+  private _updateAxisConfig(
+    axisId: "left" | "right",
+    key: keyof Omit<EnergyCustomGraphAxisConfig, "id">,
+    value: string | boolean
+  ) {
+    const axes = [...(this._config?.y_axes ?? [])];
+    const existingIndex = axes.findIndex((axis) => axis.id === axisId);
+
+    let numericValue: number | undefined;
+    if (key === "min" || key === "max") {
+      numericValue = value === "" ? undefined : Number(value);
+      if (value !== "" && Number.isNaN(numericValue)) {
+        return; // Invalid number input
+      }
+    }
+
+    const finalValue =
+      key === "min" || key === "max"
+        ? numericValue
+        : key === "unit"
+          ? value === ""
+            ? undefined
+            : (value as string)
+          : (value as boolean);
+
+    if (existingIndex >= 0) {
+      // Update existing axis
+      const updated = { ...axes[existingIndex] };
+      (updated as any)[key] = finalValue;
+
+      // Remove undefined values to keep config clean
+      if (finalValue === undefined) {
+        delete (updated as any)[key];
+      }
+
+      axes[existingIndex] = updated;
+    } else {
+      // Create new axis
+      const newAxis: EnergyCustomGraphAxisConfig = {
+        id: axisId,
+        [key]: finalValue,
+      };
+      axes.push(newAxis);
+    }
+
+    // Clean up empty axis configs
+    const cleanedAxes = axes.filter((axis) => {
+      const { id, ...rest } = axis;
+      return Object.keys(rest).length > 0;
+    });
+
+    this._updateConfig("y_axes", cleanedAxes.length > 0 ? cleanedAxes : undefined);
+  }
+
   private _updateAggregation(field: keyof EnergyCustomGraphAggregationConfig, value: string) {
     const aggregation: EnergyCustomGraphAggregationConfig = {
       ...this._config!.aggregation,
@@ -1411,6 +1538,48 @@ export class EnergyCustomGraphCardEditor
 
   private _toggleAggregationExpanded() {
     this._aggregationExpanded = !this._aggregationExpanded;
+  }
+
+  private _toggleAxesExpanded() {
+    this._axesExpanded = !this._axesExpanded;
+  }
+
+  private _formatAxesSummary(
+    leftAxis: EnergyCustomGraphAxisConfig | undefined,
+    rightAxis: EnergyCustomGraphAxisConfig | undefined,
+    showRightAxis: boolean
+  ): string | undefined {
+    const parts: string[] = [];
+
+    if (leftAxis) {
+      const leftParts: string[] = [];
+      if (leftAxis.unit) leftParts.push(leftAxis.unit);
+      if (leftAxis.fit_y_data) leftParts.push("fit");
+      if (leftAxis.logarithmic_scale) leftParts.push("log");
+      if (leftAxis.min !== undefined || leftAxis.max !== undefined) {
+        const range = `${leftAxis.min ?? "auto"}-${leftAxis.max ?? "auto"}`;
+        leftParts.push(range);
+      }
+      if (leftParts.length) {
+        parts.push(`Left: ${leftParts.join(", ")}`);
+      }
+    }
+
+    if (showRightAxis && rightAxis) {
+      const rightParts: string[] = [];
+      if (rightAxis.unit) rightParts.push(rightAxis.unit);
+      if (rightAxis.fit_y_data) rightParts.push("fit");
+      if (rightAxis.logarithmic_scale) rightParts.push("log");
+      if (rightAxis.min !== undefined || rightAxis.max !== undefined) {
+        const range = `${rightAxis.min ?? "auto"}-${rightAxis.max ?? "auto"}`;
+        rightParts.push(range);
+      }
+      if (rightParts.length) {
+        parts.push(`Right: ${rightParts.join(", ")}`);
+      }
+    }
+
+    return parts.length ? parts.join(" • ") : undefined;
   }
 
   private _formatAggregationSummary(
@@ -1801,6 +1970,27 @@ export class EnergyCustomGraphCardEditor
 
     .term-transform-title {
       margin-top: 4px;
+    }
+
+    .axis-config {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .axis-title {
+      font-size: 14px;
+      margin-bottom: 4px;
+      display: block;
+    }
+
+    .axis-separator {
+      border-top: 1px solid var(--divider-color, rgba(0, 0, 0, 0.12));
+      margin: 8px 0;
+    }
+
+    .axis-hint {
+      margin-top: 8px;
     }
   `;
 }
