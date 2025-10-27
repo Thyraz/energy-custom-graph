@@ -1168,11 +1168,19 @@ ${this._renderTimespanSection(cfg)}
           </div>
           <div class="row">
             <ha-switch
-              .checked=${series.show_legend !== false}
+              .checked=${series.show_in_legend !== false}
               @change=${(ev: Event) =>
-                this._updateSeries(index, "show_legend", (ev.target as HTMLInputElement).checked)}
+                this._updateSeries(index, "show_in_legend", (ev.target as HTMLInputElement).checked)}
             ></ha-switch>
             <span>Show in legend</span>
+          </div>
+          <div class="row">
+            <ha-switch
+              .checked=${series.hidden_by_default === true}
+              @change=${(ev: Event) =>
+                this._updateSeries(index, "hidden_by_default", (ev.target as HTMLInputElement).checked)}
+            ></ha-switch>
+            <span>Hidden by default</span>
           </div>
           ${fillEnabled
             ? html`

@@ -124,7 +124,8 @@ Display a fixed time range. Dates use ISO 8601 format. If omitted, `start` defau
 | `chart_type` | `"bar"`, `"line"` | `"bar"` | Chart type. |
 | `stack` | string | – | Stack key for combining series. Series with identical keys will get stacked on top of each other. |
 | `y_axis` | `"left"`, `"right"` | `"left"` | Axis assignment. |
-| `show_legend` | boolean | `true` | Hide or show this series in the legend. |
+| `show_in_legend` | boolean | `true` | Whether to display this series in the legend. If `false`, the series remains visible in the chart but has no legend entry. |
+| `hidden_by_default` | boolean | `false` | Whether the series is initially hidden when the chart loads. The series can still be toggled via the legend. |
 | `color` | string | next in palette | Specific color (supports `#rrggbb`, `rgb()` or CSS variables). |
 | `line_opacity` | number | style default | Override stroke opacity (0–1). Defaults to 0.85 for line charts and 1.0 for bar outlines. |
 | `line_width` | number | `2` | Line thickness in pixels (line charts only). |

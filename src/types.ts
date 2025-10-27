@@ -42,7 +42,8 @@ export interface EnergyCustomGraphSeriesConfig {
   stack?: string;
   color?: string;
   y_axis?: "left" | "right";
-  show_legend?: boolean;
+  show_in_legend?: boolean;
+  hidden_by_default?: boolean;
   multiply?: number;
   add?: number;
   smooth?: boolean | number;

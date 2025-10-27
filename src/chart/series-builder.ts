@@ -420,12 +420,15 @@ export const buildSeries = ({
       }
     }
 
-    legend.push({
-      id,
-      name,
-      color: chartType === "line" ? lineColor : colorValue,
-      hidden: seriesConfig.show_legend === false,
-    });
+    // Only add to legend if show_in_legend is not explicitly false
+    if (seriesConfig.show_in_legend !== false) {
+      legend.push({
+        id,
+        name,
+        color: chartType === "line" ? lineColor : colorValue,
+        hidden: seriesConfig.hidden_by_default === true,
+      });
+    }
   });
 
   fillRequests.forEach(({ sourceName, targetName }) => {
