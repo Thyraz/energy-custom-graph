@@ -837,7 +837,7 @@ export class EnergyCustomGraphCard extends LitElement {
 
   public static getStubConfig(): EnergyCustomGraphCardConfig {
     return {
-      type: "energy-custom-graph-card",
+      type: "custom:energy-custom-graph-card",
       series: [],
     };
   }
