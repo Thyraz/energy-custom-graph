@@ -499,6 +499,10 @@ export class EnergyCustomGraphCardEditor
   private _renderSeriesCard(series: EnergyCustomGraphSeriesConfig, index: number) {
     const usingCalculation = !!series.calculation;
     const expanded = this._expandedSeries.has(index);
+    const seriesCount = this._config?.series?.length ?? 0;
+    const isFirst = index === 0;
+    const isLast = index === seriesCount - 1;
+
     return html`
       <div class="collapsible ${expanded ? "expanded" : "collapsed"}">
         <button
@@ -514,9 +518,55 @@ export class EnergyCustomGraphCardEditor
                 : series.statistic_id || "No statistic selected"}
             </span>
           </div>
-          <span class="chevron">
-            <ha-icon icon=${expanded ? "mdi:chevron-down" : "mdi:chevron-right"}></ha-icon>
-          </span>
+          <div class="header-actions">
+            <div class="reorder-buttons">
+              <div
+                class="icon-button ${isFirst ? "disabled" : ""}"
+                role="button"
+                tabindex="0"
+                @click=${(ev: Event) => {
+                  if (!isFirst) {
+                    ev.stopPropagation();
+                    this._moveSeriesUp(index);
+                  }
+                }}
+                @keydown=${(ev: KeyboardEvent) => {
+                  if (!isFirst && (ev.key === "Enter" || ev.key === " ")) {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    this._moveSeriesUp(index);
+                  }
+                }}
+                title="Move up"
+              >
+                <ha-icon icon="mdi:chevron-up"></ha-icon>
+              </div>
+              <div
+                class="icon-button ${isLast ? "disabled" : ""}"
+                role="button"
+                tabindex="0"
+                @click=${(ev: Event) => {
+                  if (!isLast) {
+                    ev.stopPropagation();
+                    this._moveSeriesDown(index);
+                  }
+                }}
+                @keydown=${(ev: KeyboardEvent) => {
+                  if (!isLast && (ev.key === "Enter" || ev.key === " ")) {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    this._moveSeriesDown(index);
+                  }
+                }}
+                title="Move down"
+              >
+                <ha-icon icon="mdi:chevron-down"></ha-icon>
+              </div>
+            </div>
+            <span class="chevron">
+              <ha-icon icon=${expanded ? "mdi:chevron-down" : "mdi:chevron-right"}></ha-icon>
+            </span>
+          </div>
         </button>
         ${expanded
           ? html`
@@ -1220,6 +1270,50 @@ export class EnergyCustomGraphCardEditor
     this._expandedSeries = new Set(this._expandedSeries).add(updated.length - 1);
   }
 
+  private _moveSeriesUp(index: number) {
+    if (index === 0) return;
+
+    const series = [...(this._config!.series ?? [])];
+    [series[index - 1], series[index]] = [series[index], series[index - 1]];
+
+    // Update expanded state
+    const updatedExpanded = new Set<number>();
+    this._expandedSeries.forEach((oldIndex) => {
+      if (oldIndex === index) {
+        updatedExpanded.add(index - 1);
+      } else if (oldIndex === index - 1) {
+        updatedExpanded.add(index);
+      } else {
+        updatedExpanded.add(oldIndex);
+      }
+    });
+    this._expandedSeries = updatedExpanded;
+
+    this._updateConfig("series", series);
+  }
+
+  private _moveSeriesDown(index: number) {
+    const series = [...(this._config!.series ?? [])];
+    if (index >= series.length - 1) return;
+
+    [series[index], series[index + 1]] = [series[index + 1], series[index]];
+
+    // Update expanded state
+    const updatedExpanded = new Set<number>();
+    this._expandedSeries.forEach((oldIndex) => {
+      if (oldIndex === index) {
+        updatedExpanded.add(index + 1);
+      } else if (oldIndex === index + 1) {
+        updatedExpanded.add(index);
+      } else {
+        updatedExpanded.add(oldIndex);
+      }
+    });
+    this._expandedSeries = updatedExpanded;
+
+    this._updateConfig("series", series);
+  }
+
   private _removeSeries(index: number) {
     const series = [...(this._config!.series ?? [])];
     series.splice(index, 1);
@@ -1901,9 +1995,47 @@ export class EnergyCustomGraphCardEditor
       font-size: 13px;
     }
 
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .reorder-buttons {
+      display: flex;
+      gap: 4px;
+    }
+
+    .icon-button {
+      border: none;
+      background: none;
+      cursor: pointer;
+      padding: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--secondary-text-color);
+      border-radius: 4px;
+      transition: background-color 0.2s;
+    }
+
+    .icon-button:hover:not(.disabled) {
+      background-color: rgba(0, 0, 0, 0.08);
+      color: var(--primary-text-color);
+    }
+
+    .icon-button.disabled {
+      opacity: 0.3;
+      cursor: not-allowed;
+    }
+
+    .icon-button ha-icon {
+      --mdc-icon-size: 18px;
+    }
+
     .chevron {
       color: var(--secondary-text-color);
-      margin-inline-start: 12px;
+      margin-inline-start: 4px;
       display: flex;
       align-items: center;
     }

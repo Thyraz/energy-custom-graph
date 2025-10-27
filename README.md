@@ -1,15 +1,16 @@
 # Energy Custom Graph
 
-Energy Custom Graph is a lightweight Lovelace card that plugs straight into Home Assistant's energy date picker. It reuses the built-in ECharts instance shipped with Home Assistant, so you get native styling, minimal overhead, and a layout that mirrors the core energy cards.
+Energy Custom Graph is a lightweight Lovelace card that plugs into Home Assistant's energy date picker. It reuses the built-in ECharts instance shipped with Home Assistant, so you get native styling, minimal overhead, and a layout that mirrors the core energy cards.
 
-Unlike the default `energy-usage-graph`, this card is not limited to the energy dashboard entities. Any long-term statistic available in the recorder can be visualised and combined, whether it comes from energy, climate, sensors, or custom integrations. Each series can pick the statistic type (`change`, `sum`, `mean`, `min`, `max`, `state`) and presentation style so you always see the numbers you care about.
+Unlike the default energy cards like `energy-usage-graph`, this card is not limited to the energy dashboard entities. Any long-term statistic available in the recorder can be visualised and combined, whether it comes from energy, climate, sensors, ... Each series can pick the statistic type (`change`, `sum`, `mean`, `min`, `max`, `state`) and presentation style.
+I know the `Statistics graph card` nowadays also support the energy date picker, but it didn't provide all the features I needed.
 
 ## Key Features
 
 - Drops into dashboards that already use the Home Assistant energy date picker (`energy-date-selection`) for instant period syncing.
 - Supports any entity that exposes long-term statistics, not only energy sources.
 - Shares the core energy colour palette and styling so mixed dashboards look consistent.
-- Uses Home Assistant's bundled ECharts runtime – no extra frameworks are loaded.
+- Uses Home Assistant's bundled ECharts runtime – no extra framework needs to be loaded.
 - Per-series control over aggregation statistic, chart type (bar or line), stacking, color, unit scaling and offsets.
 - Optional fill-between-rendering for line series to highlight the space between two signals.
 - Optional manual period selection (fixed ranges or relative day/week/month/year offsets) when you do not want to use the energy picker.
@@ -18,12 +19,10 @@ Unlike the default `energy-usage-graph`, this card is not limited to the energy 
 
 ### HACS (recommended)
 
-1. Ensure [HACS](https://hacs.xyz) is installed and configured.
-2. In HACS, open **Frontend → Explore & Download Repositories**.
-3. Search for **Energy Custom Graph**, select it, and choose **Download**.
-4. After installation, reload your browser or press "Reload resources" in Lovelace.
-
-> The HACS listing tracks this GitHub repository, so updates remain in sync automatically.
+1. In Home Assistant, open *HACS > Frontend* and click the three-dot menu in the top right.
+2. Choose *Custom repositories*, add `https://github.com/Thyraz/energy-custom-graph`, and leave the category set to *Lovelace*.
+3. Search for "Energy Custom Graph" in HACS, install the latest release, and let HACS add the resource to your dashboard automatically.
+4. Reload the browser or clear the Lovelace cache if the new card type is not immediately available.
 
 ### Manual installation
 
