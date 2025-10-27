@@ -641,15 +641,24 @@ ${this._renderTimespanSection(cfg)}
                 <label>Period</label>
                 <select
                   @change=${(ev: Event) =>
-                    this._updateTimespanRelativePeriod((ev.target as HTMLSelectElement).value as "hour" | "day" | "week" | "month" | "year")}
+                    this._updateTimespanRelativePeriod((ev.target as HTMLSelectElement).value as "hour" | "day" | "week" | "month" | "year" | "last_7_days" | "last_30_days" | "last_12_months")}
                 >
-                  ${["hour", "day", "week", "month", "year"].map(
-                    (period) => html`
+                  ${[
+                    { value: "hour", label: "Hour" },
+                    { value: "day", label: "Day" },
+                    { value: "week", label: "Week" },
+                    { value: "month", label: "Month" },
+                    { value: "year", label: "Year" },
+                    { value: "last_7_days", label: "Last 7 days" },
+                    { value: "last_30_days", label: "Last 30 days" },
+                    { value: "last_12_months", label: "Last 12 months" },
+                  ].map(
+                    ({ value, label }) => html`
                       <option
-                        value=${period}
-                        ?selected=${timespan.mode === "relative" && timespan.period === period}
+                        value=${value}
+                        ?selected=${timespan.mode === "relative" && timespan.period === value}
                       >
-                        ${period.charAt(0).toUpperCase() + period.slice(1)}
+                        ${label}
                       </option>
                     `
                   )}
@@ -1815,7 +1824,7 @@ ${this._renderTimespanSection(cfg)}
     this._updateConfig("timespan", timespan);
   }
 
-  private _updateTimespanRelativePeriod(period: "hour" | "day" | "week" | "month" | "year") {
+  private _updateTimespanRelativePeriod(period: "hour" | "day" | "week" | "month" | "year" | "last_7_days" | "last_30_days" | "last_12_months") {
     const current = this._config?.timespan;
     if (!current || current.mode !== "relative") return;
 

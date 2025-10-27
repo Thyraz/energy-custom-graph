@@ -66,7 +66,7 @@ export type EnergyCustomGraphTimespanConfig =
   | { mode: "energy" }
   | {
       mode: "relative";
-      period: "hour" | "day" | "week" | "month" | "year";
+      period: "hour" | "day" | "week" | "month" | "year" | "last_7_days" | "last_30_days" | "last_12_months";
       offset?: number;
     }
   | {

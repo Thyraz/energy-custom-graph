@@ -145,10 +145,21 @@ Follow the energy date picker on the dashboard. The card automatically mirrors t
 ```yaml
 timespan:
   mode: relative
-  period: day        # hour, day, week, month, or year
-  offset: -1         # Optional offset (e.g., -1 for yesterday, 0 for today)
+  period: day        # hour, day, week, month, year, last_7_days, last_30_days, or last_12_months
+  offset: -1         # Optional offset (e.g., -1 for yesterday/previous period)
 ```
-Display a relative time period. The `period` defines the unit and `offset` shifts it (e.g., `-1` for the previous period, `0` for current).
+Display a relative time period. The card supports two types of relative periods:
+
+**Calendar-based periods** (`hour`, `day`, `week`, `month`, `year`):
+- Aligned to calendar boundaries (e.g., "day" means today from 00:00 to 23:59)
+- `offset` shifts by complete periods (e.g., `-1` for yesterday, `-7` for last week)
+
+**Rolling window periods** (`last_7_days`, `last_30_days`, `last_12_months`):
+- End at the current time and look back a fixed duration
+- `last_7_days`: Previous 7 days ending now
+- `last_30_days`: Previous 30 days ending now
+- `last_12_months`: Previous 12 months ending now
+- `offset` shifts the entire window (e.g., `offset: -7` for "7 days ago, looking back 7 days")
 
 **Mode: `fixed`**
 ```yaml
@@ -261,6 +272,21 @@ series:
   - statistic_id: sensor.solar_total_energy
     name: Solar production
     stat_type: change
+```
+
+### 2a. Rolling window for last 30 days
+
+```yaml
+type: custom:energy-custom-graph-card
+title: Energy consumption (last 30 days)
+timespan:
+  mode: relative
+  period: last_30_days
+series:
+  - statistic_id: sensor.home_energy_consumption
+    name: Consumption
+    stat_type: change
+    chart_type: bar
 ```
 
 ### 3. Fill the range between minimum and maximum

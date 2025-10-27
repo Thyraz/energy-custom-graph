@@ -19,7 +19,9 @@ import {
   startOfMonth,
   startOfWeek,
   startOfYear,
+  subDays,
   subHours,
+  subMonths,
 } from "date-fns";
 import {
   fetchStatistics,
@@ -321,6 +323,27 @@ export class EnergyCustomGraphCard extends LitElement {
             const end = base.end
               ? addMonths(base.end, offset)
               : endOfMonth(addMonths(base.start, offset));
+            return { start, end };
+          }
+          case "last_7_days": {
+            // Rolling 7-day window: end = now + offset days, start = end - 7 days
+            const now = new Date();
+            const end = addDays(now, offset);
+            const start = subDays(end, 7);
+            return { start, end };
+          }
+          case "last_30_days": {
+            // Rolling 30-day window: end = now + offset days, start = end - 30 days
+            const now = new Date();
+            const end = addDays(now, offset);
+            const start = subDays(end, 30);
+            return { start, end };
+          }
+          case "last_12_months": {
+            // Rolling 12-month window: end = now + offset months, start = end - 12 months
+            const now = new Date();
+            const end = addMonths(now, offset);
+            const start = subMonths(end, 12);
             return { start, end };
           }
           case "year":
