@@ -40,7 +40,6 @@ Add the card to a dashboard via YAML or the raw editor:
 ```yaml
 type: custom:energy-custom-graph-card
 title: Custom energy overview
-energy_date_selection: true
 series:
   - statistic_id: sensor.energy_grid_import
   - statistic_id: sensor.energy_grid_export
@@ -49,7 +48,7 @@ series:
     fill: true
 ```
 
-The card supports the energy date picker out of the box. Place an `energy-date-selection` control on the same view, set `energy_date_selection: true` (which is the default), and the card will mirror the currently selected range. If you prefer manual control, set the flag to `false` and configure the `period` section instead.
+The card supports the energy date picker out of the box. Place an `energy-date-selection` control on the same view, set `timespan.mode: "energy"` (which is the default), and the card will mirror the currently selected range. For other timespan modes, see the `timespan` configuration below.
 
 ## Configuration Reference
 
@@ -62,9 +61,8 @@ By default the card mirrors the core energy cards and automatically selects the 
 | `type` | string | – | Must be `custom:energy-custom-graph-card`. |
 | `title` | string | – | Optional card header. |
 | `series` | list | – | One or more series definitions (see below). |
-| `period` | object | `{mode: energy}` | Controls the aggregation window when not driven by the energy picker. |
-| `energy_date_selection` | boolean | `false` | Subscribe to the global energy date picker on the dashboard. |
-| `collection_key` | string | – | Custom key when multiple energy date pickers are present; matches Home Assistant's energy collections. |
+| `timespan` | object | `{mode: "energy"}` | Controls the time range displayed (see below). |
+| `collection_key` | string | – | Custom key when multiple energy date pickers are present (only for `timespan.mode: "energy"`). |
 | `chart_height` | string | – | CSS height (e.g. `300px`, `20rem`). |
 | `color_cycle` | list | – | Custom palette of CSS variables or colours applied cyclically to series. |
 | `legend_sort` | `"asc"`, `"desc"`, `"none"` | `"none"` | Sort order for the legend entries. |
@@ -132,6 +130,35 @@ Each term accepts the following options:
 | `operation` | `"add"`, `"subtract"`, `"multiply"`, `"divide"` | `"add"` | Operation applied to the running total. |
 | `constant` | number | – | Constant that replaces the statistic. Mutually exclusive with `statistic_id`. |
 
+### Timespan options
+
+The `timespan` configuration controls the time range displayed by the card. It supports three modes:
+
+**Mode: `energy` (default)**
+```yaml
+timespan:
+  mode: energy
+```
+Follow the energy date picker on the dashboard. The card automatically mirrors the selected range.
+
+**Mode: `relative`**
+```yaml
+timespan:
+  mode: relative
+  period: day        # hour, day, week, month, or year
+  offset: -1         # Optional offset (e.g., -1 for yesterday, 0 for today)
+```
+Display a relative time period. The `period` defines the unit and `offset` shifts it (e.g., `-1` for the previous period, `0` for current).
+
+**Mode: `fixed`**
+```yaml
+timespan:
+  mode: fixed
+  start: "2024-01-01T00:00:00"   # Optional, defaults to start of today
+  end: "2024-01-31T23:59:59"     # Optional, defaults to end of start day
+```
+Display a fixed time range. Dates use ISO 8601 format. If omitted, `start` defaults to the beginning of today and `end` defaults to the end of the start day.
+
 ### Aggregation options
 
 Override the recorder aggregation interval if needed. By default, the card mirrors HA’s energy cards (hours for daily ranges, days for weekly/monthly views, months for yearly views). Use the `aggregation` block to customise this behaviour:
@@ -147,7 +174,7 @@ aggregation:
     year: month
 ```
 
-- `manual` applies to fixed periods (`energy_date_selection: false`).
+- `manual` applies when the timespan mode is `relative` or `fixed` (i.e., not following the energy picker).
 - `energy_picker` sets the aggregation used when the energy date picker selects `hour`, `day`, `week`, `month`, or `year` ranges. Any range not listed keeps the automatic behaviour.
 - `fallback` is used if the preferred interval yields no data. Omit it to keep the current error behaviour.
 - Valid intervals: `"5minute"`, `"hour"`, `"day"`, `"week"`, `"month"`.
@@ -168,21 +195,6 @@ Configure both left and right Y axes individually. The right axis appears automa
 | `logarithmic_scale` | boolean | `false` | Apply logarithmic scaling to this axis. |
 | `unit` | string | metadata | Override unit label for this axis. |
 
-### `period` modes
-
-| Mode | Description |
-| ---- | ----------- |
-| `energy` | Follows the energy date picker when enabled; otherwise falls back to the current day. |
-| `relative` | Uses the energy range (or a default period) and offsets it by whole day, week, month, or year steps. |
-| `fixed` | Static timestamps for start/end (ISO strings). Useful for fixed comparison dashboards or snapshots. |
-
-#### Relative period options
-
-| Key | Type | Default | Description |
-| --- | ---- | ------- | ----------- |
-| `unit` | `"day"`, `"week"`, `"month"`, `"year"` | – | Step size applied when calculating offsets. |
-| `offset` | number | `0` | Number of steps to shift the base range (negative for past periods). |
-
 ## Examples
 
 ### 1. Manual fixed window with dual axes
@@ -190,8 +202,7 @@ Configure both left and right Y axes individually. The right axis appears automa
 ```yaml
 type: custom:energy-custom-graph-card
 title: Heating performance snapshot
-energy_date_selection: false
-period:
+timespan:
   mode: fixed
   start: 2024-01-01T00:00:00Z
   end: 2024-01-08T00:00:00Z
@@ -220,7 +231,6 @@ series:
 ```yaml
 type: custom:energy-custom-graph-card
 title: Grid power balance
-energy_date_selection: true
 y_axes:
   - id: left
     unit: kW
@@ -243,10 +253,9 @@ series:
 ```yaml
 type: custom:energy-custom-graph-card
 title: Solar production (last year)
-energy_date_selection: false
-period:
+timespan:
   mode: relative
-  unit: year
+  period: year
   offset: -1
 series:
   - statistic_id: sensor.solar_total_energy
@@ -259,7 +268,6 @@ series:
 ```yaml
 type: custom:energy-custom-graph-card
 title: Outdoor temperature band
-energy_date_selection: true
 series:
   - statistic_id: sensor.outdoor_temperature
     name: Max temperature

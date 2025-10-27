@@ -12,6 +12,7 @@ import type {
   EnergyCustomGraphChartType,
   EnergyCustomGraphSeriesConfig,
   EnergyCustomGraphStatisticType,
+  EnergyCustomGraphTimespanConfig,
 } from "./types";
 import type { StatisticsPeriod } from "./data/statistics";
 
@@ -84,9 +85,7 @@ export class EnergyCustomGraphCardEditor
     const normalizedSeries = config.series?.map((item) => ({ ...item })) ?? [];
     this._config = {
       type: "custom:energy-custom-graph-card",
-      energy_date_selection: config.energy_date_selection ?? true,
-      period: config.period,
-      aggregation: config.aggregation,
+      timespan: config.timespan ?? { mode: "energy" },
       ...config,
       series: normalizedSeries,
     };
@@ -434,11 +433,11 @@ export class EnergyCustomGraphCardEditor
 
   private _renderGeneralTab() {
     const cfg = this._config!;
-    const useEnergyPicker = cfg.energy_date_selection !== false;
+    const isEnergyMode = cfg.timespan?.mode === "energy";
     const aggregationConfig = cfg.aggregation;
     const pickerAggregation = aggregationConfig?.energy_picker ?? {};
     const aggregationExpanded = this._aggregationExpanded;
-    const aggregationSummary = this._formatAggregationSummary(aggregationConfig, useEnergyPicker);
+    const aggregationSummary = this._formatAggregationSummary(aggregationConfig, isEnergyMode);
     return html`
       <div class="section">
         <ha-textfield
@@ -454,26 +453,7 @@ export class EnergyCustomGraphCardEditor
           @input=${(ev: Event) =>
             this._updateConfig("chart_height", (ev.target as HTMLInputElement).value || undefined)}
         ></ha-textfield>
-        <div class="row">
-          <ha-switch
-            .checked=${useEnergyPicker}
-            @change=${(ev: Event) =>
-              this._updateConfig("energy_date_selection", (ev.target as HTMLInputElement).checked)}
-          ></ha-switch>
-          <span>Use energy date picker</span>
-        </div>
-        ${useEnergyPicker
-          ? html`<ha-textfield
-              label="Collection key"
-              helper="Optional key when multiple energy pickers are present"
-              .value=${cfg.collection_key ?? ""}
-              @input=${(ev: Event) =>
-                this._updateConfig(
-                  "collection_key",
-                  (ev.target as HTMLInputElement).value || undefined
-                )}
-            ></ha-textfield>`
-          : nothing}
+${this._renderTimespanSection(cfg)}
       </div>
       ${this._renderLegendSection(cfg)}
       ${this._renderTooltipSection(cfg)}
@@ -493,7 +473,7 @@ export class EnergyCustomGraphCardEditor
         ${aggregationExpanded
           ? html`
               <div class="collapsible-body aggregation-body">
-                ${useEnergyPicker
+                ${isEnergyMode
                   ? this._renderAggregationPickerOptions(pickerAggregation)
                   : this._renderAggregationManualOptions(aggregationConfig)}
               </div>
@@ -607,6 +587,100 @@ export class EnergyCustomGraphCardEditor
                   </button>
                 </div>
               </div>
+            `
+          : nothing}
+      </div>
+    `;
+  }
+
+  private _renderTimespanSection(cfg: EnergyCustomGraphCardConfig) {
+    const timespan = cfg.timespan ?? { mode: "energy" };
+    const mode = timespan.mode;
+
+    return html`
+      <div class="section">
+        <div class="field">
+          <label>Mode</label>
+          <div class="radio-group">
+            ${[
+              { value: "energy", label: "Follow energy date picker" },
+              { value: "relative", label: "Relative time period" },
+              { value: "fixed", label: "Fixed timespan" },
+            ].map(
+              (option) => html`
+                <label class="radio-option">
+                  <input
+                    type="radio"
+                    name="timespan-mode"
+                    .value=${option.value}
+                    .checked=${mode === option.value}
+                    @change=${() => this._setTimespanMode(option.value as "energy" | "relative" | "fixed")}
+                  />
+                  <span>${option.label}</span>
+                </label>
+              `
+            )}
+          </div>
+        </div>
+
+        ${mode === "energy"
+          ? html`
+              <ha-textfield
+                label="Collection key"
+                helper="Optional key when multiple energy pickers are present"
+                .value=${cfg.collection_key ?? ""}
+                @input=${(ev: Event) =>
+                  this._updateConfig("collection_key", (ev.target as HTMLInputElement).value || undefined)}
+              ></ha-textfield>
+            `
+          : nothing}
+
+        ${mode === "relative"
+          ? html`
+              <div class="field">
+                <label>Period</label>
+                <select
+                  @change=${(ev: Event) =>
+                    this._updateTimespanRelativePeriod((ev.target as HTMLSelectElement).value as "hour" | "day" | "week" | "month" | "year")}
+                >
+                  ${["hour", "day", "week", "month", "year"].map(
+                    (period) => html`
+                      <option
+                        value=${period}
+                        ?selected=${timespan.mode === "relative" && timespan.period === period}
+                      >
+                        ${period.charAt(0).toUpperCase() + period.slice(1)}
+                      </option>
+                    `
+                  )}
+                </select>
+              </div>
+              <ha-textfield
+                label="Offset"
+                type="number"
+                .value=${timespan.mode === "relative" ? String(timespan.offset ?? 0) : "0"}
+                @input=${(ev: Event) =>
+                  this._updateTimespanRelativeOffset(Number((ev.target as HTMLInputElement).value))}
+              ></ha-textfield>
+            `
+          : nothing}
+
+        ${mode === "fixed"
+          ? html`
+              <ha-textfield
+                label="Start"
+                helper="ISO 8601 format (e.g. 2024-01-01T00:00:00)"
+                .value=${timespan.mode === "fixed" ? (timespan.start ?? "") : ""}
+                @input=${(ev: Event) =>
+                  this._updateTimespanFixedStart((ev.target as HTMLInputElement).value || undefined)}
+              ></ha-textfield>
+              <ha-textfield
+                label="End"
+                helper="ISO 8601 format (e.g. 2024-01-31T23:59:59)"
+                .value=${timespan.mode === "fixed" ? (timespan.end ?? "") : ""}
+                @input=${(ev: Event) =>
+                  this._updateTimespanFixedEnd((ev.target as HTMLInputElement).value || undefined)}
+              ></ha-textfield>
             `
           : nothing}
       </div>
@@ -1706,7 +1780,7 @@ export class EnergyCustomGraphCardEditor
         delete (config as any).aggregation;
       }
     }
-    if (!config.energy_date_selection) {
+    if (config.timespan?.mode !== "energy") {
       delete config.collection_key;
     }
     if (!config.series?.length) {
@@ -1729,6 +1803,44 @@ export class EnergyCustomGraphCardEditor
   ) {
     const value = raw === "" ? undefined : Number(raw);
     this._updateConfig(key, value as any);
+  }
+
+  private _setTimespanMode(mode: "energy" | "relative" | "fixed") {
+    const timespan: EnergyCustomGraphTimespanConfig = mode === "energy"
+      ? { mode: "energy" }
+      : mode === "relative"
+      ? { mode: "relative", period: "day", offset: 0 }
+      : { mode: "fixed", start: undefined, end: undefined };
+
+    this._updateConfig("timespan", timespan);
+  }
+
+  private _updateTimespanRelativePeriod(period: "hour" | "day" | "week" | "month" | "year") {
+    const current = this._config?.timespan;
+    if (!current || current.mode !== "relative") return;
+
+    this._updateConfig("timespan", { ...current, period });
+  }
+
+  private _updateTimespanRelativeOffset(offset: number) {
+    const current = this._config?.timespan;
+    if (!current || current.mode !== "relative") return;
+
+    this._updateConfig("timespan", { ...current, offset });
+  }
+
+  private _updateTimespanFixedStart(start: string | undefined) {
+    const current = this._config?.timespan;
+    if (!current || current.mode !== "fixed") return;
+
+    this._updateConfig("timespan", { ...current, start });
+  }
+
+  private _updateTimespanFixedEnd(end: string | undefined) {
+    const current = this._config?.timespan;
+    if (!current || current.mode !== "fixed") return;
+
+    this._updateConfig("timespan", { ...current, end });
   }
 
   private _toggleAggregationExpanded() {
@@ -2282,6 +2394,35 @@ export class EnergyCustomGraphCardEditor
     .color-preview {
       flex-shrink: 0;
       display: block;
+    }
+
+    .radio-group {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .radio-option {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      padding: 8px;
+      border-radius: 4px;
+      transition: background-color 0.2s;
+    }
+
+    .radio-option:hover {
+      background-color: rgba(0, 0, 0, 0.04);
+    }
+
+    .radio-option input[type="radio"] {
+      margin: 0;
+      cursor: pointer;
+    }
+
+    .radio-option span {
+      flex: 1;
     }
   `;
 }

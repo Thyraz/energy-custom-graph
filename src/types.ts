@@ -62,16 +62,16 @@ export interface EnergyCustomGraphAggregationConfig {
   energy_picker?: Partial<Record<"hour" | "day" | "week" | "month" | "year", StatisticsPeriod>>;
 }
 
-export type EnergyCustomGraphPeriodConfig =
+export type EnergyCustomGraphTimespanConfig =
   | { mode: "energy" }
   | {
       mode: "relative";
-      unit: "day" | "week" | "month" | "year";
+      period: "hour" | "day" | "week" | "month" | "year";
       offset?: number;
     }
   | {
       mode: "fixed";
-      start: string;
+      start?: string;
       end?: string;
     };
 
@@ -88,14 +88,13 @@ export interface EnergyCustomGraphAxisConfig {
 export interface EnergyCustomGraphCardConfig extends LovelaceCardConfig {
   type: string;
   title?: string;
-  period?: EnergyCustomGraphPeriodConfig;
+  timespan?: EnergyCustomGraphTimespanConfig;
   series: EnergyCustomGraphSeriesConfig[];
   chart_height?: string;
   hide_legend?: boolean;
   expand_legend?: boolean;
   color_cycle?: string[];
   legend_sort?: "asc" | "desc" | "none";
-  energy_date_selection?: boolean;
   collection_key?: string;
   y_axes?: EnergyCustomGraphAxisConfig[];
   tooltip_precision?: number;

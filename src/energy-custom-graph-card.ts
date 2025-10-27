@@ -4,12 +4,14 @@ import { customElement, property, state } from "lit/decorators.js";
 import type { HomeAssistant, LovelaceCardEditor } from "custom-card-helpers";
 import {
   addDays,
+  addHours,
   addMonths,
   addWeeks,
   addYears,
   differenceInDays,
   differenceInHours,
   endOfDay,
+  endOfHour,
   endOfMonth,
   endOfWeek,
   endOfYear,
@@ -61,7 +63,7 @@ interface EnergyCollection {
   setCompare?(compare: unknown): void;
 }
 
-const DEFAULT_PERIOD: EnergyCustomGraphPeriodConfig = { mode: "energy" };
+const DEFAULT_TIMESPAN: EnergyCustomGraphTimespanConfig = { mode: "energy" };
 
 @customElement("energy-custom-graph-card")
 export class EnergyCustomGraphCard extends LitElement {
@@ -143,11 +145,11 @@ export class EnergyCustomGraphCard extends LitElement {
     if (needsEnergyCollection) {
       const collectionKeyChanged =
         oldConfig?.collection_key !== this._config.collection_key;
-      const selectionFlagChanged =
-        oldConfig?.energy_date_selection !== this._config.energy_date_selection;
+      const timespanModeChanged =
+        oldConfig?.timespan?.mode !== this._config.timespan?.mode;
       if (
         collectionKeyChanged ||
-        selectionFlagChanged ||
+        timespanModeChanged ||
         (!this._energyCollection && !this._collectionPollHandle)
       ) {
         this._setupEnergyCollection();
@@ -169,11 +171,11 @@ export class EnergyCustomGraphCard extends LitElement {
   private _needsEnergyCollection(
     config?: EnergyCustomGraphCardConfig
   ): boolean {
-    return Boolean(config?.energy_date_selection);
+    return config?.timespan?.mode === "energy";
   }
 
   private _setupEnergyCollection(attempt = 0): void {
-    if (!this._config?.energy_date_selection || !this.hass) {
+    if (this._config?.timespan?.mode !== "energy" || !this.hass) {
       return;
     }
 
@@ -273,31 +275,33 @@ export class EnergyCustomGraphCard extends LitElement {
     if (!this._config) {
       return undefined;
     }
-    const periodConfig = this._config.period ?? DEFAULT_PERIOD;
+    const timespanConfig = this._config.timespan ?? DEFAULT_TIMESPAN;
 
-    switch (periodConfig.mode) {
+    switch (timespanConfig.mode) {
       case "energy": {
-        if (this._config.energy_date_selection) {
-          const energyRange = this._getEnergyRange();
-          if (!energyRange) {
-            if (this._loggedEnergyFallback) {
-              return this._defaultEnergyRange();
-            }
-            return undefined;
+        const energyRange = this._getEnergyRange();
+        if (!energyRange) {
+          if (this._loggedEnergyFallback) {
+            return this._defaultEnergyRange();
           }
-          return energyRange;
+          return undefined;
         }
-        return this._defaultEnergyRange();
+        return energyRange;
       }
       case "relative": {
-        const base = this._config.energy_date_selection
-          ? this._getEnergyRange()
-          : this._defaultRelativeBase(periodConfig.unit);
+        const base = this._defaultRelativeBase(timespanConfig.period);
         if (!base) {
           return undefined;
         }
-        const offset = periodConfig.offset ?? 0;
-        switch (periodConfig.unit) {
+        const offset = timespanConfig.offset ?? 0;
+        switch (timespanConfig.period) {
+          case "hour": {
+            const start = addHours(base.start, offset);
+            const end = base.end
+              ? addHours(base.end, offset)
+              : endOfHour(addHours(base.start, offset));
+            return { start, end };
+          }
           case "day": {
             const start = addDays(base.start, offset);
             const end = base.end
@@ -330,13 +334,18 @@ export class EnergyCustomGraphCard extends LitElement {
         }
       }
       case "fixed": {
-        const start = new Date(periodConfig.start);
+        // Default to today if no start provided
+        const startStr = timespanConfig.start;
+        const start = startStr ? new Date(startStr) : startOfDay(new Date());
         if (Number.isNaN(start.getTime())) {
-          throw new Error("Invalid start date in fixed period configuration");
+          throw new Error("Invalid start date in fixed timespan configuration");
         }
-        const end = periodConfig.end ? new Date(periodConfig.end) : undefined;
-        if (end && Number.isNaN(end.getTime())) {
-          throw new Error("Invalid end date in fixed period configuration");
+
+        // Default to end of start day if no end provided
+        const endStr = timespanConfig.end;
+        const end = endStr ? new Date(endStr) : endOfDay(start);
+        if (Number.isNaN(end.getTime())) {
+          throw new Error("Invalid end date in fixed timespan configuration");
         }
         return { start, end };
       }
@@ -365,10 +374,15 @@ export class EnergyCustomGraphCard extends LitElement {
   }
 
   private _defaultRelativeBase(
-    unit: "day" | "week" | "month" | "year"
+    period: "hour" | "day" | "week" | "month" | "year"
   ): { start: Date; end: Date } {
     const now = new Date();
-    switch (unit) {
+    switch (period) {
+      case "hour":
+        return {
+          start: startOfDay(now),
+          end: endOfDay(now),
+        };
       case "day":
         return this._defaultEnergyRange();
       case "week":
@@ -891,11 +905,7 @@ export class EnergyCustomGraphCard extends LitElement {
     const oldConfig = this._config;
     this._config = {
       ...config,
-      energy_date_selection:
-        config.energy_date_selection !== undefined
-          ? config.energy_date_selection
-          : true,
-      period: config.period ?? DEFAULT_PERIOD,
+      timespan: config.timespan ?? DEFAULT_TIMESPAN,
     };
     this._loggedEnergyFallback = false;
     this.requestUpdate("_config", oldConfig);
