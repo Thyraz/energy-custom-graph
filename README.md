@@ -1,19 +1,20 @@
 # Energy Custom Graph
 
-Energy Custom Graph is a lightweight Lovelace card that plugs into Home Assistant's energy date picker. It reuses the built-in ECharts instance shipped with Home Assistant, so you get native styling, minimal overhead, and a layout that mirrors the core energy cards.
+This card is a lightweight Lovelace card that uses the Home Assistant energy date picker. It reuses the built-in ECharts instance shipped with Home Assistant, so you get native styling and minimal overhead.
 
-Unlike the default energy cards like `energy-usage-graph`, this card is not limited to the energy dashboard entities. Any long-term statistic available in the recorder can be visualised and combined, whether it comes from energy, climate, sensors, ... Each series can pick the statistic type (`change`, `sum`, `mean`, `min`, `max`, `state`) and presentation style.
+Unlike the default energy cards like `energy-usage-graph`, this card is not limited to the energy dashboard entities. Any long-term statistic available in the recorder database can be used. You can choose the statistic type (`change`, `sum`, `mean`, `min`, `max`, `state`) for each series displayed.
 I know the `Statistics graph card` nowadays also support the energy date picker, but it didn't provide all the features I needed.
 
 ## Key Features
 
-- Drops into dashboards that already use the Home Assistant energy date picker (`energy-date-selection`) for instant period syncing.
-- Supports any entity that exposes long-term statistics, not only energy sources.
-- Shares the core energy colour palette and styling so mixed dashboards look consistent.
+- This card has an full-featured graphical editor, so almost all settings can be done through the UI.
+- Displayed timespan sync with the energy date picker (`energy-date-selection`).
+- Supports any entity that exposes long-term statistics.
+- Quick access to colors from the HA energy color palette and native styles so mixed dashboards look consistent.
 - Uses Home Assistant's bundled ECharts runtime – no extra framework needs to be loaded.
-- Per-series control over aggregation statistic, chart type (bar or line), stacking, color, unit scaling and offsets.
-- Optional fill-between-rendering for line series to highlight the space between two signals.
-- Optional manual period selection (fixed ranges or relative day/week/month/year offsets) when you do not want to use the energy picker.
+- Per-series control over aggregation type, chart type (bar or line), stacking, color, unit, scaling and offsets.
+- Optional fill-between-rendering for line series to fill the space e.g. between min / max line-charts
+- Optional manual timespan selection (fixed ranges or relative day/week/month/year offsets) when you don't want to use the energy date picker.
 
 ## Installation
 
@@ -21,8 +22,8 @@ I know the `Statistics graph card` nowadays also support the energy date picker,
 
 1. In Home Assistant, open *HACS > Frontend* and click the three-dot menu in the top right.
 2. Choose *Custom repositories*, add `https://github.com/Thyraz/energy-custom-graph`, and leave the category set to *Lovelace*.
-3. Search for "Energy Custom Graph" in HACS, install the latest release, and let HACS add the resource to your dashboard automatically.
-4. Reload the browser or clear the Lovelace cache if the new card type is not immediately available.
+3. Search for "Energy Custom Graph" in HACS, install the latest release.
+4. Reload the browser and clear the Browser cache if the card won't show up immediately.
 
 ### Manual installation
 
@@ -31,11 +32,11 @@ I know the `Statistics graph card` nowadays also support the energy date picker,
 3. Add the resource to Lovelace (Settings → Dashboards → Resources → **+ ADD RESOURCE**):
    - URL: `/local/community/energy-custom-graph/energycustomgraph.js`
    - Resource type: `JavaScript Module`
-4. Reload your browser cache.
+4. Clear your browser cache and Reload the page.
 
 ## Usage
 
-Add the card to a dashboard via YAML or the raw editor:
+Add the card to a dashboard using the graphical card editor or via YAML:
 
 ```yaml
 type: custom:energy-custom-graph-card
@@ -48,98 +49,40 @@ series:
     fill: true
 ```
 
-The card supports the energy date picker out of the box. Place an `energy-date-selection` control on the same view, set `timespan.mode: "energy"` (which is the default), and the card will mirror the currently selected range. For other timespan modes, see the `timespan` configuration below.
+The card supports the energy date pickerfor timespan selection. Place an `energy-date-selection` control on the same dashboard and set `timespan.mode: "energy"` (which is the default). For other timespan modes, see the `timespan` configuration below.
 
-## Configuration Reference
+## Configuration
 
-By default the card mirrors the core energy cards and automatically selects the recorder statistics period (5-minute, hourly, daily, or monthly) based on the chosen timeframe so every series shares aligned buckets. You can override this behaviour via the `aggregation` options described below.
+By default the card mirrors the core energy cards and automatically selects the recorder statistics period (5-minute, hourly, daily, or monthly) based on the chosen timespan. You can override this behaviour via the `aggregation` options described below.
 
-### Card options
+### Generic card options
 
 | Key | Type | Default | Description |
 | --- | ---- | ------- | ----------- |
 | `type` | string | – | Must be `custom:energy-custom-graph-card`. |
 | `title` | string | – | Optional card header. |
-| `series` | list | – | One or more series definitions (see below). |
+| `chart_height` | string | – | CSS height (e.g. `300px`). |
 | `timespan` | object | `{mode: "energy"}` | Controls the time range displayed (see below). |
-| `collection_key` | string | – | Custom key when multiple energy date pickers are present (only for `timespan.mode: "energy"`). |
-| `chart_height` | string | – | CSS height (e.g. `300px`, `20rem`). |
-| `color_cycle` | list | – | Custom palette of CSS variables or colours applied cyclically to series. |
-| `legend_sort` | `"asc"`, `"desc"`, `"none"` | `"none"` | Sort order for the legend entries. |
+| `collection_key` | string | – | Custom key when multiple energy date pickers are present (only for `timespan.mode: "energy"`). <br>[More Info](https://www.home-assistant.io/dashboards/energy/#using-multiple-collections) |
 | `hide_legend` | boolean | `false` | Hide the legend entirely. |
+| `legend_sort` | `"asc"`, `"desc"`, `"none"` | `"none"` | Sort order for the legend entries. |
 | `expand_legend` | boolean | `false` | Expand the legend by default. |
-| `y_axes` | list | – | Y axis configuration for both left and right axes (see below). |
 | `tooltip_precision` | number | – | Override numeric precision in the tooltip. |
-| `show_unit` | boolean | `true` | Show units derived from statistics metadata (per series) in tooltips and axes. |
+| `show_unit` | boolean | `true` | Show corresponding units from the recorder database when available in tooltips and axes. |
+| `y_axes` | list | – | Y axis configuration for both left and right axes (see below). |
 | `aggregation` | object | auto | Control recorder aggregation intervals. See below. |
-
-### `series` options
-
-| Key | Type | Default | Description |
-| --- | ---- | ------- | ----------- |
-| `statistic_id` | string | – | Recorder statistic identifier (`sensor.entity_id` etc.). Required unless `calculation` is provided. |
-| `name` | string | entity name | Display name shown in tooltip and legend. |
-| `stat_type` | `"change"`, `"sum"`, `"mean"`, `"min"`, `"max"`, `"state"` | `"change"` | Statistic sampled from Home Assistant. |
-| `chart_type` | `"bar"`, `"line"` | `"bar"` | Presentation type. |
-| `fill` | boolean | `false` | Fill the area underneath the line. |
-| `stack` | string | – | Stack key for combining series; identical keys stack together. |
-| `color` | string | palette order | Specific colour (supports hex/hex-alpha, `rgb()`, `rgba()`, or CSS variables). |
-| `line_opacity` | number | style default | Override stroke opacity (0–1). Defaults to 0.85 for line charts and 1.0 for bar outlines. |
-| `line_width` | number | `2` | Line thickness in pixels (line charts only). |
-| `line_style` | `"solid"`, `"dashed"`, `"dotted"` | `"solid"` | Line pattern style (line charts only). |
-| `fill_opacity` | number | style default | Override fill opacity (0–1). Defaults to 0.15 for line areas and 0.5 for bars. |
-| `y_axis` | `"left"`, `"right"` | `"left"` | Axis assignment. |
-| `show_legend` | boolean | `true` | Hide or show this series in the legend. |
-| `multiply` | number | `1` | Apply a multiplier to the statistic value. |
-| `add` | number | `0` | Apply an additive offset after multiplication. |
-| `clip_min` | number | – | Clamp the processed value to be no lower than this threshold. |
-| `clip_max` | number | – | Clamp the processed value to be no higher than this threshold. |
-| `smooth` | boolean or number | `true` | Control line smoothing. Use `false` to disable, or a value between 0 and 1 to tune the spline tightness. |
-| `fill_to_series` | string | – | For line charts only: name of another line series to fill towards. Both series must avoid stacking. |
-| `calculation` | object | – | Build a derived series from multiple statistics (see below). |
-
-#### Fill between line series
-
-Set `fill_to_series` on a line series to shade the area between it and another line. The value must match the `name` of the target series. Requirements:
-
-- Both series must be rendered as lines (no bars) and must not use `stack`.
-- The referenced `name` has to be unique within the card.
-- When the upper series drops below the lower one, the card clamps the fill to zero and logs a warning so you can inspect the data.
-- The fill area inherits the upper series' `fill_opacity` (or its default if unspecified).
-
-#### Calculated series
-
-Define `calculation` to synthesise a series from multiple statistics. Terms are processed sequentially, starting from `initial_value` (default `0`).
-
-| Key | Type | Default | Description |
-| --- | ---- | ------- | ----------- |
-| `terms` | list | – | Ordered list of calculation steps. |
-| `initial_value` | number | `0` | Seed value before the first term runs. |
-| `unit` | string | inferred | Unit for the resulting series (falls back to the first statistic). |
-
-Each term accepts the following options:
-
-| Key | Type | Default | Description |
-| --- | ---- | ------- | ----------- |
-| `statistic_id` | string | – | Statistic to read. Mutually exclusive with `constant`. |
-| `stat_type` | `"change"`, `"sum"`, `"mean"`, `"min"`, `"max"`, `"state"` | inherit | Field to read from the statistic. Only used when `statistic_id` is set. |
-| `multiply` | number | `1` | Multiply the statistic before applying the operation. Only used for statistics. |
-| `add` | number | `0` | Offset applied after multiplication. Only used for statistics. |
-| `clip_min` | number | – | Clamp the statistic value to be no lower than this threshold. |
-| `clip_max` | number | – | Clamp the statistic value to be no higher than this threshold. |
-| `operation` | `"add"`, `"subtract"`, `"multiply"`, `"divide"` | `"add"` | Operation applied to the running total. |
-| `constant` | number | – | Constant that replaces the statistic. Mutually exclusive with `statistic_id`. |
+| `series` | list | – | One or more series definitions (see below). |
 
 ### Timespan options
 
-The `timespan` configuration controls the time range displayed by the card. It supports three modes:
+The `timespan` configuration controls the time range displayed by the card. Currently three modes are supported::
 
 **Mode: `energy` (default)**
 ```yaml
 timespan:
   mode: energy
 ```
-Follow the energy date picker on the dashboard. The card automatically mirrors the selected range.
+Use a energy date picker on the same dashboard. The card automatically follows the selected range.
 
 **Mode: `relative`**
 ```yaml
@@ -148,18 +91,18 @@ timespan:
   period: day        # hour, day, week, month, year, last_7_days, last_30_days, or last_12_months
   offset: -1         # Optional offset (e.g., -1 for yesterday/previous period)
 ```
-Display a relative time period. The card supports two types of relative periods:
+Displays a relative time period. The card supports two types, inspired by the options in the energy date picker:
 
-**Calendar-based periods** (`hour`, `day`, `week`, `month`, `year`):
-- Aligned to calendar boundaries (e.g., "day" means today from 00:00 to 23:59)
-- `offset` shifts by complete periods (e.g., `-1` for yesterday, `-7` for last week)
+***Calendar-based periods*** (`hour`, `day`, `week`, `month`, `year`):
+- "day" would mean today from 00:00 to 23:59 as base date
+- `offset` shifts by complete periods (e.g., `-1` for yesterday, `-7` for same day last week)
 
-**Rolling window periods** (`last_7_days`, `last_30_days`, `last_12_months`):
-- End at the current time and look back a fixed duration
-- `last_7_days`: Previous 7 days ending now
-- `last_30_days`: Previous 30 days ending now
-- `last_12_months`: Previous 12 months ending now
-- `offset` shifts the entire window (e.g., `offset: -7` for "7 days ago, looking back 7 days")
+***Rolling window periods*** (`last_7_days`, `last_30_days`, `last_12_months`):
+- End date is "now"
+- `last_7_days`: Previous 7 days
+- `last_30_days`: Previous 30 days
+- `last_12_months`: Previous 12 months
+- `offset` shifts the entire window (days or months based on period used.)
 
 **Mode: `fixed`**
 ```yaml
@@ -170,27 +113,62 @@ timespan:
 ```
 Display a fixed time range. Dates use ISO 8601 format. If omitted, `start` defaults to the beginning of today and `end` defaults to the end of the start day.
 
-### Aggregation options
+### `series` options - Configure the entities to use
 
-Override the recorder aggregation interval if needed. By default, the card mirrors HA’s energy cards (hours for daily ranges, days for weekly/monthly views, months for yearly views). Use the `aggregation` block to customise this behaviour:
+| Key | Type | Default | Description |
+| --- | ---- | ------- | ----------- |
+| `name` | string | entity name | Display name shown in tooltip and legend. |
+| `statistic_id` | string | – | Entity with long term statistics (e.g. `sensor.entity_id`). Required unless series uses a `calculation` instead. |
+| `stat_type` | `"change"`, `"sum"`, `"mean"`, `"min"`, `"max"`, `"state"` | `"change"` | Statistic type to display for this entity. Not used when `calculation` is provided, as each subseries has it's own setting there. |
+| `calculation` | object | – | Build a computed series from multiple statistics / terms (see below). |
+| `chart_type` | `"bar"`, `"line"` | `"bar"` | Chart type. |
+| `stack` | string | – | Stack key for combining series. Series with identical keys will get stacked on top of each other. |
+| `y_axis` | `"left"`, `"right"` | `"left"` | Axis assignment. |
+| `show_legend` | boolean | `true` | Hide or show this series in the legend. |
+| `color` | string | next in palette | Specific color (supports `#rrggbb`, `rgb()` or CSS variables). |
+| `line_opacity` | number | style default | Override stroke opacity (0–1). Defaults to 0.85 for line charts and 1.0 for bar outlines. |
+| `line_width` | number | `2` | Line thickness in pixels (line charts only). |
+| `line_style` | `"solid"`, `"dashed"`, `"dotted"` | `"solid"` | Line pattern style (line charts only). |
+| `fill` | boolean | `false` | Fill the area underneath the line. |
+| `fill_opacity` | number | style default | Override fill opacity (0–1). Defaults to 0.15 for line charts and 0.5 for bars. |
+| `fill_to_series` | string | – | For line charts only: name of another line series to fill towards. Both series must not be stacked. |
+| `smooth` | boolean or number | `true` | Line smoothing. Use `false` to disable and true for the default HA behavior. Or provide a value between 0 and 1 for finer control. |
+| `multiply` | number | `1` | Apply a multiplier to each series value. |
+| `add` | number | `0` | Apply an additive offset after multiplication. |
+| `clip_min` | number | – | Values will be set to this value if they are smaller. |
+| `clip_max` | number | – | Values will be set to this value if they are larger. |
 
-```yaml
-aggregation:
-  manual: hour          # Used when the card is not linked to the energy date picker
-  fallback: day         # Used if the preferred aggregation returns no data
-  energy_picker:
-    day: 5minute
-    week: hour
-    month: day
-    year: month
-```
+#### Calculated series
 
-- `manual` applies when the timespan mode is `relative` or `fixed` (i.e., not following the energy picker).
-- `energy_picker` sets the aggregation used when the energy date picker selects `hour`, `day`, `week`, `month`, or `year` ranges. Any range not listed keeps the automatic behaviour.
-- `fallback` is used if the preferred interval yields no data. Omit it to keep the current error behaviour.
-- Valid intervals: `"5minute"`, `"hour"`, `"day"`, `"week"`, `"month"`.
+Configure `calculation` instead of `statistic_id` to compute a series from multiple entity statistics. Terms are processed sequentially, starting with the `initial_value` (default `0`).
 
-Tip: use very fine intervals (e.g. 5 minutes) only for short ranges to avoid excessive data volumes.
+| Key | Type | Default | Description |
+| --- | ---- | ------- | ----------- |
+| `terms` | list | – | Ordered list of calculation steps. |
+| `initial_value` | number | `0` | Start value before the first term. |
+| `unit` | string | inferred | Unit for the resulting series (inferring looks for the first statistic used). |
+
+Each term accepts the following options:
+
+| Key | Type | Default | Description |
+| --- | ---- | ------- | ----------- |
+| `operation` | `"add"`, `"subtract"`, `"multiply"`, `"divide"` | `"add"` | Operation applied in this step of the calculation. |
+| `constant` | number | – | Constant number to use in this term. Use alternatively to providing a `statistic_id`. All keys below in this section are ignored in this case. |
+| `statistic_id` | string | – | Entity with long term statistics (e.g. `sensor.entity_id`). Do not use in combination with setting `constant` in the same term. |
+| `stat_type` | `"change"`, `"sum"`, `"mean"`, `"min"`, `"max"`, `"state"` | inherit | Statistic type to display for this entity. |
+| `multiply` | number | `1` | Apply a multiplier to each series value. |
+| `add` | number | `0` | Apply an additive offset after multiplication. |
+| `clip_min` | number | – | Values will be set to this value if they are smaller. |
+| `clip_max` | number | – | Values will be set to this value if they are larger. |
+
+#### Fill between line series
+
+Set `fill_to_series` on a line series to fill the area between this and the targeted line. The value must match the `name` of the target series. Requirements:
+
+- Both series must be rendered as lines (no bars) and must not use stacking.
+- The referenced `name` has to be unique within the configuration.
+- When the upper series drops below the lower one, the card sets the fill to zero and logs a warning.
+- The fill_opacity used is the one configured on the upper series' `fill_opacity` (or the default if unspecified).
 
 ### `y_axes` options
 
@@ -205,6 +183,28 @@ Configure both left and right Y axes individually. The right axis appears automa
 | `center_zero` | boolean | `false` | Center the axis around zero by making min/max symmetric (e.g., -10 to +10). Useful for visualizing positive and negative values with zero aligned. If `max` is set, uses ±max; otherwise calculates from data. |
 | `logarithmic_scale` | boolean | `false` | Apply logarithmic scaling to this axis. |
 | `unit` | string | metadata | Override unit label for this axis. |
+
+### Aggregation options
+
+Possibility to override the aggregation interval. By default, the card mirrors HA’s energy cards (hours for daily, days for weekly/monthly, months for yearly ranges).
+
+```yaml
+aggregation:
+  manual: hour          # Used when the card is not linked to the energy date picker
+  fallback: day         # Used if the preferred aggregation returns no data
+  energy_picker:
+    day: 5minute
+    week: hour
+    month: day
+    year: month
+```
+
+- `manual` applies when the timespan mode is `relative` or `fixed` (energy date picker not used).
+- `energy_picker` sets the aggregation used when the energy date picker selects `hour`, `day`, `week`, `month`, or `year` ranges. Any range not listed keeps the default value.
+- `fallback` Optional. Is used if the preferred interval returns no data.
+- Valid intervals: `"5minute"`, `"hour"`, `"day"`, `"week"`, `"month"`.
+
+Tip: use fine intervals only for short ranges to avoid excessive resource usage and loading times.
 
 ## Examples
 
@@ -354,13 +354,8 @@ series:
 
 ## Tips
 
-- Ensure recorder and long-term statistics are enabled for every entity you plan to plot.
+- Ensure recorder and long-term statistics are enabled for every entity you plan to use.
 - Use the relative period mode with positive or negative offsets to jump by whole days, weeks, months, or years.
-- When using `fill_to_series`, keep `name` values unique and avoid stacking on the involved series.
-- Mix solid line colours with partial `fill_opacity` to highlight envelopes without hiding underlying charts; rgba/hex-alpha colours are fully supported.
+- When using `fill_to_series`, keep `name` values unique and avoid stacking for the involved series.
 - When using multiple energy date pickers on a single dashboard, provide the appropriate `collection_key` so the card links to the correct selection.
-- Combine `multiply` and `add` to convert units (e.g. Wh to kWh) without creating extra template sensors.
-
-## Support
-
-If you encounter issues or have feature requests, open an issue or pull request on the repository. Contributions that expand documentation, add new configuration helpers, or improve parity with core energy cards are always welcome.
+- Combine `multiply` and `add` to convert units (e.g. Wh to kWh) without the need for extra template sensors.
