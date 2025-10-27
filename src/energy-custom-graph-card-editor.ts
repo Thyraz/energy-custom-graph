@@ -652,20 +652,25 @@ export class EnergyCustomGraphCardEditor
           </div>
           <div class="field">
             <label>Y axis</label>
-            ${(() => {
-              const current = series.y_axis ?? "left";
-              return html`<select
-                @change=${(ev: Event) =>
-                  this._updateSeries(
-                    index,
-                    "y_axis",
-                    (ev.target as HTMLSelectElement).value as "left" | "right"
-                  )}
-              >
-                <option value="left" ?selected=${current === "left"}>Left</option>
-                <option value="right" ?selected=${current === "right"}>Right</option>
-              </select>`;
-            })()}
+            <div class="segment-group" role="group" aria-label="Y axis">
+              ${[
+                { value: "left", label: "Left" },
+                { value: "right", label: "Right" },
+              ].map(
+                (button) => html`
+                  <button
+                    type="button"
+                    class=${classMap({
+                      "segment-button": true,
+                      active: (series.y_axis ?? "left") === button.value,
+                    })}
+                    @click=${() => this._updateSeries(index, "y_axis", button.value as "left" | "right")}
+                  >
+                    ${button.label}
+                  </button>
+                `
+              )}
+            </div>
           </div>
         </div>
       </div>
