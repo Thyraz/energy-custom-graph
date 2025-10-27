@@ -60,6 +60,25 @@ export class EnergyCustomGraphCardEditor
   @state() private _axesExpanded = false;
   @state() private _aggregationExpanded = false;
 
+  async connectedCallback() {
+    super.connectedCallback();
+    // Preload ha-entity-picker by loading entities card editor
+    this._preloadEntityPicker();
+  }
+
+  private async _preloadEntityPicker() {
+    try {
+      if (!customElements.get("ha-entity-picker")) {
+        const helpers = await (window as any).loadCardHelpers();
+        const card = await helpers.createCardElement({ type: "entities", entities: [] });
+        await card.constructor.getConfigElement();
+      }
+    } catch (e) {
+      // Preloading failed, but that's okay - we'll fall back gracefully
+      console.debug("Energy Custom Graph: Could not preload ha-entity-picker", e);
+    }
+  }
+
   public setConfig(config: EnergyCustomGraphCardConfig): void {
     const hadConfig = this._config !== undefined;
     const normalizedSeries = config.series?.map((item) => ({ ...item })) ?? [];
@@ -686,17 +705,19 @@ export class EnergyCustomGraphCardEditor
   }
 
   private _renderSeriesStatisticContent(series: EnergyCustomGraphSeriesConfig, index: number) {
+    if (!this.hass) {
+      return html`<p>Loading...</p>`;
+    }
+
     return html`
-      <ha-textfield
-        label="Statistic ID"
-        .value=${series.statistic_id ?? ""}
-        @input=${(ev: Event) =>
-          this._updateSeries(
-            index,
-            "statistic_id",
-            (ev.target as HTMLInputElement).value || undefined
-          )}
-      ></ha-textfield>
+      <ha-entity-picker
+        .hass=${this.hass}
+        .value=${series.statistic_id}
+        .label=${"Statistic ID"}
+        allow-custom-entity
+        @value-changed=${(ev: CustomEvent) =>
+          this._updateSeries(index, "statistic_id", ev.detail.value || undefined)}
+      ></ha-entity-picker>
       <div class="field">
         <label>Statistic type</label>
         ${(() => {
@@ -846,6 +867,10 @@ export class EnergyCustomGraphCardEditor
     termIndex: number,
     term: EnergyCustomGraphCalculationTerm
   ) {
+    if (!this.hass) {
+      return html`<p>Loading...</p>`;
+    }
+
     const mode: "statistic" | "constant" =
       term.constant !== undefined ? "constant" : "statistic";
     const buttons: Array<{ value: "statistic" | "constant"; label: string }> = [
@@ -874,18 +899,15 @@ export class EnergyCustomGraphCardEditor
       </div>
       ${mode === "statistic"
         ? html`
-            <ha-textfield
-              label="Statistic ID"
-              helper="Recorder statistic (e.g. sensor.energy_import)"
-              .value=${term.statistic_id ?? ""}
-              @input=${(ev: Event) =>
-                this._updateTerm(
-                  seriesIndex,
-                  termIndex,
-                  "statistic_id",
-                  (ev.target as HTMLInputElement).value || undefined
-                )}
-            ></ha-textfield>
+            <ha-entity-picker
+              .hass=${this.hass}
+              .value=${term.statistic_id}
+              .label=${"Statistic ID"}
+              .helper=${"Recorder statistic (e.g. sensor.energy_import)"}
+              allow-custom-entity
+              @value-changed=${(ev: CustomEvent) =>
+                this._updateTerm(seriesIndex, termIndex, "statistic_id", ev.detail.value || undefined)}
+            ></ha-entity-picker>
             <div class="field">
               <label>Statistic type</label>
               <select
@@ -1824,6 +1846,11 @@ export class EnergyCustomGraphCardEditor
   }
 
   static styles = css`
+    ha-entity-picker {
+      display: block;
+      width: 100%;
+    }
+
     .tab-bar {
       display: flex;
       gap: 8px;
