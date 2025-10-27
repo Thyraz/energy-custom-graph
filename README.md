@@ -87,8 +87,10 @@ By default the card mirrors the core energy cards and automatically selects the 
 | `fill` | boolean | `false` | Fill the area underneath the line. |
 | `stack` | string | – | Stack key for combining series; identical keys stack together. |
 | `color` | string | palette order | Specific colour (supports hex/hex-alpha, `rgb()`, `rgba()`, or CSS variables). |
-| `line_opacity` | number | style default | Override stroke opacity (0–1). Defaults to 0.85 for line charts and 0.75 for bar outlines. |
-| `fill_opacity` | number | style default | Override fill opacity (0–1). Defaults to 0.15 for line areas and 0.45 for bars. |
+| `line_opacity` | number | style default | Override stroke opacity (0–1). Defaults to 0.85 for line charts and 1.0 for bar outlines. |
+| `line_width` | number | `2` | Line thickness in pixels (line charts only). |
+| `line_style` | `"solid"`, `"dashed"`, `"dotted"` | `"solid"` | Line pattern style (line charts only). |
+| `fill_opacity` | number | style default | Override fill opacity (0–1). Defaults to 0.15 for line areas and 0.5 for bars. |
 | `y_axis` | `"left"`, `"right"` | `"left"` | Axis assignment. |
 | `show_legend` | boolean | `true` | Hide or show this series in the legend. |
 | `multiply` | number | `1` | Apply a multiplier to the statistic value. |
@@ -160,9 +162,10 @@ Configure both left and right Y axes individually. The right axis appears automa
 | Key | Type | Default | Description |
 | --- | ---- | ------- | ----------- |
 | `id` | `"left"`, `"right"` | – | Axis selector to override (`left` is primary). |
-| `min` | number | auto | Minimum axis value. |
-| `max` | number | auto | Maximum axis value. |
+| `min` | number | auto | Minimum axis value. **Note:** Ignored when `center_zero` is active. |
+| `max` | number | auto | Maximum axis value. When `center_zero` is active, this value is used for both positive and negative bounds (e.g., `max: 10` creates range -10 to +10). |
 | `fit_y_data` | boolean | `false` | Force this axis to fit its data range tightly. |
+| `center_zero` | boolean | `false` | Center the axis around zero by making min/max symmetric (e.g., -10 to +10). Useful for visualizing positive and negative values with zero aligned. If `max` is set, uses ±max; otherwise calculates from data. |
 | `logarithmic_scale` | boolean | `false` | Apply logarithmic scaling to this axis. |
 | `unit` | string | metadata | Override unit label for this axis. |
 
@@ -211,6 +214,29 @@ series:
     stat_type: mean
     chart_type: line
     y_axis: right
+```
+
+### 1a. Centered zero axis for grid import/export comparison
+
+```yaml
+type: custom:energy-custom-graph-card
+title: Grid power balance
+energy_date_selection: true
+y_axes:
+  - id: left
+    unit: kW
+    center_zero: true
+    max: 5  # Optional: forces range to -5 to +5, otherwise auto-calculated
+series:
+  - statistic_id: sensor.grid_import
+    name: Import
+    stat_type: mean
+    chart_type: line
+  - statistic_id: sensor.grid_export
+    name: Export
+    stat_type: mean
+    chart_type: line
+    multiply: -1
 ```
 
 ### 2. Shift the period for a previous year view

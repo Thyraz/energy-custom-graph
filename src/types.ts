@@ -80,6 +80,7 @@ export interface EnergyCustomGraphAxisConfig {
   min?: number;
   max?: number;
   fit_y_data?: boolean;
+  center_zero?: boolean;
   logarithmic_scale?: boolean;
   unit?: string;
 }

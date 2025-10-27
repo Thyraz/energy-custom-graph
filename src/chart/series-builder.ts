@@ -47,12 +47,11 @@ export const DEFAULT_COLORS = [
   "--energy-non-fossil-color",
 ];
 
-export const BAR_BORDER_WIDTH = 1.5;
 export const BAR_MAX_WIDTH = 50;
-const BAR_FILL_ALPHA = 0.45;
+const BAR_FILL_ALPHA = 0.5;
 const LINE_AREA_ALPHA = 0.15;
 const DEFAULT_LINE_OPACITY = 0.85;
-const DEFAULT_BAR_BORDER_OPACITY = 0.75;
+const DEFAULT_BAR_BORDER_OPACITY = 1.0;
 
 const getCalculationKey = (index: number) => `calculation_${index}`;
 
@@ -317,10 +316,12 @@ export const buildSeries = ({
         name,
         type: "line",
         smooth: smoothValue ?? true,
+        showSymbol: false,
         areaStyle: shouldFill ? {} : undefined,
         data: dataPoints,
         stack: seriesConfig.stack,
         yAxisIndex: seriesConfig.y_axis === "right" ? 1 : 0,
+        z: index,
         emphasis: {
           focus: "series",
           itemStyle: {
@@ -394,6 +395,7 @@ export const buildSeries = ({
         stack: seriesConfig.stack,
         data: dataPoints,
         yAxisIndex: seriesConfig.y_axis === "right" ? 1 : 0,
+        z: index,
         emphasis: {
           focus: "series",
           itemStyle: {
@@ -404,7 +406,6 @@ export const buildSeries = ({
         itemStyle: {
           color: fillColor,
           borderColor,
-          borderWidth: BAR_BORDER_WIDTH,
         },
         color: fillColor,
         barMaxWidth: BAR_MAX_WIDTH,

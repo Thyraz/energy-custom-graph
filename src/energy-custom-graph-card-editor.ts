@@ -213,15 +213,19 @@ export class EnergyCustomGraphCardEditor
     axisConfig: EnergyCustomGraphAxisConfig | undefined
   ) {
     const axisLabel = axisId === "left" ? "Left Y axis" : "Right Y axis";
+    const centerZeroActive = axisConfig?.center_zero === true;
+
     return html`
       <div class="axis-config">
         <span class="subtitle axis-title">${axisLabel}</span>
         <ha-textfield
           label="Min value"
           type="number"
+          .disabled=${centerZeroActive}
           .value=${axisConfig?.min !== undefined ? String(axisConfig.min) : ""}
           @input=${(ev: Event) =>
             this._updateAxisConfig(axisId, "min", (ev.target as HTMLInputElement).value)}
+          helper=${centerZeroActive ? "Disabled when center zero is active" : ""}
         ></ha-textfield>
         <ha-textfield
           label="Max value"
@@ -229,6 +233,7 @@ export class EnergyCustomGraphCardEditor
           .value=${axisConfig?.max !== undefined ? String(axisConfig.max) : ""}
           @input=${(ev: Event) =>
             this._updateAxisConfig(axisId, "max", (ev.target as HTMLInputElement).value)}
+          helper=${centerZeroActive ? "Used for both +max and -max" : ""}
         ></ha-textfield>
         <ha-textfield
           label="Unit"
@@ -247,6 +252,18 @@ export class EnergyCustomGraphCardEditor
               )}
           ></ha-switch>
           <span>Fit to data</span>
+        </div>
+        <div class="row">
+          <ha-switch
+            .checked=${axisConfig?.center_zero === true}
+            @change=${(ev: Event) =>
+              this._updateAxisConfig(
+                axisId,
+                "center_zero",
+                (ev.target as HTMLInputElement).checked
+              )}
+          ></ha-switch>
+          <span>Center zero</span>
         </div>
         <div class="row">
           <ha-switch
@@ -1015,7 +1032,7 @@ export class EnergyCustomGraphCardEditor
           step="0.01"
           min="0"
           max="1"
-          helper="Default 0.15 (lines) / 0.45 (bars)"
+          helper="Default 0.15 (lines) / 0.5 (bars)"
           .value=${series.fill_opacity !== undefined ? String(series.fill_opacity) : ""}
           @input=${(ev: Event) =>
             this._updateSeriesNumber(
@@ -1045,7 +1062,7 @@ export class EnergyCustomGraphCardEditor
             step="0.01"
             min="0"
             max="1"
-            helper="Default 0.85 for lines, 0.75 for bars"
+            helper="Default 0.85 for lines, 1.0 for bars"
             .value=${series.line_opacity !== undefined ? String(series.line_opacity) : ""}
             @input=${(ev: Event) =>
               this._updateSeriesNumber(index, "line_opacity", (ev.target as HTMLInputElement).value)}
@@ -1612,6 +1629,7 @@ export class EnergyCustomGraphCardEditor
       const leftParts: string[] = [];
       if (leftAxis.unit) leftParts.push(leftAxis.unit);
       if (leftAxis.fit_y_data) leftParts.push("fit");
+      if (leftAxis.center_zero) leftParts.push("center zero");
       if (leftAxis.logarithmic_scale) leftParts.push("log");
       if (leftAxis.min !== undefined || leftAxis.max !== undefined) {
         const range = `${leftAxis.min ?? "auto"}-${leftAxis.max ?? "auto"}`;
@@ -1626,6 +1644,7 @@ export class EnergyCustomGraphCardEditor
       const rightParts: string[] = [];
       if (rightAxis.unit) rightParts.push(rightAxis.unit);
       if (rightAxis.fit_y_data) rightParts.push("fit");
+      if (rightAxis.center_zero) rightParts.push("center zero");
       if (rightAxis.logarithmic_scale) rightParts.push("log");
       if (rightAxis.min !== undefined || rightAxis.max !== undefined) {
         const range = `${rightAxis.min ?? "auto"}-${rightAxis.max ?? "auto"}`;

@@ -44,7 +44,7 @@ import type {
   YAxisOption,
   BarSeriesOption,
 } from "./types/echarts";
-import { BAR_BORDER_WIDTH, BAR_MAX_WIDTH } from "./chart/series-builder";
+import { BAR_MAX_WIDTH } from "./chart/series-builder";
 
 interface EnergyData {
   start: Date;
@@ -1015,7 +1015,7 @@ export class EnergyCustomGraphCard extends LitElement {
       return;
     }
 
-    const { yAxis, axisUnitByIndex } = this._buildYAxisOptions(seriesById);
+    const { yAxis, axisUnitByIndex } = this._buildYAxisOptions(seriesById, series);
 
     this._unitsBySeries = new Map();
     series.forEach((item) => {
@@ -1210,8 +1210,6 @@ export class EnergyCustomGraphCard extends LitElement {
           continue;
         }
 
-        itemStyle.borderWidth = BAR_BORDER_WIDTH;
-
         if (value > 0) {
           if (!roundedPositive.has(stackKey)) {
             itemStyle.borderRadius = [4, 4, 0, 0];
@@ -1275,7 +1273,8 @@ export class EnergyCustomGraphCard extends LitElement {
   }
 
   private _buildYAxisOptions(
-    seriesById: Map<string, EnergyCustomGraphSeriesConfig>
+    seriesById: Map<string, EnergyCustomGraphSeriesConfig>,
+    series: SeriesOption[]
   ): { yAxis: YAxisOption[]; axisUnitByIndex: Map<number, string | undefined> } {
     const axisConfigs = this._config?.y_axes ?? [];
     const leftConfig = axisConfigs.find((axis) => axis.id === "left");
@@ -1288,13 +1287,164 @@ export class EnergyCustomGraphCard extends LitElement {
     const axisUnitByIndex = new Map<number, string | undefined>();
     const yAxis: YAxisOption[] = [];
 
+    const getDataRange = (axisIndex: number): { min: number; max: number } | undefined => {
+      const relevantSeries = series.filter(
+        (s) => (s.yAxisIndex ?? 0) === axisIndex
+      );
+
+      if (!relevantSeries.length) {
+        return undefined;
+      }
+
+      // Extract value from data point
+      const extractValue = (point: any): number | null => {
+        if (Array.isArray(point)) {
+          return point[1];
+        } else if (typeof point === "number") {
+          return point;
+        } else if (point && typeof point === "object" && "value" in point) {
+          const val = point.value;
+          if (Array.isArray(val)) {
+            return val[1];
+          } else if (typeof val === "number") {
+            return val;
+          }
+        }
+        return null;
+      };
+
+      // Extract timestamp from data point
+      const extractTimestamp = (point: any): number | null => {
+        if (Array.isArray(point)) {
+          return point[0];
+        } else if (point && typeof point === "object" && "value" in point) {
+          const val = point.value;
+          if (Array.isArray(val)) {
+            return val[0];
+          }
+        }
+        return null;
+      };
+
+      // Group series by stack
+      const stackGroups = new Map<string, typeof relevantSeries>();
+      const unstackedSeries: typeof relevantSeries = [];
+
+      relevantSeries.forEach((s) => {
+        const stackId = s.stack;
+        if (stackId) {
+          if (!stackGroups.has(stackId)) {
+            stackGroups.set(stackId, []);
+          }
+          stackGroups.get(stackId)!.push(s);
+        } else {
+          unstackedSeries.push(s);
+        }
+      });
+
+      let min = Infinity;
+      let max = -Infinity;
+
+      // Process unstacked series
+      unstackedSeries.forEach((s) => {
+        if (!Array.isArray(s.data)) {
+          return;
+        }
+        s.data.forEach((point: any) => {
+          const value = extractValue(point);
+          if (typeof value === "number" && !Number.isNaN(value) && Number.isFinite(value)) {
+            min = Math.min(min, value);
+            max = Math.max(max, value);
+          }
+        });
+      });
+
+      // Process stacked series
+      stackGroups.forEach((stackedSeries) => {
+        // ECharts stacks positive and negative values separately
+        // We need to track both stacks independently per timestamp
+        const timestampMap = new Map<number, { positive: number; negative: number }>();
+
+        stackedSeries.forEach((s) => {
+          if (!Array.isArray(s.data)) {
+            return;
+          }
+          s.data.forEach((point: any) => {
+            const timestamp = extractTimestamp(point);
+            const value = extractValue(point);
+            if (
+              timestamp !== null &&
+              typeof value === "number" &&
+              !Number.isNaN(value) &&
+              Number.isFinite(value)
+            ) {
+              const current = timestampMap.get(timestamp) ?? { positive: 0, negative: 0 };
+              if (value >= 0) {
+                current.positive += value;
+              } else {
+                current.negative += value;
+              }
+              timestampMap.set(timestamp, current);
+            }
+          });
+        });
+
+        // Find min/max of stacked values (positive and negative stacks are separate)
+        timestampMap.forEach(({ positive, negative }) => {
+          min = Math.min(min, negative);
+          max = Math.max(max, positive);
+        });
+      });
+
+      if (!Number.isFinite(min) || !Number.isFinite(max)) {
+        return undefined;
+      }
+
+      return { min, max };
+    };
+
+    const roundToNiceValue = (value: number): number => {
+      if (value === 0) return 1;
+
+      const niceNumbers = [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10];
+      const magnitude = Math.pow(10, Math.floor(Math.log10(Math.abs(value))));
+      const normalized = Math.abs(value) / magnitude;
+
+      // Find the smallest nice number that is >= normalized
+      const nice = niceNumbers.find(n => n >= normalized) ?? 10;
+
+      return nice * magnitude;
+    };
+
     const createAxis = (
       axisConfig: EnergyCustomGraphAxisConfig | undefined,
       index: number
     ): YAxisOption => {
       const fit = axisConfig?.fit_y_data ?? false;
+      const centerZero = axisConfig?.center_zero ?? false;
       const logarithmic = axisConfig?.logarithmic_scale ?? false;
       axisUnitByIndex.set(index, axisConfig?.unit);
+
+      let minValue = axisConfig?.min;
+      let maxValue = axisConfig?.max;
+
+      if (centerZero) {
+        // When center_zero is active, min is ignored
+        if (maxValue !== undefined) {
+          // Use explicit max for symmetric range
+          minValue = -maxValue;
+        } else {
+          // Calculate symmetric range from data
+          const range = getDataRange(index);
+          if (range) {
+            const maxAbsolute = Math.max(Math.abs(range.min), Math.abs(range.max));
+            const rounded = roundToNiceValue(maxAbsolute);
+            minValue = -rounded;
+            maxValue = rounded;
+          }
+        }
+      }
+
       return {
         type: logarithmic ? "log" : "value",
         name: axisConfig?.unit,
@@ -1303,8 +1453,8 @@ export class EnergyCustomGraphCard extends LitElement {
           align: "left",
         },
         position: index === 0 ? "left" : "right",
-        min: axisConfig?.min,
-        max: axisConfig?.max,
+        min: minValue,
+        max: maxValue,
         splitLine: {
           show: true,
         },
