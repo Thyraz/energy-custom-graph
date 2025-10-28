@@ -1,6 +1,5 @@
 # Energy Custom Graph
-
-This card is a lightweight Lovelace card that uses the Home Assistant energy date picker. It reuses the built-in ECharts instance shipped with Home Assistant, so you get native styling and minimal overhead.
+This is a lightweight graph card that supports the Home Assistant energy date picker for time range selection. It reuses the built-in ECharts instance shipped with Home Assistant, so you get native styling with minimal overhead.
 
 Unlike the default energy cards like `energy-usage-graph`, this card is not limited to the energy dashboard entities. Any long-term statistic available in the recorder database can be used. You can choose the statistic type (`change`, `sum`, `mean`, `min`, `max`, `state`) for each series displayed.
 I know the `Statistics graph card` nowadays also support the energy date picker, but it didn't provide all the features I needed.

@@ -87,6 +87,7 @@ export class EnergyCustomGraphCard extends LitElement {
   private _unitsBySeries: Map<string, string | null | undefined> = new Map();
   private _collectionUnsub?: () => void;
   private _collectionPollHandle?: number;
+  private _loadTimeout?: number;
   private _loggedEnergyFallback = false;
   private _calculatedSeriesData = new Map<string, StatisticValue[]>();
   private _calculatedSeriesUnits = new Map<string, string | null | undefined>();
@@ -120,6 +121,10 @@ export class EnergyCustomGraphCard extends LitElement {
   public disconnectedCallback(): void {
     super.disconnectedCallback();
     this._teardownEnergyCollection();
+    if (this._loadTimeout) {
+      clearTimeout(this._loadTimeout);
+      this._loadTimeout = undefined;
+    }
   }
 
   public willUpdate(changedProps: PropertyValues): void {
@@ -166,7 +171,7 @@ export class EnergyCustomGraphCard extends LitElement {
       JSON.stringify(oldConfig.series) !== JSON.stringify(this._config.series);
 
     if (periodChanged || seriesChanged || !this._statistics) {
-      void this._loadStatistics();
+      this._scheduleLoad();
     }
   }
 
@@ -206,7 +211,7 @@ export class EnergyCustomGraphCard extends LitElement {
         this._energyEnd = data.end ?? undefined;
         const periodChanged = this._recalculatePeriod();
         if (periodChanged || !this._statistics) {
-          void this._loadStatistics();
+          this._scheduleLoad();
         }
       });
       return;
@@ -222,7 +227,7 @@ export class EnergyCustomGraphCard extends LitElement {
       this._collectionUnsub = undefined;
       const periodChanged = this._recalculatePeriod();
       if (periodChanged || !this._statistics) {
-        void this._loadStatistics();
+        this._scheduleLoad();
       }
       this._collectionPollHandle = window.setTimeout(
         () => this._setupEnergyCollection(MAX_ATTEMPTS),
@@ -425,6 +430,16 @@ export class EnergyCustomGraphCard extends LitElement {
           end: endOfYear(now),
         };
     }
+  }
+
+  private _scheduleLoad(): void {
+    if (this._loadTimeout) {
+      clearTimeout(this._loadTimeout);
+    }
+    this._loadTimeout = window.setTimeout(() => {
+      this._loadTimeout = undefined;
+      void this._loadStatistics();
+    }, 500);
   }
 
   private async _loadStatistics(): Promise<void> {
