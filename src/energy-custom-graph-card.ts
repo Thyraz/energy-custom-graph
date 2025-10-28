@@ -88,6 +88,7 @@ export class EnergyCustomGraphCard extends LitElement {
   private _collectionUnsub?: () => void;
   private _collectionPollHandle?: number;
   private _loadTimeout?: number;
+  private _autoRefreshTimeout?: number;
   private _loggedEnergyFallback = false;
   private _calculatedSeriesData = new Map<string, StatisticValue[]>();
   private _calculatedSeriesUnits = new Map<string, string | null | undefined>();
@@ -125,6 +126,41 @@ export class EnergyCustomGraphCard extends LitElement {
       clearTimeout(this._loadTimeout);
       this._loadTimeout = undefined;
     }
+    if (this._autoRefreshTimeout) {
+      clearTimeout(this._autoRefreshTimeout);
+      this._autoRefreshTimeout = undefined;
+    }
+  }
+
+  protected shouldUpdate(changedProps: PropertyValues): boolean {
+    // Always update if config changed
+    if (changedProps.has("_config")) {
+      return true;
+    }
+
+    // If only hass changed, check if it's a meaningful change
+    if (changedProps.has("hass") && changedProps.size === 1) {
+      const oldHass = changedProps.get("hass") as HomeAssistant | undefined;
+      if (!oldHass) {
+        return true;
+      }
+
+      // Only update on meaningful hass changes, not state updates
+      if (
+        oldHass.connected !== this.hass?.connected ||
+        oldHass.themes !== this.hass?.themes ||
+        oldHass.locale !== this.hass?.locale ||
+        oldHass.config.state !== this.hass?.config.state
+      ) {
+        return true;
+      }
+
+      // Ignore hass.states updates (sensor value changes)
+      return false;
+    }
+
+    // Update for any other property changes
+    return true;
   }
 
   public willUpdate(changedProps: PropertyValues): void {
@@ -332,21 +368,24 @@ export class EnergyCustomGraphCard extends LitElement {
           }
           case "last_7_days": {
             // Rolling 7-day window: end = now + offset days, start = end - 7 days
-            const now = new Date();
+            // Rounded to :20 past the hour to prevent constant reloading
+            const now = this._getRoundedNow("last_7_days");
             const end = addDays(now, offset);
             const start = subDays(end, 7);
             return { start, end };
           }
           case "last_30_days": {
             // Rolling 30-day window: end = now + offset days, start = end - 30 days
-            const now = new Date();
+            // Rounded to :20 past the hour to prevent constant reloading
+            const now = this._getRoundedNow("last_30_days");
             const end = addDays(now, offset);
             const start = subDays(end, 30);
             return { start, end };
           }
           case "last_12_months": {
             // Rolling 12-month window: end = now + offset months, start = end - 12 months
-            const now = new Date();
+            // Rounded to midnight to prevent constant reloading
+            const now = this._getRoundedNow("last_12_months");
             const end = addMonths(now, offset);
             const start = subMonths(end, 12);
             return { start, end };
@@ -401,6 +440,39 @@ export class EnergyCustomGraphCard extends LitElement {
     };
   }
 
+  private _getRoundedNow(period: string): Date {
+    const now = new Date();
+
+    switch (period) {
+      case "last_60_minutes":
+      case "last_hour":
+        // Short timespans: Round to full minutes
+        // Updates every minute
+        now.setSeconds(0, 0);
+        return now;
+
+      case "last_7_days":
+      case "last_30_days":
+        // Medium timespans: Round to 20 minutes past the hour
+        // Updates hourly (like core energy cards)
+        if (now.getMinutes() >= 20) {
+          now.setHours(now.getHours() + 1);
+        }
+        now.setMinutes(20, 0, 0);
+        return now;
+
+      case "last_12_months":
+      case "last_year":
+        // Long timespans: Round to midnight
+        // Updates daily
+        now.setHours(0, 0, 0, 0);
+        return now;
+
+      default:
+        return now;
+    }
+  }
+
   private _defaultRelativeBase(
     period: "hour" | "day" | "week" | "month" | "year"
   ): { start: Date; end: Date } {
@@ -440,6 +512,84 @@ export class EnergyCustomGraphCard extends LitElement {
       this._loadTimeout = undefined;
       void this._loadStatistics();
     }, 500);
+  }
+
+  private _scheduleAutoRefresh(): void {
+    // Clear any existing timer
+    if (this._autoRefreshTimeout) {
+      clearTimeout(this._autoRefreshTimeout);
+      this._autoRefreshTimeout = undefined;
+    }
+
+    const timespanConfig = this._config?.timespan;
+    if (!timespanConfig) {
+      return;
+    }
+
+    // Energy mode uses its own collection refresh - don't add our own
+    if (timespanConfig.mode === "energy") {
+      return;
+    }
+
+    // For fixed timespan: only refresh if end is in the future
+    if (timespanConfig.mode === "fixed") {
+      const endDate = timespanConfig.end ? new Date(timespanConfig.end) : null;
+      if (!endDate || endDate <= new Date()) {
+        return; // Historical data doesn't change
+      }
+    }
+
+    // Determine aggregation period to decide refresh frequency
+    if (!this._periodStart) {
+      return;
+    }
+
+    const aggregationPlan = this._resolveAggregationPlan(
+      this._periodStart,
+      this._periodEnd
+    );
+    const aggregation = aggregationPlan[0];
+
+    // Set refresh interval based on aggregation
+    let nextRefreshMs: number;
+    switch (aggregation) {
+      case "5minute":
+        nextRefreshMs = 5 * 60 * 1000; // 5 minutes
+        break;
+      case "hour":
+        nextRefreshMs = 60 * 60 * 1000; // 1 hour
+        break;
+      case "day":
+        nextRefreshMs = 24 * 60 * 60 * 1000; // 1 day
+        break;
+      case "week":
+      case "month":
+        nextRefreshMs = 7 * 24 * 60 * 60 * 1000; // 1 week (conservative for month)
+        break;
+      default:
+        return;
+    }
+
+    this._autoRefreshTimeout = window.setTimeout(() => {
+      this._autoRefreshTimeout = undefined;
+
+      const periodChanged = this._recalculatePeriod();
+      const currentTimespanConfig = this._config?.timespan;
+
+      // Rolling windows: Only refresh if rounded time changed
+      const isRollingWindow = currentTimespanConfig?.mode === "relative" &&
+                              currentTimespanConfig.period?.startsWith("last_");
+
+      // Fixed periods + fixed timespans: Always refresh (new data arrives)
+      const shouldRefresh = isRollingWindow ? periodChanged : true;
+
+      if (shouldRefresh) {
+        this._scheduleLoad();
+      }
+
+      // Schedule next refresh
+      this._scheduleAutoRefresh();
+    }, nextRefreshMs);
   }
 
   private async _loadStatistics(): Promise<void> {
@@ -549,6 +699,9 @@ export class EnergyCustomGraphCard extends LitElement {
       this._metadata = metadata;
       this._statistics = statistics;
       this._rebuildCalculatedSeries(statistics, metadata);
+
+      // Schedule auto-refresh for rolling windows and future fixed timespans
+      this._scheduleAutoRefresh();
     } catch (error) {
       if (fetchId === this._activeFetch) {
         console.error(
