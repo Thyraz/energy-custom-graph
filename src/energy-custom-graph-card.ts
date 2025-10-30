@@ -92,6 +92,7 @@ export class EnergyCustomGraphCard extends LitElement {
   private _loggedEnergyFallback = false;
   private _calculatedSeriesData = new Map<string, StatisticValue[]>();
   private _calculatedSeriesUnits = new Map<string, string | null | undefined>();
+  private _statisticsRange?: { start: number; end: number | null };
 
   private static readonly FALLBACK_WARNING =
     "[energy-custom-graph-card] Falling back to default period because energy date selection is unavailable.";
@@ -674,6 +675,9 @@ export class EnergyCustomGraphCard extends LitElement {
       return;
     }
 
+    const requestedStart = this._periodStart.getTime();
+    const requestedEnd = this._periodEnd?.getTime() ?? null;
+
     const statisticIdSet = new Set<string>();
     const statTypeSet = new Set<EnergyCustomGraphStatisticType>();
     this._config.series.forEach((series) => {
@@ -773,6 +777,10 @@ export class EnergyCustomGraphCard extends LitElement {
         return;
       }
 
+      this._statisticsRange = {
+        start: requestedStart,
+        end: requestedEnd,
+      };
       this._metadata = metadata;
       this._statistics = statistics;
       this._rebuildCalculatedSeries(statistics, metadata);
@@ -787,6 +795,7 @@ export class EnergyCustomGraphCard extends LitElement {
         );
         this._metadata = undefined;
         this._statistics = undefined;
+        this._statisticsRange = undefined;
         this._calculatedSeriesData = new Map();
         this._calculatedSeriesUnits = new Map();
       }
@@ -1262,10 +1271,26 @@ export class EnergyCustomGraphCard extends LitElement {
   }
 
   private _generateChart(): void {
-    if (!this._config || !this._statistics || !this._periodStart) {
+    if (!this._config || !this._periodStart) {
       this._chartData = [];
       this._chartOptions = undefined;
       this._unitsBySeries = new Map();
+      return;
+    }
+
+    if (!this._statistics || !this._statisticsRange) {
+      this._chartData = [];
+      this._chartOptions = undefined;
+      this._unitsBySeries = new Map();
+      return;
+    }
+
+    const currentStart = this._periodStart.getTime();
+    const currentEnd = this._periodEnd?.getTime() ?? null;
+    const statsStart = this._statisticsRange.start;
+    const statsEnd = this._statisticsRange.end ?? null;
+
+    if (statsStart !== currentStart || statsEnd !== currentEnd) {
       return;
     }
 
