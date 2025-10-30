@@ -514,6 +514,89 @@ export class EnergyCustomGraphCard extends LitElement {
     }, 500);
   }
 
+  private _getRefreshTiming(aggregation: StatisticsPeriod): {
+    intervalMs: number;
+    delayMs: number;
+  } {
+    switch (aggregation) {
+      case "5minute":
+        return {
+          intervalMs: 5 * 60 * 1000,      // Every 5 minutes
+          delayMs: 2 * 60 * 1000          // +2 min buffer (refreshes at :02, :07, :12, ...)
+        };
+      case "hour":
+        return {
+          intervalMs: 60 * 60 * 1000,     // Hourly
+          delayMs: 20 * 60 * 1000         // +20 min buffer (refreshes at :20, like HA Core!)
+        };
+      case "day":
+        return {
+          intervalMs: 24 * 60 * 60 * 1000, // Daily
+          delayMs: 30 * 60 * 1000          // +30 min buffer (refreshes at 00:30)
+        };
+      case "week":
+      case "month":
+        return {
+          intervalMs: 7 * 24 * 60 * 60 * 1000, // Weekly
+          delayMs: 60 * 60 * 1000              // +1 hour buffer
+        };
+      default:
+        return {
+          intervalMs: 60 * 60 * 1000,
+          delayMs: 20 * 60 * 1000
+        };
+    }
+  }
+
+  private _getNextAlignedRefreshTime(aggregation: StatisticsPeriod): number {
+    const now = new Date();
+    const timing = this._getRefreshTiming(aggregation);
+    let nextRefresh = new Date(now);
+
+    switch (aggregation) {
+      case "5minute": {
+        // Next 5-minute mark + 2 min delay
+        // If now is 10:03, next is 10:07 (10:05 + 2 min)
+        // If now is 10:07, next is 10:12 (10:10 + 2 min)
+        const minutes = now.getMinutes();
+        const nextFiveMin = Math.ceil((minutes + 1) / 5) * 5;
+        nextRefresh.setMinutes(nextFiveMin, 0, 0);
+        if (nextRefresh <= now) {
+          nextRefresh.setMinutes(nextRefresh.getMinutes() + 5);
+        }
+        nextRefresh.setMinutes(nextRefresh.getMinutes() + 2); // Add 2 min delay
+        break;
+      }
+      case "hour": {
+        // Next hour + 20 min
+        nextRefresh.setHours(nextRefresh.getHours() + 1, 20, 0, 0);
+        if (nextRefresh <= now) {
+          nextRefresh.setHours(nextRefresh.getHours() + 1);
+        }
+        break;
+      }
+      case "day": {
+        // Next day at 00:30
+        nextRefresh.setDate(nextRefresh.getDate() + 1);
+        nextRefresh.setHours(0, 30, 0, 0);
+        if (nextRefresh <= now) {
+          nextRefresh.setDate(nextRefresh.getDate() + 1);
+        }
+        break;
+      }
+      case "week":
+      case "month": {
+        // Next week at same time + 1 hour
+        nextRefresh = new Date(now.getTime() + timing.intervalMs + timing.delayMs);
+        break;
+      }
+      default:
+        nextRefresh = new Date(now.getTime() + timing.intervalMs + timing.delayMs);
+    }
+
+    return nextRefresh.getTime();
+  }
+
   private _scheduleAutoRefresh(): void {
     // Clear any existing timer
     if (this._autoRefreshTimeout) {
@@ -550,24 +633,18 @@ export class EnergyCustomGraphCard extends LitElement {
     );
     const aggregation = aggregationPlan[0];
 
-    // Set refresh interval based on aggregation
-    let nextRefreshMs: number;
-    switch (aggregation) {
-      case "5minute":
-        nextRefreshMs = 5 * 60 * 1000; // 5 minutes
-        break;
-      case "hour":
-        nextRefreshMs = 60 * 60 * 1000; // 1 hour
-        break;
-      case "day":
-        nextRefreshMs = 24 * 60 * 60 * 1000; // 1 day
-        break;
-      case "week":
-      case "month":
-        nextRefreshMs = 7 * 24 * 60 * 60 * 1000; // 1 week (conservative for month)
-        break;
-      default:
-        return;
+    // Calculate next aligned refresh time with buffer delay
+    const nextRefreshTime = this._getNextAlignedRefreshTime(aggregation);
+    const now = Date.now();
+    const msUntilRefresh = nextRefreshTime - now;
+
+    if (msUntilRefresh <= 0) {
+      // Should not happen, but schedule for 1 minute from now as fallback
+      console.warn("[energy-custom-graph-card] Calculated refresh time is in the past, using 1 minute fallback");
+      this._autoRefreshTimeout = window.setTimeout(() => {
+        this._scheduleAutoRefresh();
+      }, 60000);
+      return;
     }
 
     this._autoRefreshTimeout = window.setTimeout(() => {
@@ -589,7 +666,7 @@ export class EnergyCustomGraphCard extends LitElement {
 
       // Schedule next refresh
       this._scheduleAutoRefresh();
-    }, nextRefreshMs);
+    }, msUntilRefresh);
   }
 
   private async _loadStatistics(): Promise<void> {
