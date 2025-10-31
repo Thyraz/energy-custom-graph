@@ -95,6 +95,8 @@ export class EnergyCustomGraphCard extends LitElement {
   private _calculatedSeriesUnits = new Map<string, string | null | undefined>();
   private _statisticsRange?: { start: number; end: number | null };
   private _statisticsPeriod?: StatisticsPeriod;
+  private _fetchInFlight = false;
+  private _queuedReload = false;
 
   private static readonly FALLBACK_WARNING =
     "[energy-custom-graph-card] Falling back to default period because energy date selection is unavailable.";
@@ -508,6 +510,15 @@ export class EnergyCustomGraphCard extends LitElement {
   }
 
   private _scheduleLoad(): void {
+    if (this._fetchInFlight) {
+      this._queuedReload = true;
+      if (this._loadTimeout) {
+        clearTimeout(this._loadTimeout);
+        this._loadTimeout = undefined;
+      }
+      return;
+    }
+
     if (this._loadTimeout) {
       clearTimeout(this._loadTimeout);
     }
@@ -677,6 +688,12 @@ export class EnergyCustomGraphCard extends LitElement {
       return;
     }
 
+    if (this._fetchInFlight) {
+      this._queuedReload = true;
+      return;
+    }
+    this._fetchInFlight = true;
+
     const requestedStart = this._periodStart.getTime();
     const requestedEnd = this._periodEnd?.getTime() ?? null;
 
@@ -813,8 +830,15 @@ export class EnergyCustomGraphCard extends LitElement {
         this._calculatedSeriesUnits = new Map();
       }
     } finally {
-      if (fetchId === this._activeFetch && loadingAtStart) {
-        this._isLoading = false;
+      if (fetchId === this._activeFetch) {
+        if (loadingAtStart) {
+          this._isLoading = false;
+        }
+        this._fetchInFlight = false;
+        if (this._queuedReload) {
+          this._queuedReload = false;
+          this._scheduleLoad();
+        }
       }
     }
   }
