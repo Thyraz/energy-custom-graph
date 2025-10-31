@@ -5,6 +5,7 @@ import type { HomeAssistant, LovelaceCardEditor } from "custom-card-helpers";
 import {
   addDays,
   addHours,
+  addMinutes,
   addMonths,
   addWeeks,
   addYears,
@@ -93,6 +94,7 @@ export class EnergyCustomGraphCard extends LitElement {
   private _calculatedSeriesData = new Map<string, StatisticValue[]>();
   private _calculatedSeriesUnits = new Map<string, string | null | undefined>();
   private _statisticsRange?: { start: number; end: number | null };
+  private _statisticsPeriod?: StatisticsPeriod;
 
   private static readonly FALLBACK_WARNING =
     "[energy-custom-graph-card] Falling back to default period because energy date selection is unavailable.";
@@ -736,10 +738,13 @@ export class EnergyCustomGraphCard extends LitElement {
       }
 
       let statistics: Statistics = {};
+      let selectedAggregation: StatisticsPeriod | undefined;
+      let lastTriedAggregation: StatisticsPeriod | undefined;
 
       if (statisticIds.length) {
         for (let idx = 0; idx < aggregationPlan.length; idx++) {
           const aggregation = aggregationPlan[idx];
+          lastTriedAggregation = aggregation;
           try {
             const fetched = await fetchStatistics(
               this.hass,
@@ -757,6 +762,7 @@ export class EnergyCustomGraphCard extends LitElement {
                   `[energy-custom-graph-card] Aggregation "${aggregationPlan[0]}" returned no data. Using fallback "${aggregation}".`
                 );
               }
+              selectedAggregation = aggregation;
               break;
             }
             if (idx < aggregationPlan.length - 1) {
@@ -777,10 +783,16 @@ export class EnergyCustomGraphCard extends LitElement {
         return;
       }
 
+      const resolvedAggregation =
+        selectedAggregation ??
+        lastTriedAggregation ??
+        aggregationPlan[0];
+
       this._statisticsRange = {
         start: requestedStart,
         end: requestedEnd,
       };
+      this._statisticsPeriod = resolvedAggregation;
       this._metadata = metadata;
       this._statistics = statistics;
       this._rebuildCalculatedSeries(statistics, metadata);
@@ -796,6 +808,7 @@ export class EnergyCustomGraphCard extends LitElement {
         this._metadata = undefined;
         this._statistics = undefined;
         this._statisticsRange = undefined;
+        this._statisticsPeriod = undefined;
         this._calculatedSeriesData = new Map();
         this._calculatedSeriesUnits = new Map();
       }
@@ -1309,7 +1322,19 @@ export class EnergyCustomGraphCard extends LitElement {
       calculatedUnits: this._calculatedSeriesUnits,
     });
 
-    this._applyBarStyling(series);
+    const displayEnd =
+      this._periodEnd?.getTime() ?? this._statisticsRange.end ?? null;
+    const bucketSequence = this._buildBucketSequence(
+      currentStart,
+      displayEnd,
+      this._statisticsPeriod
+    );
+
+    if (bucketSequence?.length) {
+      this._normalizeLineSeries(series, bucketSequence);
+    }
+
+    this._applyBarStyling(series, bucketSequence);
 
     if (!series.length) {
       this._chartData = [];
@@ -1399,7 +1424,77 @@ export class EnergyCustomGraphCard extends LitElement {
     return suggestedMax.getTime();
   }
 
-  private _applyBarStyling(series: SeriesOption[]): void {
+  private _normalizeLineSeries(
+    series: SeriesOption[],
+    buckets: number[]
+  ): void {
+    if (!buckets.length) {
+      return;
+    }
+
+    series.forEach((serie, serieIndex) => {
+      if (serie.type !== "line" || !Array.isArray(serie.data)) {
+        return;
+      }
+
+      const seriesKey = serie.id ?? serie.name ?? `line-${serieIndex}`;
+      const dataMap = new Map<number, any>();
+      (serie.data as any[]).forEach((item) => {
+        if (Array.isArray(item)) {
+          const timestamp = Number(item[0]);
+          if (!Number.isFinite(timestamp)) {
+            return;
+          }
+          dataMap.set(timestamp, {
+            id: `${seriesKey}-${timestamp}`,
+            value: [timestamp, item[1] ?? null],
+          });
+          return;
+        }
+        if (item && typeof item === "object") {
+          const tuple = Array.isArray((item as any).value)
+            ? (item as any).value
+            : undefined;
+          if (!tuple) {
+            return;
+          }
+          const timestamp = Number(tuple[0]);
+          if (!Number.isFinite(timestamp)) {
+            return;
+          }
+          const normalized: Record<string, unknown> = {
+            ...(item as Record<string, unknown>),
+            value: [timestamp, tuple[1] ?? null],
+          };
+          if (!("id" in normalized)) {
+            normalized.id = `${seriesKey}-${timestamp}`;
+          }
+          dataMap.set(timestamp, normalized);
+        }
+      });
+
+      const normalizedData = buckets.map((bucket) => {
+        const existing = dataMap.get(bucket);
+        if (existing) {
+          if (Array.isArray(existing.value)) {
+            existing.value = [bucket, existing.value[1] ?? null];
+          }
+          return existing;
+        }
+        return {
+          id: `${seriesKey}-${bucket}`,
+          value: [bucket, null],
+        };
+      });
+
+      serie.data = normalizedData;
+    });
+  }
+
+  private _applyBarStyling(
+    series: SeriesOption[],
+    predefinedBuckets?: number[]
+  ): void {
     const barSeries = series.filter(
       (item): item is BarSeriesOption => item.type === "bar"
     );
@@ -1409,30 +1504,45 @@ export class EnergyCustomGraphCard extends LitElement {
     }
 
     const bucketSet = new Set<number>();
+    predefinedBuckets?.forEach((bucket) => bucketSet.add(bucket));
 
-    barSeries.forEach((serie) => {
+    barSeries.forEach((serie, serieIndex) => {
       if (!Array.isArray(serie.data)) {
         return;
       }
+      const seriesKey = serie.id ?? serie.name ?? `bar-${serieIndex}`;
       serie.data = serie.data.map((entry) => {
         if (Array.isArray(entry)) {
-          bucketSet.add(Number(entry[0]));
-          return { value: [entry[0], entry[1]] };
+          const timestamp = Number(entry[0]);
+          bucketSet.add(timestamp);
+          return {
+            id: `${seriesKey}-${timestamp}`,
+            value: [timestamp, entry[1]],
+          };
         }
         if (entry && typeof entry === "object" && "value" in entry) {
           const tuple = Array.isArray((entry as any).value)
             ? (entry as any).value
             : undefined;
           if (tuple) {
-            bucketSet.add(Number(tuple[0]));
+            const timestamp = Number(tuple[0]);
+            bucketSet.add(timestamp);
             return {
               ...(entry as Record<string, unknown>),
-              value: [tuple[0], tuple[1]],
+              id:
+                (entry as Record<string, unknown>).id ??
+                `${seriesKey}-${timestamp}`,
+              value: [timestamp, tuple[1]],
             };
           }
           return { ...(entry as Record<string, unknown>) };
         }
-        return { value: [entry as number, 0] };
+        const timestamp = Number(entry);
+        bucketSet.add(timestamp);
+        return {
+          id: `${seriesKey}-${timestamp}`,
+          value: [timestamp, 0],
+        };
       });
     });
 
@@ -1442,15 +1552,18 @@ export class EnergyCustomGraphCard extends LitElement {
       const baseItemStyle = {
         ...(serie.itemStyle ?? {}),
       } as Record<string, any>;
+      const seriesKey = serie.id ?? serie.name ?? `bar-${serieIndex}`;
       const dataMap = new Map<number, any>();
       (serie.data as any[] | undefined)?.forEach((item) => {
         const tuple = Array.isArray(item?.value) ? item.value : undefined;
         if (!tuple) {
           return;
         }
-        dataMap.set(Number(tuple[0]), {
+        const timestamp = Number(tuple[0]);
+        dataMap.set(timestamp, {
           ...item,
-          value: [tuple[0], tuple[1]],
+          id: item.id ?? `${seriesKey}-${timestamp}`,
+          value: [timestamp, tuple[1]],
           itemStyle: {
             ...baseItemStyle,
             ...(item.itemStyle ?? {}),
@@ -1464,6 +1577,7 @@ export class EnergyCustomGraphCard extends LitElement {
           return existing;
         }
         return {
+          id: `${seriesKey}-${bucket}`,
           value: [bucket, 0],
           itemStyle: {
             ...baseItemStyle,
@@ -1533,6 +1647,54 @@ export class EnergyCustomGraphCard extends LitElement {
         (serie.data as any[])[bucketIndex] = dataItem;
       }
     });
+  }
+
+  private _buildBucketSequence(
+    start: number,
+    end: number | null,
+    period?: StatisticsPeriod
+  ): number[] | undefined {
+    if (end === null || period === undefined) {
+      return undefined;
+    }
+    if (end < start) {
+      return [start];
+    }
+
+    const buckets: number[] = [];
+    let cursor = new Date(start);
+    const endDate = new Date(end);
+    let safety = 0;
+    const maxIterations = 200000;
+
+    while (cursor.getTime() <= endDate.getTime() && safety < maxIterations) {
+      buckets.push(cursor.getTime());
+      const next = this._advanceBucket(cursor, period);
+      if (next.getTime() === cursor.getTime()) {
+        break;
+      }
+      cursor = next;
+      safety++;
+    }
+
+    return buckets;
+  }
+
+  private _advanceBucket(date: Date, period: StatisticsPeriod): Date {
+    switch (period) {
+      case "5minute":
+        return addMinutes(date, 5);
+      case "hour":
+        return addHours(date, 1);
+      case "day":
+        return addDays(date, 1);
+      case "week":
+        return addWeeks(date, 1);
+      case "month":
+        return addMonths(date, 1);
+      default:
+        return addHours(date, 1);
+    }
   }
 
   private _buildLegendOption(
