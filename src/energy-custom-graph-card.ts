@@ -1437,18 +1437,20 @@ export class EnergyCustomGraphCard extends LitElement {
         return;
       }
 
-      const seriesKey = serie.id ?? serie.name ?? `line-${serieIndex}`;
-      const dataMap = new Map<number, any>();
+      const dataMap = new Map<number, number | null>();
       (serie.data as any[]).forEach((item) => {
         if (Array.isArray(item)) {
           const timestamp = Number(item[0]);
           if (!Number.isFinite(timestamp)) {
             return;
           }
-          dataMap.set(timestamp, {
-            id: `${seriesKey}-${timestamp}`,
-            value: [timestamp, item[1] ?? null],
-          });
+          const value =
+            item.length > 1 && typeof item[1] === "number"
+              ? item[1]
+              : item[1] === null
+                ? null
+                : null;
+          dataMap.set(timestamp, value);
           return;
         }
         if (item && typeof item === "object") {
@@ -1462,29 +1464,19 @@ export class EnergyCustomGraphCard extends LitElement {
           if (!Number.isFinite(timestamp)) {
             return;
           }
-          const normalized: Record<string, unknown> = {
-            ...(item as Record<string, unknown>),
-            value: [timestamp, tuple[1] ?? null],
-          };
-          if (!("id" in normalized)) {
-            normalized.id = `${seriesKey}-${timestamp}`;
-          }
-          dataMap.set(timestamp, normalized);
+          const value =
+            tuple.length > 1 && typeof tuple[1] === "number"
+              ? tuple[1]
+              : tuple[1] === null
+                ? null
+                : null;
+          dataMap.set(timestamp, value);
         }
       });
 
       const normalizedData = buckets.map((bucket) => {
-        const existing = dataMap.get(bucket);
-        if (existing) {
-          if (Array.isArray(existing.value)) {
-            existing.value = [bucket, existing.value[1] ?? null];
-          }
-          return existing;
-        }
-        return {
-          id: `${seriesKey}-${bucket}`,
-          value: [bucket, null],
-        };
+        const value = dataMap.has(bucket) ? dataMap.get(bucket) : null;
+        return [bucket, value ?? null];
       });
 
       serie.data = normalizedData;
@@ -1506,17 +1498,15 @@ export class EnergyCustomGraphCard extends LitElement {
     const bucketSet = new Set<number>();
     predefinedBuckets?.forEach((bucket) => bucketSet.add(bucket));
 
-    barSeries.forEach((serie, serieIndex) => {
+    barSeries.forEach((serie) => {
       if (!Array.isArray(serie.data)) {
         return;
       }
-      const seriesKey = serie.id ?? serie.name ?? `bar-${serieIndex}`;
       serie.data = serie.data.map((entry) => {
         if (Array.isArray(entry)) {
           const timestamp = Number(entry[0]);
           bucketSet.add(timestamp);
           return {
-            id: `${seriesKey}-${timestamp}`,
             value: [timestamp, entry[1]],
           };
         }
@@ -1529,9 +1519,6 @@ export class EnergyCustomGraphCard extends LitElement {
             bucketSet.add(timestamp);
             return {
               ...(entry as Record<string, unknown>),
-              id:
-                (entry as Record<string, unknown>).id ??
-                `${seriesKey}-${timestamp}`,
               value: [timestamp, tuple[1]],
             };
           }
@@ -1540,7 +1527,6 @@ export class EnergyCustomGraphCard extends LitElement {
         const timestamp = Number(entry);
         bucketSet.add(timestamp);
         return {
-          id: `${seriesKey}-${timestamp}`,
           value: [timestamp, 0],
         };
       });
@@ -1548,11 +1534,10 @@ export class EnergyCustomGraphCard extends LitElement {
 
     const buckets = Array.from(bucketSet).sort((a, b) => a - b);
 
-    barSeries.forEach((serie, serieIndex) => {
+    barSeries.forEach((serie) => {
       const baseItemStyle = {
         ...(serie.itemStyle ?? {}),
       } as Record<string, any>;
-      const seriesKey = serie.id ?? serie.name ?? `bar-${serieIndex}`;
       const dataMap = new Map<number, any>();
       (serie.data as any[] | undefined)?.forEach((item) => {
         const tuple = Array.isArray(item?.value) ? item.value : undefined;
@@ -1562,7 +1547,6 @@ export class EnergyCustomGraphCard extends LitElement {
         const timestamp = Number(tuple[0]);
         dataMap.set(timestamp, {
           ...item,
-          id: item.id ?? `${seriesKey}-${timestamp}`,
           value: [timestamp, tuple[1]],
           itemStyle: {
             ...baseItemStyle,
@@ -1577,7 +1561,6 @@ export class EnergyCustomGraphCard extends LitElement {
           return existing;
         }
         return {
-          id: `${seriesKey}-${bucket}`,
           value: [bucket, 0],
           itemStyle: {
             ...baseItemStyle,
