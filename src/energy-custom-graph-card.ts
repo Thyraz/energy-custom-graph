@@ -11,6 +11,8 @@ import {
   addYears,
   differenceInDays,
   differenceInHours,
+  differenceInMonths,
+  differenceInYears,
   endOfDay,
   endOfHour,
   endOfMonth,
@@ -66,6 +68,14 @@ interface EnergyCollection {
   setCompare?(compare: unknown): void;
 }
 
+type FetchKey = "main" | "compare";
+
+interface FetchState {
+  inFlight: boolean;
+  queued: boolean;
+  timeout?: number;
+}
+
 const DEFAULT_TIMESPAN: EnergyCustomGraphTimespanConfig = { mode: "energy" };
 
 @customElement("energy-custom-graph-card")
@@ -77,6 +87,10 @@ export class EnergyCustomGraphCard extends LitElement {
   @state() private _metadata?: Record<string, StatisticsMetaData>;
   @state() private _periodStart?: Date;
   @state() private _periodEnd?: Date;
+  @state() private _comparePeriodStart?: Date;
+  @state() private _comparePeriodEnd?: Date;
+  @state() private _statisticsCompare?: Statistics;
+  @state() private _metadataCompare?: Record<string, StatisticsMetaData>;
   @state() private _isLoading = false;
   @state() private _chartData: SeriesOption[] = [];
   @state() private _chartOptions?: ECOption;
@@ -84,19 +98,27 @@ export class EnergyCustomGraphCard extends LitElement {
   private _energyCollection?: EnergyCollection;
   private _energyStart?: Date;
   private _energyEnd?: Date;
-  private _activeFetch = 0;
+  private _energyCompareStart?: Date;
+  private _energyCompareEnd?: Date;
   private _unitsBySeries: Map<string, string | null | undefined> = new Map();
   private _collectionUnsub?: () => void;
   private _collectionPollHandle?: number;
-  private _loadTimeout?: number;
   private _autoRefreshTimeout?: number;
   private _loggedEnergyFallback = false;
   private _calculatedSeriesData = new Map<string, StatisticValue[]>();
   private _calculatedSeriesUnits = new Map<string, string | null | undefined>();
+  private _calculatedSeriesDataCompare = new Map<string, StatisticValue[]>();
+  private _calculatedSeriesUnitsCompare = new Map<string, string | null | undefined>();
   private _statisticsRange?: { start: number; end: number | null };
   private _statisticsPeriod?: StatisticsPeriod;
-  private _fetchInFlight = false;
-  private _queuedReload = false;
+  private _statisticsRangeCompare?: { start: number; end: number | null };
+  private _statisticsPeriodCompare?: StatisticsPeriod;
+
+  private _fetchStates: Map<FetchKey, FetchState> = new Map();
+  private _activeFetchCounters: Record<FetchKey, number> = {
+    main: 0,
+    compare: 0,
+  };
 
   private static readonly FALLBACK_WARNING =
     "[energy-custom-graph-card] Falling back to default period because energy date selection is unavailable.";
@@ -127,13 +149,17 @@ export class EnergyCustomGraphCard extends LitElement {
   public disconnectedCallback(): void {
     super.disconnectedCallback();
     this._teardownEnergyCollection();
-    if (this._loadTimeout) {
-      clearTimeout(this._loadTimeout);
-      this._loadTimeout = undefined;
-    }
     if (this._autoRefreshTimeout) {
       clearTimeout(this._autoRefreshTimeout);
       this._autoRefreshTimeout = undefined;
+    }
+    for (const state of this._fetchStates.values()) {
+      if (state.timeout) {
+        clearTimeout(state.timeout);
+        state.timeout = undefined;
+      }
+      state.inFlight = false;
+      state.queued = false;
     }
   }
 
@@ -207,12 +233,19 @@ export class EnergyCustomGraphCard extends LitElement {
     }
 
     const periodChanged = this._recalculatePeriod();
+    const compareChanged = this._recalculateComparePeriod();
     const seriesChanged =
       !!oldConfig &&
       JSON.stringify(oldConfig.series) !== JSON.stringify(this._config.series);
 
     if (periodChanged || seriesChanged || !this._statistics) {
-      this._scheduleLoad();
+      this._scheduleLoad("main");
+    }
+    if (
+      this._comparePeriodStart &&
+      (compareChanged || seriesChanged || !this._statisticsCompare)
+    ) {
+      this._scheduleLoad("compare");
     }
   }
 
@@ -250,9 +283,20 @@ export class EnergyCustomGraphCard extends LitElement {
       this._collectionUnsub = candidate.subscribe((data) => {
         this._energyStart = data.start;
         this._energyEnd = data.end ?? undefined;
+        this._energyCompareStart = data.startCompare ?? undefined;
+        this._energyCompareEnd = data.endCompare ?? undefined;
         const periodChanged = this._recalculatePeriod();
-        if (periodChanged || !this._statistics) {
-          this._scheduleLoad();
+        const compareChanged = this._recalculateComparePeriod();
+        const shouldLoadMain = periodChanged || !this._statistics;
+        const hasCompareRange = !!this._comparePeriodStart;
+        const shouldLoadCompare =
+          hasCompareRange &&
+          (compareChanged || !this._statisticsCompare);
+        if (shouldLoadMain) {
+          this._scheduleLoad("main");
+        }
+        if (shouldLoadCompare) {
+          this._scheduleLoad("compare");
         }
       });
       return;
@@ -267,8 +311,12 @@ export class EnergyCustomGraphCard extends LitElement {
       this._energyCollection = undefined;
       this._collectionUnsub = undefined;
       const periodChanged = this._recalculatePeriod();
+      const compareChanged = this._recalculateComparePeriod();
       if (periodChanged || !this._statistics) {
-        this._scheduleLoad();
+        this._scheduleLoad("main");
+      }
+      if (compareChanged && this._comparePeriodStart) {
+        this._scheduleLoad("compare");
       }
       this._collectionPollHandle = window.setTimeout(
         () => this._setupEnergyCollection(MAX_ATTEMPTS),
@@ -295,6 +343,8 @@ export class EnergyCustomGraphCard extends LitElement {
     this._energyCollection = undefined;
     this._energyStart = undefined;
     this._energyEnd = undefined;
+    this._energyCompareStart = undefined;
+    this._energyCompareEnd = undefined;
   }
 
   private _recalculatePeriod(): boolean {
@@ -314,6 +364,35 @@ export class EnergyCustomGraphCard extends LitElement {
       this._periodStart = start;
       this._periodEnd = end;
     }
+    return changed;
+  }
+
+  private _recalculateComparePeriod(): boolean {
+    const resolved = this._resolveComparePeriod();
+    const prevStart = this._comparePeriodStart?.getTime();
+    const prevEnd = this._comparePeriodEnd?.getTime();
+
+    if (!resolved) {
+      if (this._comparePeriodStart || this._comparePeriodEnd) {
+        this._comparePeriodStart = undefined;
+        this._comparePeriodEnd = undefined;
+        this._resetCompareStatistics();
+        return true;
+      }
+      return false;
+    }
+
+    const { start, end } = resolved;
+    const nextStart = start.getTime();
+    const nextEnd = end?.getTime();
+    const changed = prevStart !== nextStart || prevEnd !== nextEnd;
+
+    if (changed) {
+      this._comparePeriodStart = start;
+      this._comparePeriodEnd = end;
+      this._resetCompareStatistics();
+    }
+
     return changed;
   }
 
@@ -426,6 +505,28 @@ export class EnergyCustomGraphCard extends LitElement {
     }
   }
 
+  private _resolveComparePeriod():
+    | { start: Date; end?: Date }
+    | undefined {
+    if (!this._config) {
+      return undefined;
+    }
+    const timespanConfig = this._config.timespan ?? DEFAULT_TIMESPAN;
+
+    switch (timespanConfig.mode) {
+      case "energy":
+        if (!this._energyCompareStart) {
+          return undefined;
+        }
+        return {
+          start: this._energyCompareStart,
+          end: this._energyCompareEnd,
+        };
+      default:
+        return undefined;
+    }
+  }
+
   private _getEnergyRange():
     | { start: Date; end?: Date }
     | undefined {
@@ -509,22 +610,33 @@ export class EnergyCustomGraphCard extends LitElement {
     }
   }
 
-  private _scheduleLoad(): void {
-    if (this._fetchInFlight) {
-      this._queuedReload = true;
-      if (this._loadTimeout) {
-        clearTimeout(this._loadTimeout);
-        this._loadTimeout = undefined;
+  private _getFetchState(key: FetchKey): FetchState {
+    let state = this._fetchStates.get(key);
+    if (!state) {
+      state = { inFlight: false, queued: false };
+      this._fetchStates.set(key, state);
+    }
+    return state;
+  }
+
+  private _scheduleLoad(key: FetchKey = "main"): void {
+    const state = this._getFetchState(key);
+
+    if (state.inFlight) {
+      state.queued = true;
+      if (state.timeout) {
+        clearTimeout(state.timeout);
+        state.timeout = undefined;
       }
       return;
     }
 
-    if (this._loadTimeout) {
-      clearTimeout(this._loadTimeout);
+    if (state.timeout) {
+      clearTimeout(state.timeout);
     }
-    this._loadTimeout = window.setTimeout(() => {
-      this._loadTimeout = undefined;
-      void this._loadStatistics();
+    state.timeout = window.setTimeout(() => {
+      state.timeout = undefined;
+      void this._loadStatistics(key);
     }, 500);
   }
 
@@ -665,6 +777,7 @@ export class EnergyCustomGraphCard extends LitElement {
       this._autoRefreshTimeout = undefined;
 
       const periodChanged = this._recalculatePeriod();
+      const compareChanged = this._recalculateComparePeriod();
       const currentTimespanConfig = this._config?.timespan;
 
       // Rolling windows: Only refresh if rounded time changed
@@ -675,7 +788,11 @@ export class EnergyCustomGraphCard extends LitElement {
       const shouldRefresh = isRollingWindow ? periodChanged : true;
 
       if (shouldRefresh) {
-        this._scheduleLoad();
+        this._scheduleLoad("main");
+        const hasCompare = !!this._comparePeriodStart;
+        if (hasCompare && (compareChanged || shouldRefresh)) {
+          this._scheduleLoad("compare");
+        }
       }
 
       // Schedule next refresh
@@ -683,19 +800,33 @@ export class EnergyCustomGraphCard extends LitElement {
     }, msUntilRefresh);
   }
 
-  private async _loadStatistics(): Promise<void> {
-    if (!this._config || !this.hass || !this._periodStart) {
+  private async _loadStatistics(key: FetchKey = "main"): Promise<void> {
+    if (!this._config || !this.hass) {
       return;
     }
 
-    if (this._fetchInFlight) {
-      this._queuedReload = true;
+    const state = this._getFetchState(key);
+    if (state.inFlight) {
+      state.queued = true;
       return;
     }
-    this._fetchInFlight = true;
 
-    const requestedStart = this._periodStart.getTime();
-    const requestedEnd = this._periodEnd?.getTime() ?? null;
+    const isCompare = key === "compare";
+    const periodStart = isCompare ? this._comparePeriodStart : this._periodStart;
+    const periodEnd = isCompare ? this._comparePeriodEnd : this._periodEnd;
+
+    if (!periodStart) {
+      if (isCompare) {
+        this._resetCompareStatistics();
+      }
+      return;
+    }
+
+    state.inFlight = true;
+    state.queued = false;
+
+    const requestedStart = periodStart.getTime();
+    const requestedEnd = periodEnd?.getTime() ?? null;
 
     const statisticIdSet = new Set<string>();
     const statTypeSet = new Set<EnergyCustomGraphStatisticType>();
@@ -724,12 +855,12 @@ export class EnergyCustomGraphCard extends LitElement {
       : [EnergyCustomGraphCard.DEFAULT_STAT_TYPE];
 
     const aggregationPlan = this._resolveAggregationPlan(
-      this._periodStart,
-      this._periodEnd
+      periodStart,
+      periodEnd
     );
 
-    const fetchId = ++this._activeFetch;
-    const loadingAtStart = !this._statistics;
+    const fetchId = ++this._activeFetchCounters[key];
+    const loadingAtStart = !isCompare && !this._statistics;
     if (loadingAtStart) {
       this._isLoading = true;
     }
@@ -765,8 +896,8 @@ export class EnergyCustomGraphCard extends LitElement {
           try {
             const fetched = await fetchStatistics(
               this.hass,
-              this._periodStart,
-              this._periodEnd,
+              periodStart,
+              periodEnd,
               statisticIds,
               aggregation,
               undefined,
@@ -796,48 +927,61 @@ export class EnergyCustomGraphCard extends LitElement {
         }
       }
 
-      if (fetchId !== this._activeFetch) {
-        return;
+      if (fetchId === this._activeFetchCounters[key]) {
+        const resolvedAggregation =
+          selectedAggregation ??
+          lastTriedAggregation ??
+          aggregationPlan[0];
+
+        if (isCompare) {
+          this._statisticsRangeCompare = {
+            start: requestedStart,
+            end: requestedEnd,
+          };
+          this._statisticsPeriodCompare = resolvedAggregation;
+          this._metadataCompare = metadata;
+          this._statisticsCompare = statistics;
+          this._rebuildCalculatedSeries(statistics, metadata, "compare");
+        } else {
+          this._statisticsRange = {
+            start: requestedStart,
+            end: requestedEnd,
+          };
+          this._statisticsPeriod = resolvedAggregation;
+          this._metadata = metadata;
+          this._statistics = statistics;
+          this._rebuildCalculatedSeries(statistics, metadata, "main");
+
+          // Schedule auto-refresh for rolling windows and future fixed timespans
+          this._scheduleAutoRefresh();
+        }
       }
-
-      const resolvedAggregation =
-        selectedAggregation ??
-        lastTriedAggregation ??
-        aggregationPlan[0];
-
-      this._statisticsRange = {
-        start: requestedStart,
-        end: requestedEnd,
-      };
-      this._statisticsPeriod = resolvedAggregation;
-      this._metadata = metadata;
-      this._statistics = statistics;
-      this._rebuildCalculatedSeries(statistics, metadata);
-
-      // Schedule auto-refresh for rolling windows and future fixed timespans
-      this._scheduleAutoRefresh();
     } catch (error) {
-      if (fetchId === this._activeFetch) {
+      if (fetchId === this._activeFetchCounters[key]) {
         console.error(
           "[energy-custom-graph-card] Failed to load statistics",
           error
         );
-        this._metadata = undefined;
-        this._statistics = undefined;
-        this._statisticsRange = undefined;
-        this._statisticsPeriod = undefined;
-        this._calculatedSeriesData = new Map();
-        this._calculatedSeriesUnits = new Map();
+        if (isCompare) {
+          this._resetCompareStatistics();
+        } else {
+          this._metadata = undefined;
+          this._statistics = undefined;
+          this._statisticsRange = undefined;
+          this._statisticsPeriod = undefined;
+          this._calculatedSeriesData = new Map();
+          this._calculatedSeriesUnits = new Map();
+        }
       }
     } finally {
-      if (fetchId === this._activeFetch) {
+      if (fetchId === this._activeFetchCounters[key]) {
         if (loadingAtStart) {
           this._isLoading = false;
         }
-        this._fetchInFlight = false;
-        if (this._queuedReload) {
-          this._queuedReload = false;
-          this._scheduleLoad();
+        state.inFlight = false;
+        if (state.queued) {
+          state.queued = false;
+          this._scheduleLoad(key);
         }
       }
     }
@@ -849,14 +993,20 @@ export class EnergyCustomGraphCard extends LitElement {
 
   private _rebuildCalculatedSeries(
     statistics: Statistics,
-    metadata: Record<string, StatisticsMetaData>
+    metadata: Record<string, StatisticsMetaData>,
+    target: "main" | "compare" = "main"
   ): void {
     const data = new Map<string, StatisticValue[]>();
     const units = new Map<string, string | null | undefined>();
 
     if (!this._config) {
-      this._calculatedSeriesData = data;
-      this._calculatedSeriesUnits = units;
+      if (target === "main") {
+        this._calculatedSeriesData = data;
+        this._calculatedSeriesUnits = units;
+      } else {
+        this._calculatedSeriesDataCompare = data;
+        this._calculatedSeriesUnitsCompare = units;
+      }
       return;
     }
 
@@ -879,8 +1029,22 @@ export class EnergyCustomGraphCard extends LitElement {
       units.set(key, result.unit);
     });
 
-    this._calculatedSeriesData = data;
-    this._calculatedSeriesUnits = units;
+    if (target === "main") {
+      this._calculatedSeriesData = data;
+      this._calculatedSeriesUnits = units;
+    } else {
+      this._calculatedSeriesDataCompare = data;
+      this._calculatedSeriesUnitsCompare = units;
+    }
+  }
+
+  private _resetCompareStatistics(): void {
+    this._statisticsCompare = undefined;
+    this._metadataCompare = undefined;
+    this._statisticsRangeCompare = undefined;
+    this._statisticsPeriodCompare = undefined;
+    this._calculatedSeriesDataCompare = new Map();
+    this._calculatedSeriesUnitsCompare = new Map();
   }
 
   private _evaluateCalculationSeries(
@@ -1234,6 +1398,10 @@ export class EnergyCustomGraphCard extends LitElement {
       changedProps.has("_metadata") ||
       changedProps.has("_periodStart") ||
       changedProps.has("_periodEnd") ||
+      changedProps.has("_statisticsCompare") ||
+      changedProps.has("_metadataCompare") ||
+      changedProps.has("_comparePeriodStart") ||
+      changedProps.has("_comparePeriodEnd") ||
       changedProps.has("_config")
     ) {
       this._generateChart();
@@ -1335,7 +1503,12 @@ export class EnergyCustomGraphCard extends LitElement {
       ? getComputedStyle(this)
       : getComputedStyle(document.documentElement);
 
-    const { series, legend, unitBySeries, seriesById } = buildSeries({
+    const {
+      series: mainSeries,
+      legend,
+      unitBySeries,
+      seriesById,
+    } = buildSeries({
       hass: this.hass,
       statistics: this._statistics,
       metadata: this._metadata,
@@ -1346,6 +1519,93 @@ export class EnergyCustomGraphCard extends LitElement {
       calculatedUnits: this._calculatedSeriesUnits,
     });
 
+    const combinedSeriesById = new Map(seriesById);
+    const combinedUnits = new Map<string, string | null | undefined>();
+    unitBySeries.forEach((value, key) => combinedUnits.set(key, value));
+
+    const compareSeries: SeriesOption[] = [];
+    const hasCompareData =
+      this._comparePeriodStart &&
+      this._statisticsCompare &&
+      this._metadataCompare &&
+      this._statisticsRangeCompare &&
+      this._statisticsRangeCompare.start === this._comparePeriodStart.getTime() &&
+      (this._statisticsRangeCompare.end ?? null) ===
+        (this._comparePeriodEnd?.getTime() ?? null);
+
+    if (hasCompareData) {
+      const compareResult = buildSeries({
+        hass: this.hass,
+        statistics: this._statisticsCompare!,
+        metadata: this._metadataCompare,
+        configSeries: this._config.series,
+        colorPalette: this._config.color_cycle ?? [],
+        computedStyle,
+        calculatedData: this._calculatedSeriesDataCompare,
+        calculatedUnits: this._calculatedSeriesUnitsCompare,
+      });
+
+      const transformTimestamp = this._createCompareTransform();
+
+      const mapEntry = (entry: any): any => {
+        const applyTransform = (timestamp: number) =>
+          transformTimestamp ? transformTimestamp(timestamp) : timestamp;
+
+        if (Array.isArray(entry)) {
+          const originalTs = Number(entry[0]);
+          const mappedTs = applyTransform(originalTs);
+          const rest = entry.slice(1);
+          return [mappedTs, ...rest];
+        }
+        if (entry && typeof entry === "object" && "value" in entry) {
+          const tuple = Array.isArray((entry as any).value)
+            ? (entry as any).value
+            : undefined;
+          if (!tuple) {
+            return entry;
+          }
+          const originalTs = Number(tuple[0]);
+          const mappedTs = applyTransform(originalTs);
+          const newTuple = [...tuple];
+          newTuple[0] = mappedTs;
+          return {
+            ...(entry as Record<string, unknown>),
+            value: newTuple,
+          };
+        }
+        return entry;
+      };
+
+      compareResult.series.forEach((serie, index) => {
+        const baseId = serie.id ?? serie.name ?? `compare_${index}`;
+        const compareId = `${baseId}--compare`;
+        const cloned: SeriesOption = {
+          ...serie,
+          id: compareId,
+          name: `${serie.name ?? baseId} (Compare)`,
+          stack: serie.stack ? `${serie.stack}--compare` : "compare",
+          z: (serie.z ?? 0) - 1,
+        };
+
+        if (Array.isArray(cloned.data)) {
+          cloned.data = cloned.data.map(mapEntry);
+        } else if (cloned.data) {
+          cloned.data = (cloned.data as any[] | undefined)?.map(mapEntry);
+        }
+
+        this._styleCompareSeries(cloned);
+        compareSeries.push(cloned);
+        combinedUnits.set(compareId, compareResult.unitBySeries.get(baseId));
+
+        const baseConfig = compareResult.seriesById.get(baseId);
+        if (baseConfig) {
+          combinedSeriesById.set(compareId, baseConfig);
+        }
+      });
+    }
+
+    const combinedSeries = [...compareSeries, ...mainSeries];
+
     const displayEnd =
       this._periodEnd?.getTime() ?? this._statisticsRange.end ?? null;
     const bucketSequence = this._buildBucketSequence(
@@ -1355,26 +1615,31 @@ export class EnergyCustomGraphCard extends LitElement {
     );
 
     if (bucketSequence?.length) {
-      this._normalizeLineSeries(series, bucketSequence);
+      this._normalizeLineSeries(combinedSeries, bucketSequence);
     }
 
-    this._applyBarStyling(series, bucketSequence);
+    this._applyBarStyling(combinedSeries, bucketSequence);
 
-    if (!series.length) {
+    if (!combinedSeries.length) {
       this._chartData = [];
       this._chartOptions = undefined;
       this._unitsBySeries = new Map();
       return;
     }
 
-    const { yAxis, axisUnitByIndex } = this._buildYAxisOptions(seriesById, series);
+    const { yAxis, axisUnitByIndex } = this._buildYAxisOptions(
+      combinedSeriesById,
+      combinedSeries
+    );
 
     this._unitsBySeries = new Map();
-    series.forEach((item) => {
+    combinedSeries.forEach((item) => {
       const axisIndex = item.yAxisIndex ?? 0;
       const axisUnit =
         axisUnitByIndex.get(axisIndex) ??
-        (this._config.show_unit === false ? undefined : unitBySeries.get(item.id ?? ""));
+        (this._config.show_unit === false
+          ? undefined
+          : combinedUnits.get(item.id ?? ""));
       this._unitsBySeries.set(item.id ?? "", axisUnit);
     });
 
@@ -1424,7 +1689,7 @@ export class EnergyCustomGraphCard extends LitElement {
       options.legend = legendOption;
     }
 
-    this._chartData = series;
+    this._chartData = combinedSeries;
     this._chartOptions = options;
   }
 
@@ -1505,6 +1770,47 @@ export class EnergyCustomGraphCard extends LitElement {
 
       serie.data = normalizedData;
     });
+  }
+
+  private _createCompareTransform():
+    | ((timestamp: number) => number)
+    | undefined {
+    if (!this._periodStart || !this._comparePeriodStart) {
+      return undefined;
+    }
+
+    const start = this._periodStart;
+    const compareStart = this._comparePeriodStart;
+
+    const compareYearDiff = differenceInYears(start, compareStart);
+    if (
+      compareYearDiff !== 0 &&
+      start.getTime() === startOfYear(start).getTime()
+    ) {
+      return (timestamp: number) =>
+        addYears(new Date(timestamp), compareYearDiff).getTime();
+    }
+
+    const compareMonthDiff = differenceInMonths(start, compareStart);
+    if (
+      compareMonthDiff !== 0 &&
+      start.getTime() === startOfMonth(start).getTime()
+    ) {
+      return (timestamp: number) =>
+        addMonths(new Date(timestamp), compareMonthDiff).getTime();
+    }
+
+    const compareDayDiff = differenceInDays(start, compareStart);
+    if (
+      compareDayDiff !== 0 &&
+      start.getTime() === startOfDay(start).getTime()
+    ) {
+      return (timestamp: number) =>
+        addDays(new Date(timestamp), compareDayDiff).getTime();
+    }
+
+    const compareOffset = start.getTime() - compareStart.getTime();
+    return (timestamp: number) => timestamp + compareOffset;
   }
 
   private _applyBarStyling(
@@ -1654,6 +1960,46 @@ export class EnergyCustomGraphCard extends LitElement {
         (serie.data as any[])[bucketIndex] = dataItem;
       }
     });
+  }
+
+  private _styleCompareSeries(serie: SeriesOption): void {
+    const baseOpacity = 0.6;
+
+    if (serie.type === "bar") {
+      const itemStyle = {
+        ...(serie.itemStyle ?? {}),
+        opacity: baseOpacity,
+      } as Record<string, any>;
+      serie.itemStyle = itemStyle;
+
+      const emphasisItemStyle = {
+        ...(serie.emphasis?.itemStyle ?? {}),
+        opacity: Math.min(1, baseOpacity + 0.2),
+      } as Record<string, any>;
+      serie.emphasis = {
+        ...(serie.emphasis ?? {}),
+        itemStyle: emphasisItemStyle,
+      } as Record<string, any>;
+    } else {
+      serie.lineStyle = {
+        ...(serie.lineStyle ?? {}),
+        opacity: baseOpacity,
+      };
+      serie.itemStyle = {
+        ...(serie.itemStyle ?? {}),
+        opacity: baseOpacity,
+      };
+      if (serie.areaStyle) {
+        const currentOpacity = (serie.areaStyle as any).opacity ?? baseOpacity / 2;
+        serie.areaStyle = {
+          ...(serie.areaStyle ?? {}),
+          opacity: currentOpacity * 0.6,
+        };
+      }
+      (serie as any).connectNulls = false;
+    }
+
+    serie.z = (serie.z ?? 0) - 1;
   }
 
   private _buildBucketSequence(
