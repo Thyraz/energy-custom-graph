@@ -1,4 +1,5 @@
 import type { LovelaceCardConfig } from "custom-card-helpers";
+import type { StatisticsPeriod } from "./data/statistics";
 
 export type EnergyCustomGraphChartType = "bar" | "line";
 
@@ -57,10 +58,19 @@ export interface EnergyCustomGraphSeriesConfig {
   clip_max?: number;
 }
 
+export interface EnergyCustomGraphRawOptions {
+  significant_changes_only?: boolean;
+}
+
+export type EnergyCustomGraphAggregationTarget = StatisticsPeriod | "raw";
+
 export interface EnergyCustomGraphAggregationConfig {
-  manual?: StatisticsPeriod;
-  fallback?: StatisticsPeriod;
-  energy_picker?: Partial<Record<"hour" | "day" | "week" | "month" | "year", StatisticsPeriod>>;
+  manual?: EnergyCustomGraphAggregationTarget;
+  fallback?: EnergyCustomGraphAggregationTarget;
+  energy_picker?: Partial<
+    Record<"hour" | "day" | "week" | "month" | "year", EnergyCustomGraphAggregationTarget>
+  >;
+  raw_options?: EnergyCustomGraphRawOptions;
 }
 
 export type EnergyCustomGraphTimespanConfig =

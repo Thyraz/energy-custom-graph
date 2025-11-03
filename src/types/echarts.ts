@@ -14,7 +14,7 @@ export interface BaseSeriesOption {
 
 export interface LineSeriesOption extends BaseSeriesOption {
   type: "line";
-  smooth?: boolean;
+  smooth?: boolean | number;
   areaStyle?: Record<string, unknown>;
   lineStyle?: Record<string, unknown>;
 }

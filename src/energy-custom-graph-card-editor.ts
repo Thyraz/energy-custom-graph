@@ -13,8 +13,9 @@ import type {
   EnergyCustomGraphSeriesConfig,
   EnergyCustomGraphStatisticType,
   EnergyCustomGraphTimespanConfig,
+  EnergyCustomGraphAggregationTarget,
+  EnergyCustomGraphRawOptions,
 } from "./types";
-import type { StatisticsPeriod } from "./data/statistics";
 import { DEFAULT_COLORS } from "./chart/series-builder";
 
 const ENERGY_COLOR_PRESETS: Array<{ label: string; value: string }> = [
@@ -37,12 +38,13 @@ const STAT_TYPE_OPTIONS: Array<{ value: EnergyCustomGraphStatisticType; label: s
   { value: "state", label: "State" },
 ];
 
-const AGGREGATION_OPTIONS: Array<{ value: StatisticsPeriod; label: string }> = [
+const AGGREGATION_OPTIONS: Array<{ value: EnergyCustomGraphAggregationTarget; label: string }> = [
   { value: "5minute", label: "5 minute" },
   { value: "hour", label: "Hour" },
   { value: "day", label: "Day" },
   { value: "week", label: "Week" },
   { value: "month", label: "Month" },
+  { value: "raw", label: "RAW (history)" },
 ];
 
 type AggregationPickerKey = "hour" | "day" | "week" | "month" | "year";
@@ -89,12 +91,13 @@ export class EnergyCustomGraphCardEditor
   public setConfig(config: EnergyCustomGraphCardConfig): void {
     const hadConfig = this._config !== undefined;
     const normalizedSeries = config.series?.map((item) => ({ ...item })) ?? [];
-    this._config = {
-      type: "custom:energy-custom-graph-card",
-      timespan: config.timespan ?? { mode: "energy" },
+    const nextConfig: EnergyCustomGraphCardConfig = {
       ...config,
       series: normalizedSeries,
     };
+    nextConfig.type = "custom:energy-custom-graph-card";
+    nextConfig.timespan = config.timespan ?? { mode: "energy" };
+    this._config = nextConfig;
     this._syncCustomColorDrafts(normalizedSeries);
     this._syncColorSelections(normalizedSeries);
 
@@ -340,7 +343,9 @@ export class EnergyCustomGraphCardEditor
   private _renderAggregationPickerOptions(
     pickerAggregation: NonNullable<EnergyCustomGraphAggregationConfig["energy_picker"]> | {}
   ) {
-    const picker = pickerAggregation as Partial<Record<AggregationPickerKey, StatisticsPeriod>>;
+    const picker = pickerAggregation as Partial<
+      Record<AggregationPickerKey, EnergyCustomGraphAggregationTarget>
+    >;
     return html`
       <div class="section">
         <p class="hint">
@@ -427,6 +432,89 @@ export class EnergyCustomGraphCardEditor
     `;
   }
 
+  private _renderRawOptions(
+    aggregation: EnergyCustomGraphAggregationConfig | undefined
+  ) {
+    if (!this._aggregationUsesRaw(aggregation)) {
+      return nothing;
+    }
+
+    const options: EnergyCustomGraphRawOptions = {
+      ...(aggregation?.raw_options ?? {}),
+    };
+    const current =
+      options.significant_changes_only === undefined
+        ? "auto"
+        : options.significant_changes_only
+          ? "true"
+          : "false";
+
+    return html`
+      <div class="section">
+        <p class="hint">
+          Configure how RAW history requests behave. Automatic uses Home Assistant&apos;s default
+          behaviour.
+        </p>
+        <div class="field">
+          <label>Significant changes only</label>
+          <select
+            @change=${(ev: Event) =>
+              this._updateRawOption(
+                "significant_changes_only",
+                (ev.target as HTMLSelectElement).value as "auto" | "true" | "false"
+              )}
+          >
+            <option value="auto" ?selected=${current === "auto"}>Automatic</option>
+            <option value="true" ?selected=${current === "true"}>Yes</option>
+            <option value="false" ?selected=${current === "false"}>No</option>
+          </select>
+        </div>
+      </div>
+    `;
+  }
+
+  private _aggregationUsesRaw(
+    aggregation: EnergyCustomGraphAggregationConfig | undefined
+  ): boolean {
+    if (!aggregation) {
+      return false;
+    }
+    if (aggregation.manual === "raw" || aggregation.fallback === "raw") {
+      return true;
+    }
+    if (aggregation.energy_picker) {
+      return Object.values(aggregation.energy_picker).some((value) => value === "raw");
+    }
+    return false;
+  }
+
+  private _updateRawOption(
+    key: keyof EnergyCustomGraphRawOptions,
+    selection: "auto" | "true" | "false"
+  ) {
+    const aggregation: EnergyCustomGraphAggregationConfig = {
+      ...this._config!.aggregation,
+    };
+    const options: EnergyCustomGraphRawOptions = {
+      ...(aggregation.raw_options ?? {}),
+    };
+
+    if (selection === "auto") {
+      delete options[key];
+    } else {
+      options[key] = selection === "true";
+    }
+
+    if (Object.keys(options).length) {
+      aggregation.raw_options = options;
+    } else {
+      delete aggregation.raw_options;
+    }
+
+    const cleaned = this._cleanupAggregation(aggregation);
+    this._updateConfig("aggregation", cleaned);
+  }
+
   private _renderTabButton(tab: typeof this._activeTab, label: string) {
     return html`
       <button
@@ -484,6 +572,7 @@ ${this._renderTimespanSection(cfg)}
                 ${isEnergyMode
                   ? this._renderAggregationPickerOptions(pickerAggregation)
                   : this._renderAggregationManualOptions(aggregationConfig)}
+                ${this._renderRawOptions(aggregationConfig)}
               </div>
             `
           : nothing}
@@ -1720,7 +1809,7 @@ ${this._renderTimespanSection(cfg)}
     if (value === "") {
       delete aggregation[field];
     } else {
-      (aggregation as any)[field] = value as StatisticsPeriod;
+      (aggregation as any)[field] = value as EnergyCustomGraphAggregationTarget;
     }
     const cleaned = this._cleanupAggregation(aggregation);
     this._updateConfig("aggregation", cleaned);
@@ -1736,7 +1825,7 @@ ${this._renderTimespanSection(cfg)}
     if (value === "") {
       delete aggregation.energy_picker?.[key];
     } else {
-      aggregation.energy_picker![key] = value as StatisticsPeriod;
+      aggregation.energy_picker![key] = value as EnergyCustomGraphAggregationTarget;
     }
     const cleaned = this._cleanupAggregation(aggregation);
     this._updateConfig("aggregation", cleaned);
@@ -1747,6 +1836,9 @@ ${this._renderTimespanSection(cfg)}
   ): EnergyCustomGraphAggregationConfig | undefined {
     if (aggregation.energy_picker && Object.keys(aggregation.energy_picker).length === 0) {
       delete aggregation.energy_picker;
+    }
+    if (aggregation.raw_options && Object.keys(aggregation.raw_options).length === 0) {
+      delete aggregation.raw_options;
     }
     return Object.keys(aggregation).length ? aggregation : undefined;
   }
@@ -2031,7 +2123,7 @@ ${this._renderTimespanSection(cfg)}
     return parts.length ? parts.join(" • ") : undefined;
   }
 
-  private _formatStatisticsPeriod(value: StatisticsPeriod): string {
+  private _formatStatisticsPeriod(value: EnergyCustomGraphAggregationTarget): string {
     return AGGREGATION_OPTIONS.find((option) => option.value === value)?.label ?? value;
   }
 

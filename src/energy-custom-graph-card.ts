@@ -35,6 +35,11 @@ import {
   type StatisticsMetaData,
   type StatisticsPeriod,
 } from "./data/statistics";
+import {
+  fetchRawHistoryStates,
+  historyStatesToStatistics,
+} from "./data/history";
+import type { FetchRawHistoryOptions } from "./data/history";
 import type {
   EnergyCustomGraphCardConfig,
   EnergyCustomGraphSeriesConfig,
@@ -43,6 +48,8 @@ import type {
   EnergyCustomGraphCalculationConfig,
   EnergyCustomGraphCalculationTerm,
   EnergyCustomGraphTimespanConfig,
+  EnergyCustomGraphAggregationTarget,
+  EnergyCustomGraphRawOptions,
 } from "./types";
 import { buildSeries } from "./chart/series-builder";
 import type {
@@ -112,9 +119,9 @@ export class EnergyCustomGraphCard extends LitElement {
   private _calculatedSeriesDataCompare = new Map<string, StatisticValue[]>();
   private _calculatedSeriesUnitsCompare = new Map<string, string | null | undefined>();
   private _statisticsRange?: { start: number; end: number | null };
-  private _statisticsPeriod?: StatisticsPeriod;
+  private _statisticsPeriod?: StatisticsPeriod | "raw";
   private _statisticsRangeCompare?: { start: number; end: number | null };
-  private _statisticsPeriodCompare?: StatisticsPeriod;
+  private _statisticsPeriodCompare?: StatisticsPeriod | "raw";
 
   private _fetchStates: Map<FetchKey, FetchState> = new Map();
   private _activeFetchCounters: Record<FetchKey, number> = {
@@ -662,10 +669,16 @@ export class EnergyCustomGraphCard extends LitElement {
     }, 500);
   }
 
-  private _getRefreshTiming(aggregation: StatisticsPeriod): {
+  private _getRefreshTiming(aggregation: StatisticsPeriod | "raw"): {
     intervalMs: number;
     delayMs: number;
   } {
+    if (aggregation === "raw") {
+      return {
+        intervalMs: 60 * 1000,
+        delayMs: 0,
+      };
+    }
     switch (aggregation) {
       case "5minute":
         return {
@@ -696,10 +709,15 @@ export class EnergyCustomGraphCard extends LitElement {
     }
   }
 
-  private _getNextAlignedRefreshTime(aggregation: StatisticsPeriod): number {
+  private _getNextAlignedRefreshTime(aggregation: StatisticsPeriod | "raw"): number {
     const now = new Date();
     const timing = this._getRefreshTiming(aggregation);
     let nextRefresh = new Date(now);
+
+    if (aggregation === "raw") {
+      nextRefresh = new Date(now.getTime() + timing.intervalMs);
+      return nextRefresh.getTime();
+    }
 
     switch (aggregation) {
       case "5minute": {
@@ -924,37 +942,60 @@ export class EnergyCustomGraphCard extends LitElement {
       }
 
       let statistics: Statistics = {};
-      let selectedAggregation: StatisticsPeriod | undefined;
-      let lastTriedAggregation: StatisticsPeriod | undefined;
+      let selectedAggregation: EnergyCustomGraphAggregationTarget | undefined;
+      let lastTriedAggregation: EnergyCustomGraphAggregationTarget | undefined;
 
       if (statisticIds.length) {
         for (let idx = 0; idx < aggregationPlan.length; idx++) {
           const aggregation = aggregationPlan[idx];
           lastTriedAggregation = aggregation;
           try {
-            const fetched = await fetchStatistics(
-              this.hass,
-              periodStart,
-              periodEnd,
-              statisticIds,
-              aggregation,
-              undefined,
-              statTypes
-            );
-            statistics = fetched;
-            if (this._statisticsHaveData(fetched, statisticIds)) {
-              if (idx > 0) {
+            if (aggregation === "raw") {
+              const fetched = await this._fetchRawStatistics(
+                periodStart,
+                periodEnd,
+                statisticIds
+              );
+              statistics = fetched;
+              if (this._statisticsHaveData(fetched, statisticIds)) {
+                if (idx > 0) {
+                  console.warn(
+                    `[energy-custom-graph-card] Aggregation "${aggregationPlan[0]}" returned no data. Using fallback "raw".`
+                  );
+                }
+                selectedAggregation = aggregation;
+                break;
+              }
+              if (idx < aggregationPlan.length - 1) {
                 console.warn(
-                  `[energy-custom-graph-card] Aggregation "${aggregationPlan[0]}" returned no data. Using fallback "${aggregation}".`
+                  `[energy-custom-graph-card] Aggregation "raw" returned no data. Trying fallback "${aggregationPlan[idx + 1]}".`
                 );
               }
-              selectedAggregation = aggregation;
-              break;
-            }
-            if (idx < aggregationPlan.length - 1) {
-              console.warn(
-                `[energy-custom-graph-card] Aggregation "${aggregation}" returned no data. Trying fallback "${aggregationPlan[idx + 1]}".`
+            } else {
+              const fetched = await fetchStatistics(
+                this.hass,
+                periodStart,
+                periodEnd,
+                statisticIds,
+                aggregation,
+                undefined,
+                statTypes
               );
+              statistics = fetched;
+              if (this._statisticsHaveData(fetched, statisticIds)) {
+                if (idx > 0) {
+                  console.warn(
+                    `[energy-custom-graph-card] Aggregation "${aggregationPlan[0]}" returned no data. Using fallback "${aggregation}".`
+                  );
+                }
+                selectedAggregation = aggregation;
+                break;
+              }
+              if (idx < aggregationPlan.length - 1) {
+                console.warn(
+                  `[energy-custom-graph-card] Aggregation "${aggregation}" returned no data. Trying fallback "${aggregationPlan[idx + 1]}".`
+                );
+              }
             }
           } catch (error) {
             console.error(
@@ -1023,6 +1064,33 @@ export class EnergyCustomGraphCard extends LitElement {
         }
       }
     }
+  }
+
+  private async _fetchRawStatistics(
+    start: Date,
+    end: Date | undefined,
+    statisticIds: string[]
+  ): Promise<Statistics> {
+    if (!this._config || !this.hass || !statisticIds.length) {
+      return {};
+    }
+
+    const rawOptions: EnergyCustomGraphRawOptions | undefined =
+      this._config.aggregation?.raw_options;
+
+    const options: FetchRawHistoryOptions = {};
+    if (rawOptions?.significant_changes_only !== undefined) {
+      options.significant_changes_only = rawOptions.significant_changes_only;
+    }
+
+    const history = await fetchRawHistoryStates(
+      this.hass,
+      start,
+      end,
+      statisticIds,
+      options
+    );
+    return historyStatesToStatistics(history);
   }
 
   private _getCalculationKey(index: number): string {
@@ -1296,13 +1364,13 @@ export class EnergyCustomGraphCard extends LitElement {
   private _resolveAggregationPlan(
     start: Date,
     end?: Date
-  ): StatisticsPeriod[] {
+  ): EnergyCustomGraphAggregationTarget[] {
     const cfg = this._config?.aggregation;
     const usesPicker = this._needsEnergyCollection(this._config);
     const auto = this._deriveAutoStatisticsPeriod(start, end);
-    const plan: StatisticsPeriod[] = [];
+    const plan: EnergyCustomGraphAggregationTarget[] = [];
 
-    const pushUnique = (period?: StatisticsPeriod) => {
+    const pushUnique = (period?: EnergyCustomGraphAggregationTarget) => {
       if (period && !plan.includes(period)) {
         plan.push(period);
       }
@@ -2172,9 +2240,9 @@ export class EnergyCustomGraphCard extends LitElement {
   private _buildBucketSequence(
     start: number,
     end: number | null,
-    period?: StatisticsPeriod
+    period?: StatisticsPeriod | "raw"
   ): number[] | undefined {
-    if (end === null || period === undefined) {
+    if (end === null || period === undefined || period === "raw") {
       return undefined;
     }
     if (end < start) {
