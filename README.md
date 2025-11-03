@@ -87,7 +87,7 @@ Use a energy date picker on the same dashboard. The card automatically follows t
 ```yaml
 timespan:
   mode: relative
-  period: day        # hour, day, week, month, year, last_7_days, last_24_hours, last_30_days, or last_12_months
+  period: day        # hour, day, week, month, year, last_60_minutes, last_24_hours, last_7_days, last_30_days, or last_12_months
   offset: -1         # Optional offset (e.g., -1 for yesterday/previous period)
 ```
 Displays a relative time period. The card supports two types, inspired by the options in the energy date picker:
@@ -96,13 +96,14 @@ Displays a relative time period. The card supports two types, inspired by the op
 - "day" would mean today from 00:00 to 23:59 as base date
 - `offset` shifts by complete periods (e.g., `-1` for yesterday, `-7` for same day last week)
 
-***Rolling window periods*** (`last_7_days`, `last_24_hours`, `last_30_days`, `last_12_months`):
+***Rolling window periods*** (`last_60_minutes`, `last_24_hours`, `last_7_days`, `last_30_days`, `last_12_months`):
 - End date is "now"
+- `last_60_minutes`: Previous 60 minutes (offset shifts by full hours)
 - `last_7_days`: Previous 7 days
 - `last_24_hours`: Previous 24 hours (offset shifts by full days)
 - `last_30_days`: Previous 30 days
 - `last_12_months`: Previous 12 months
-- `offset` shifts the entire window (days for `last_7_days`/`last_24_hours`, months for `last_12_months`).
+- `offset` shifts den gesamten Zeitraum (Stunden für `last_60_minutes`, Tage für `last_24_hours`/`last_7_days`, Monate für `last_12_months`).
 
 **Mode: `fixed`**
 ```yaml

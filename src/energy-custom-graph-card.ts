@@ -19,6 +19,7 @@ import {
   endOfWeek,
   endOfYear,
   startOfDay,
+  startOfHour,
   startOfMonth,
   startOfWeek,
   startOfYear,
@@ -462,6 +463,13 @@ export class EnergyCustomGraphCard extends LitElement {
             const start = subDays(end, 7);
             return { start, end };
           }
+          case "last_60_minutes": {
+            // Rolling 60-minute window: end = now + offset hours, start = end - 60 minutes
+            const now = this._getRoundedNow("last_60_minutes");
+            const end = addHours(now, offset);
+            const start = addMinutes(end, -60);
+            return { start, end };
+          }
           case "last_24_hours": {
             // Rolling 24-hour window: end = now + offset days, start = end - 24 hours
             // Rounded to whole minutes so the window only shifts when the aligned time advances
@@ -600,8 +608,8 @@ export class EnergyCustomGraphCard extends LitElement {
     switch (period) {
       case "hour":
         return {
-          start: startOfDay(now),
-          end: endOfDay(now),
+          start: startOfHour(now),
+          end: endOfHour(now),
         };
       case "day":
         return this._defaultEnergyRange();
@@ -1318,6 +1326,13 @@ export class EnergyCustomGraphCard extends LitElement {
     end?: Date
   ): StatisticsPeriod {
     const effectiveEnd = end ?? new Date();
+    const hourDifference = Math.max(
+      differenceInHours(effectiveEnd, start),
+      0
+    );
+    if (hourDifference <= 2) {
+      return "5minute";
+    }
     const dayDifference = Math.max(differenceInDays(effectiveEnd, start), 0);
     if (dayDifference > 35) {
       return "month";
@@ -1796,7 +1811,7 @@ export class EnergyCustomGraphCard extends LitElement {
 
     const axisMax = this._periodEnd
       ? this._computeSuggestedXAxisMax(this._periodStart, this._periodEnd)
-      : (this._periodEnd ?? new Date()).getTime();
+      : (this._statisticsRange.end ?? this._periodStart.getTime());
 
     const xAxis: XAxisOption[] = [
       {
@@ -1850,7 +1865,9 @@ export class EnergyCustomGraphCard extends LitElement {
       suggestedMax = subHours(suggestedMax, 1);
     }
 
-    suggestedMax.setMinutes(0, 0, 0);
+    if (dayDifference > 2) {
+      suggestedMax.setMinutes(0, 0, 0);
+    }
 
     if (dayDifference > 35) {
       suggestedMax.setDate(1);
