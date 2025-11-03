@@ -649,7 +649,7 @@ ${this._renderTimespanSection(cfg)}
                 <label>Period</label>
                 <select
                   @change=${(ev: Event) =>
-                    this._updateTimespanRelativePeriod((ev.target as HTMLSelectElement).value as "hour" | "day" | "week" | "month" | "year" | "last_7_days" | "last_30_days" | "last_12_months")}
+                    this._updateTimespanRelativePeriod((ev.target as HTMLSelectElement).value as "hour" | "day" | "week" | "month" | "year" | "last_7_days" | "last_24_hours" | "last_30_days" | "last_12_months")}
                 >
                   ${[
                     { value: "hour", label: "Hour" },
@@ -657,6 +657,7 @@ ${this._renderTimespanSection(cfg)}
                     { value: "week", label: "Week" },
                     { value: "month", label: "Month" },
                     { value: "year", label: "Year" },
+                    { value: "last_24_hours", label: "Last 24 hours" },
                     { value: "last_7_days", label: "Last 7 days" },
                     { value: "last_30_days", label: "Last 30 days" },
                     { value: "last_12_months", label: "Last 12 months" },
@@ -1929,7 +1930,7 @@ ${this._renderTimespanSection(cfg)}
     this._updateConfig("timespan", timespan);
   }
 
-  private _updateTimespanRelativePeriod(period: "hour" | "day" | "week" | "month" | "year" | "last_7_days" | "last_30_days" | "last_12_months") {
+  private _updateTimespanRelativePeriod(period: "hour" | "day" | "week" | "month" | "year" | "last_7_days" | "last_24_hours" | "last_30_days" | "last_12_months") {
     const current = this._config?.timespan;
     if (!current || current.mode !== "relative") return;
 

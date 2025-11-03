@@ -462,6 +462,14 @@ export class EnergyCustomGraphCard extends LitElement {
             const start = subDays(end, 7);
             return { start, end };
           }
+          case "last_24_hours": {
+            // Rolling 24-hour window: end = now + offset days, start = end - 24 hours
+            // Rounded to whole minutes so the window only shifts when the aligned time advances
+            const now = this._getRoundedNow("last_24_hours");
+            const end = addDays(now, offset);
+            const start = subHours(end, 24);
+            return { start, end };
+          }
           case "last_30_days": {
             // Rolling 30-day window: end = now + offset days, start = end - 30 days
             // Rounded to :20 past the hour to prevent constant reloading
@@ -557,6 +565,7 @@ export class EnergyCustomGraphCard extends LitElement {
     switch (period) {
       case "last_60_minutes":
       case "last_hour":
+      case "last_24_hours":
         // Short timespans: Round to full minutes
         // Updates every minute
         now.setSeconds(0, 0);
@@ -2156,7 +2165,7 @@ export class EnergyCustomGraphCard extends LitElement {
     }
 
     const buckets: number[] = [];
-    let cursor = new Date(start);
+    let cursor = this._alignBucketStart(start, period);
     const endDate = new Date(end);
     let safety = 0;
     const maxIterations = 200000;
@@ -2188,6 +2197,32 @@ export class EnergyCustomGraphCard extends LitElement {
         return addMonths(date, 1);
       default:
         return addHours(date, 1);
+    }
+  }
+
+  private _alignBucketStart(start: number, period: StatisticsPeriod): Date {
+    const date = new Date(start);
+
+    switch (period) {
+      case "5minute": {
+        const minutes = date.getMinutes();
+        const alignedMinutes = Math.floor(minutes / 5) * 5;
+        date.setSeconds(0, 0);
+        date.setMinutes(alignedMinutes);
+        return date;
+      }
+      case "hour":
+        date.setMinutes(0, 0, 0);
+        return date;
+      case "day":
+        return startOfDay(date);
+      case "week":
+        return startOfWeek(date);
+      case "month":
+        return startOfMonth(date);
+      default:
+        date.setMinutes(0, 0, 0);
+        return date;
     }
   }
 
