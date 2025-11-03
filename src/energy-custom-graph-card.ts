@@ -1523,7 +1523,67 @@ export class EnergyCustomGraphCard extends LitElement {
     const combinedUnits = new Map<string, string | null | undefined>();
     unitBySeries.forEach((value, key) => combinedUnits.set(key, value));
 
-    const compareSeries: SeriesOption[] = [];
+    const barStackBaseById = new Map<string, string>();
+    const normalizedBarStacks = new Map<string, string>();
+    const placeholderByBase = new Map<string, BarSeriesOption>();
+    const barStackOrder: string[] = [];
+    let generatedBarStackCounter = 0;
+
+    const getBaseKeyForBar = (rawStack?: string): string => {
+      const stackName = rawStack?.trim();
+      if (stackName) {
+        const existing = normalizedBarStacks.get(stackName);
+        if (existing) {
+          return existing;
+        }
+        normalizedBarStacks.set(stackName, stackName);
+        return stackName;
+      }
+      generatedBarStackCounter += 1;
+      return `series-${generatedBarStackCounter}`;
+    };
+
+    const ensurePlaceholder = (baseKey: string) => {
+      if (placeholderByBase.has(baseKey)) {
+        return;
+      }
+      barStackOrder.push(baseKey);
+      placeholderByBase.set(baseKey, {
+        id: `${baseKey}--compare-placeholder`,
+        type: "bar",
+        stack: `${baseKey}--current`,
+        data: [],
+        silent: true,
+        tooltip: { show: false },
+        itemStyle: {
+          color: "transparent",
+          borderColor: "transparent",
+          borderWidth: 0,
+        },
+        emphasis: {
+          disabled: true,
+        },
+        barMaxWidth: BAR_MAX_WIDTH,
+        z: -2,
+      });
+    };
+
+    mainSeries.forEach((serie, index) => {
+      if (serie.type !== "bar") {
+        return;
+      }
+      const id = serie.id ?? `bar_${index}`;
+      const rawStack =
+        typeof serie.stack === "string" && serie.stack.trim() !== ""
+          ? serie.stack
+          : undefined;
+      const baseKey = getBaseKeyForBar(rawStack);
+      barStackBaseById.set(id, baseKey);
+      serie.stack = `${baseKey}--current`;
+      ensurePlaceholder(baseKey);
+    });
+
+    let compareSeries: SeriesOption[] = [];
     const hasCompareData =
       this._comparePeriodStart &&
       this._statisticsCompare &&
@@ -1576,6 +1636,8 @@ export class EnergyCustomGraphCard extends LitElement {
         return entry;
       };
 
+      const compareSeriesTemp: SeriesOption[] = [];
+
       compareResult.series.forEach((serie, index) => {
         const baseId = serie.id ?? serie.name ?? `compare_${index}`;
         const compareId = `${baseId}--compare`;
@@ -1583,7 +1645,6 @@ export class EnergyCustomGraphCard extends LitElement {
           ...serie,
           id: compareId,
           name: `${serie.name ?? baseId} (Compare)`,
-          stack: serie.stack ? `${serie.stack}--compare` : "compare",
           z: (serie.z ?? 0) - 1,
         };
 
@@ -1593,8 +1654,29 @@ export class EnergyCustomGraphCard extends LitElement {
           cloned.data = (cloned.data as any[] | undefined)?.map(mapEntry);
         }
 
-        this._styleCompareSeries(cloned);
-        compareSeries.push(cloned);
+        if (cloned.type === "bar") {
+          let baseKey = barStackBaseById.get(baseId);
+          if (!baseKey) {
+            const rawStack =
+              typeof serie.stack === "string" && serie.stack.trim() !== ""
+                ? serie.stack
+                : undefined;
+            baseKey = getBaseKeyForBar(rawStack);
+            barStackBaseById.set(baseId, baseKey);
+            ensurePlaceholder(baseKey);
+          }
+          const placeholder = placeholderByBase.get(baseKey);
+          if (placeholder) {
+            placeholder.stack = `${baseKey}--compare`;
+          }
+          cloned.stack = `${baseKey}--compare`;
+          this._styleCompareSeries(cloned);
+          compareSeriesTemp.push(cloned);
+        } else {
+          cloned.stack = serie.stack ? `${serie.stack}--compare` : "compare";
+          this._styleCompareSeries(cloned);
+          compareSeriesTemp.push(cloned);
+        }
         combinedUnits.set(compareId, compareResult.unitBySeries.get(baseId));
 
         const baseConfig = compareResult.seriesById.get(baseId);
@@ -1602,9 +1684,14 @@ export class EnergyCustomGraphCard extends LitElement {
           combinedSeriesById.set(compareId, baseConfig);
         }
       });
+      compareSeries = compareSeriesTemp;
     }
 
-    const combinedSeries = [...compareSeries, ...mainSeries];
+    const comparePlaceholders = barStackOrder
+      .map((baseKey) => placeholderByBase.get(baseKey))
+      .filter((placeholder): placeholder is SeriesOption => !!placeholder);
+
+    const combinedSeries = [...comparePlaceholders, ...compareSeries, ...mainSeries];
 
     const displayEnd =
       this._periodEnd?.getTime() ?? this._statisticsRange.end ?? null;
@@ -1688,6 +1775,8 @@ export class EnergyCustomGraphCard extends LitElement {
     if (legendOption) {
       options.legend = legendOption;
     }
+
+    console.log(combinedSeries.filter((s) => s.type === "bar").map((s) => ({ id: s.id, stack: s.stack, order: (s as any).order, z: s.z })));
 
     this._chartData = combinedSeries;
     this._chartOptions = options;
