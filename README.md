@@ -11,7 +11,7 @@ I know the `Statistics graph card` nowadays also support the energy date picker,
 - Supports any entity that exposes long-term statistics.
 - Quick access to colors from the HA energy color palette and native styles so mixed dashboards look consistent.
 - Uses Home Assistant's bundled ECharts runtime – no extra framework needs to be loaded.
-- Per-series control over aggregation type, chart type (bar or line), stacking, color, unit, scaling and offsets.
+- Per-series control over aggregation type, chart type (bar, line or step), stacking, color, unit, scaling and offsets.
 - Optional fill-between-rendering for line series to fill the space e.g. between min / max line-charts
 - Optional manual timespan selection (fixed ranges or relative day/week/month/year offsets) when you don't want to use the energy date picker.
 
@@ -122,7 +122,7 @@ Display a fixed time range. Dates use ISO 8601 format. If omitted, `start` defau
 | `statistic_id` | string | – | Entity with long term statistics (e.g. `sensor.entity_id`). Required unless series uses a `calculation` instead. |
 | `stat_type` | `"change"`, `"sum"`, `"mean"`, `"min"`, `"max"`, `"state"` | `"change"` | Statistic type to display for this entity. Not used when `calculation` is provided, as each subseries has it's own setting there. |
 | `calculation` | object | – | Build a computed series from multiple statistics / terms (see below). |
-| `chart_type` | `"bar"`, `"line"` | `"bar"` | Chart type. |
+| `chart_type` | `"bar"`, `"line"`, `"step"` | `"bar"` | Chart type. Use `step` for staircase lines that hold a value until the next change. |
 | `stack` | string | – | Stack key for combining series. Series with identical keys will get stacked on top of each other. |
 | `y_axis` | `"left"`, `"right"` | `"left"` | Axis assignment. |
 | `show_in_legend` | boolean | `true` | Whether to display this series in the legend. If `false`, the series remains visible in the chart but has no legend entry. |

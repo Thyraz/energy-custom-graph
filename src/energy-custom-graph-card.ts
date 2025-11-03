@@ -48,6 +48,7 @@ import type {
   EnergyCustomGraphCalculationConfig,
   EnergyCustomGraphCalculationTerm,
   EnergyCustomGraphTimespanConfig,
+  EnergyCustomGraphChartType,
   EnergyCustomGraphAggregationTarget,
   EnergyCustomGraphRawOptions,
 } from "./types";
@@ -1852,14 +1853,13 @@ export class EnergyCustomGraphCard extends LitElement {
 
     const extendMainToNow = this._statisticsPeriod === "raw";
     const extendCompareToNow = this._statisticsPeriodCompare === "raw";
-    if (extendMainToNow || extendCompareToNow) {
-      this._extendLineSeriesToNow(
-        combinedSeries,
-        displayEnd,
-        extendMainToNow,
-        extendCompareToNow
-      );
-    }
+    this._extendLineSeriesToNow(
+      combinedSeries,
+      combinedSeriesById,
+      displayEnd,
+      extendMainToNow,
+      extendCompareToNow
+    );
 
     this._applyBarStyling(combinedSeries, bucketSequence);
 
@@ -2019,77 +2019,202 @@ export class EnergyCustomGraphCard extends LitElement {
 
   private _extendLineSeriesToNow(
     series: SeriesOption[],
+    seriesConfigById: Map<string, EnergyCustomGraphSeriesConfig>,
     displayEnd: number | null,
     extendMain: boolean,
     extendCompare: boolean
   ): void {
-    if (displayEnd === null || (!extendMain && !extendCompare)) {
-      return;
-    }
-
     const now = Date.now();
-    if (displayEnd <= now) {
-      return;
-    }
 
     series.forEach((serie) => {
       if (serie.type !== "line" || !Array.isArray(serie.data) || !serie.data.length) {
         return;
       }
 
-      const isCompare =
-        typeof serie.id === "string" && serie.id.endsWith("--compare");
-      if ((isCompare && !extendCompare) || (!isCompare && !extendMain)) {
+      const serieId = typeof serie.id === "string" ? serie.id : undefined;
+      const config = serieId ? seriesConfigById.get(serieId) : undefined;
+      const chartType = config?.chart_type ?? this._inferChartTypeFromSeriesId(serieId);
+      const isCompare = !!serieId && serieId.endsWith("--compare");
+
+      const tuples = this._castSeriesDataPoints(serie.data as unknown[]);
+      if (!tuples) {
         return;
       }
 
-      const data = serie.data as Array<[number, number | null]>;
-
-      // Find last non-null point at or before "now"
-      let lastValueIndex = -1;
-      let lastValue: number | null = null;
-      for (let idx = data.length - 1; idx >= 0; idx--) {
-        const [timestamp, value] = data[idx];
-        if (timestamp > now) {
-          continue;
-        }
-        if (typeof value === "number" && Number.isFinite(value)) {
-          lastValueIndex = idx;
-          lastValue = value;
-          break;
-        }
-      }
-
-      if (lastValueIndex === -1 || lastValue === null) {
+      if (chartType === "step") {
+        const rangeEnd = isCompare
+          ? this._comparePeriodEnd?.getTime() ?? this._statisticsRangeCompare?.end ?? displayEnd
+          : displayEnd;
+        const rawLimit = typeof rangeEnd === "number" ? rangeEnd : now;
+        const limitTime = Math.min(rawLimit, now);
+        this._extendStepSeriesToLimit(tuples, limitTime);
         return;
       }
 
-      // Fill trailing nulls up to "now" with the last known value
-      for (let idx = lastValueIndex + 1; idx < data.length; idx++) {
-        const point = data[idx];
-        const timestamp = point[0];
-        if (timestamp > now) {
-          break;
-        }
-        if (point[1] === null) {
-          point[1] = lastValue;
-        }
+      const effectiveDisplayEnd = isCompare
+        ? this._statisticsRangeCompare?.end ?? displayEnd
+        : displayEnd;
+
+      if (
+        !(chartType === "line" || chartType === undefined) ||
+        effectiveDisplayEnd === null ||
+        effectiveDisplayEnd <= now
+      ) {
+        return;
       }
 
-      const hasPointAtNow = data.some(
-        (point) => Math.abs(point[0] - now) <= 1000
-      );
-
-      if (!hasPointAtNow) {
-        const insertionPoint = data.findIndex((point) => point[0] > now);
-        const newPoint: [number, number] = [now, lastValue];
-        if (insertionPoint === -1) {
-          data.push(newPoint);
-        } else {
-          data.splice(insertionPoint, 0, newPoint);
-        }
+      const shouldExtend =
+        (isCompare && extendCompare) || (!isCompare && extendMain);
+      if (!shouldExtend) {
+        return;
       }
+
+      this._extendRawLineSeriesToNow(tuples, now);
     });
+  }
+
+  private _extendRawLineSeriesToNow(
+    data: Array<[number, number | null]>,
+    now: number
+  ): void {
+    // Find last non-null point at or before "now"
+    let lastValueIndex = -1;
+    let lastValue: number | null = null;
+    for (let idx = data.length - 1; idx >= 0; idx--) {
+      const [timestamp, value] = data[idx];
+      if (timestamp > now) {
+        continue;
+      }
+      if (typeof value === "number" && Number.isFinite(value)) {
+        lastValueIndex = idx;
+        lastValue = value;
+        break;
+      }
+    }
+
+    if (lastValueIndex === -1 || lastValue === null) {
+      return;
+    }
+
+    // Fill trailing nulls up to "now" with the last known value
+    for (let idx = lastValueIndex + 1; idx < data.length; idx++) {
+      const point = data[idx];
+      const timestamp = point[0];
+      if (timestamp > now) {
+        break;
+      }
+      if (point[1] === null) {
+        point[1] = lastValue;
+      }
+    }
+
+    const hasPointAtNow = data.some(
+      (point) => Math.abs(point[0] - now) <= 1000
+    );
+
+    if (!hasPointAtNow) {
+      const insertionPoint = data.findIndex((point) => point[0] > now);
+      const newPoint: [number, number] = [now, lastValue];
+      if (insertionPoint === -1) {
+        data.push(newPoint);
+      } else {
+        data.splice(insertionPoint, 0, newPoint);
+      }
+    }
+  }
+
+  private _extendStepSeriesToLimit(
+    data: Array<[number, number | null]>,
+    limitTime: number
+  ): void {
+    if (!Number.isFinite(limitTime) || !data.length) {
+      return;
+    }
+
+    let lastValueIndex = -1;
+    for (let idx = data.length - 1; idx >= 0; idx--) {
+      const [timestamp, value] = data[idx];
+      if (timestamp > limitTime) {
+        continue;
+      }
+      if (typeof value === "number" && Number.isFinite(value)) {
+        lastValueIndex = idx;
+        break;
+      }
+    }
+
+    if (lastValueIndex === -1) {
+      return;
+    }
+
+    const lastTimestamp = data[lastValueIndex][0];
+    const lastValue = data[lastValueIndex][1];
+    if (limitTime <= lastTimestamp) {
+      return;
+    }
+    if (typeof lastValue !== "number" || !Number.isFinite(lastValue)) {
+      return;
+    }
+
+    for (let idx = lastValueIndex + 1; idx < data.length; idx++) {
+      const point = data[idx];
+      const timestamp = point[0];
+      if (timestamp > limitTime) {
+        break;
+      }
+      if (point[1] === null) {
+        point[1] = lastValue;
+      }
+    }
+
+    const insertionIndex = data.findIndex(([timestamp]) => timestamp >= limitTime);
+    if (insertionIndex === -1) {
+      data.push([limitTime, lastValue]);
+    } else if (data[insertionIndex][0] === limitTime) {
+      if (data[insertionIndex][1] === null) {
+        data[insertionIndex][1] = lastValue;
+      }
+    } else {
+      data.splice(insertionIndex, 0, [limitTime, lastValue]);
+    }
+  }
+
+  private _castSeriesDataPoints(
+    rawData: unknown[]
+  ): Array<[number, number | null]> | null {
+    if (!Array.isArray(rawData)) {
+      return null;
+    }
+    for (const point of rawData) {
+      if (!Array.isArray(point) || point.length < 2) {
+        return null;
+      }
+      if (typeof point[0] !== "number") {
+        return null;
+      }
+    }
+    return rawData as Array<[number, number | null]>;
+  }
+
+  private _inferChartTypeFromSeriesId(
+    id: string | undefined
+  ): EnergyCustomGraphChartType | undefined {
+    if (!id) {
+      return undefined;
+    }
+    const baseId = id.endsWith("--compare") ? id.slice(0, -9) : id;
+    const parts = baseId.split(":");
+    if (parts.length >= 3) {
+      const candidate = parts[2];
+      if (
+        candidate === "bar" ||
+        candidate === "line" ||
+        candidate === "step"
+      ) {
+        return candidate;
+      }
+    }
+    return undefined;
   }
 
   private _createCompareTransform():
