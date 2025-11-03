@@ -1,7 +1,7 @@
 import type { LovelaceCardConfig } from "custom-card-helpers";
 import type { StatisticsPeriod } from "./data/statistics";
 
-export type EnergyCustomGraphChartType = "bar" | "line";
+export type EnergyCustomGraphChartType = "bar" | "line" | "step";
 
 export type EnergyCustomGraphStatisticType =
   | "change"

@@ -217,12 +217,16 @@ export const buildSeries = ({
       : undefined;
     const statType = seriesConfig.stat_type ?? "change";
     const chartType = seriesConfig.chart_type ?? "bar";
+    const isLine = chartType === "line";
+    const isStep = chartType === "step";
+    const isLineLike = isLine || isStep;
     const multiplier = seriesConfig.multiply ?? 1;
     const offset = seriesConfig.add ?? 0;
-    const smoothValue =
+    const rawSmooth =
       typeof seriesConfig.smooth === "number"
         ? Math.max(0, Math.min(1, seriesConfig.smooth))
         : seriesConfig.smooth;
+    const smoothValue = isLine ? rawSmooth : undefined;
     const shouldFill = seriesConfig.fill === true;
     const name =
       seriesConfig.name ??
@@ -297,7 +301,7 @@ export const buildSeries = ({
       }
     );
 
-    if (chartType === "line") {
+    if (isLineLike) {
       const fillOpacity =
         typeof seriesConfig.fill_opacity === "number"
           ? clampAlpha(seriesConfig.fill_opacity)
@@ -315,7 +319,7 @@ export const buildSeries = ({
         id,
         name,
         type: "line",
-        smooth: smoothValue ?? true,
+        smooth: isStep ? false : smoothValue ?? true,
         showSymbol: false,
         areaStyle: shouldFill ? {} : undefined,
         data: dataPoints,
@@ -337,6 +341,9 @@ export const buildSeries = ({
         itemStyle: { ...lineItemStyle },
         color: lineColor,
       };
+      if (isStep) {
+        lineSeries.step = "end";
+      }
       if (shouldFill) {
         lineSeries.areaStyle = {
           ...(lineSeries.areaStyle ?? {}),
@@ -425,7 +432,7 @@ export const buildSeries = ({
       legend.push({
         id,
         name,
-        color: chartType === "line" ? lineColor : colorValue,
+        color: isLineLike ? lineColor : colorValue,
         hidden: seriesConfig.hidden_by_default === true,
       });
     }

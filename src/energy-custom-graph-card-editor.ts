@@ -800,6 +800,7 @@ ${this._renderTimespanSection(cfg)}
     const chartButtons: Array<{ value: EnergyCustomGraphChartType; label: string }> = [
       { value: "bar", label: "Bar" },
       { value: "line", label: "Line" },
+      { value: "step", label: "Step" },
     ];
     return html`
       <div class="group-card">
@@ -1219,7 +1220,8 @@ ${this._renderTimespanSection(cfg)}
 
   private _renderSeriesDisplayGroup(series: EnergyCustomGraphSeriesConfig, index: number) {
     const chartType = series.chart_type ?? "bar";
-    const fillEnabled = chartType === "line";
+    const isLineLike = chartType === "line" || chartType === "step";
+    const fillEnabled = isLineLike;
     const fillActive = fillEnabled && series.fill === true;
     const rawColor =
       typeof series.color === "string" ? series.color.trim() : undefined;
@@ -1329,23 +1331,23 @@ ${this._renderTimespanSection(cfg)}
                 </div>
               `
             : nothing}
-        <ha-textfield
-          label="Fill opacity"
-          type="number"
-          step="0.01"
-          min="0"
-          max="1"
-          helper="Default 0.15 (lines) / 0.5 (bars)"
-          .value=${series.fill_opacity !== undefined ? String(series.fill_opacity) : ""}
-          @input=${(ev: Event) =>
-            this._updateSeriesNumber(
-              index,
-              "fill_opacity",
-              (ev.target as HTMLInputElement).value
-            )}
-        ></ha-textfield>
-        ${fillActive
-          ? html`
+          <ha-textfield
+            label="Fill opacity"
+            type="number"
+            step="0.01"
+            min="0"
+            max="1"
+            helper="Default 0.15 (lines) / 0.5 (bars)"
+            .value=${series.fill_opacity !== undefined ? String(series.fill_opacity) : ""}
+            @input=${(ev: Event) =>
+              this._updateSeriesNumber(
+                index,
+                "fill_opacity",
+                (ev.target as HTMLInputElement).value
+              )}
+          ></ha-textfield>
+          ${fillActive
+            ? html`
                 <ha-textfield
                   label="Fill to series"
                   helper="Name of the line series to fill towards"
@@ -1370,7 +1372,7 @@ ${this._renderTimespanSection(cfg)}
             @input=${(ev: Event) =>
               this._updateSeriesNumber(index, "line_opacity", (ev.target as HTMLInputElement).value)}
           ></ha-textfield>
-          ${chartType === "line"
+          ${isLineLike
             ? html`
                 <ha-textfield
                   label="Line width"
@@ -1420,6 +1422,8 @@ ${this._renderTimespanSection(cfg)}
   }
 
   private _renderSeriesTransformGroup(series: EnergyCustomGraphSeriesConfig, index: number) {
+    const chartType = series.chart_type ?? "bar";
+    const showSmooth = chartType === "line";
     return html`
       <div class="group-card">
         <div class="group-header">
@@ -1440,13 +1444,17 @@ ${this._renderTimespanSection(cfg)}
             @input=${(ev: Event) =>
               this._updateSeriesNumber(index, "add", (ev.target as HTMLInputElement).value)}
           ></ha-textfield>
-          <ha-textfield
-            label="Smooth"
-            helper="Boolean or number (0-1). Leave empty for default."
-            .value=${series.smooth !== undefined ? String(series.smooth) : ""}
-            @input=${(ev: Event) =>
-              this._updateSeriesSmooth(index, (ev.target as HTMLInputElement).value)}
-          ></ha-textfield>
+          ${showSmooth
+            ? html`
+                <ha-textfield
+                  label="Smooth"
+                  helper="Boolean or number (0-1). Leave empty for default."
+                  .value=${series.smooth !== undefined ? String(series.smooth) : ""}
+                  @input=${(ev: Event) =>
+                    this._updateSeriesSmooth(index, (ev.target as HTMLInputElement).value)}
+                ></ha-textfield>
+              `
+            : nothing}
           <ha-textfield
             label="Clip min"
             type="number"
@@ -1468,10 +1476,13 @@ ${this._renderTimespanSection(cfg)}
 
   private _setSeriesChartType(index: number, type: EnergyCustomGraphChartType) {
     const series = this._config!.series ?? [];
-    if (series[index]?.chart_type === type) {
+    if (!series[index] || series[index]?.chart_type === type) {
       return;
     }
     this._updateSeries(index, "chart_type", type);
+    if (type !== "line") {
+      this._updateSeries(index, "smooth", undefined);
+    }
   }
 
   private _setSeriesLineStyle(index: number, style: "solid" | "dashed" | "dotted") {
@@ -2312,7 +2323,10 @@ ${this._renderTimespanSection(cfg)}
     return undefined;
   }
 
-  private _renderColorPreview(colorVar: string | undefined, chartType: "bar" | "line") {
+  private _renderColorPreview(
+    colorVar: string | undefined,
+    chartType: "bar" | "line" | "step"
+  ) {
     if (!colorVar) {
       return nothing;
     }
@@ -2323,8 +2337,9 @@ ${this._renderTimespanSection(cfg)}
     }
 
     // Default opacities from series-builder.ts
-    const lineOpacity = chartType === "line" ? 0.85 : 0.75; // line stroke or bar border
-    const fillOpacity = chartType === "line" ? 0.15 : 0.45; // line area or bar fill
+    const isLineLike = chartType === "line" || chartType === "step";
+    const lineOpacity = isLineLike ? 0.85 : 0.75; // line stroke or bar border
+    const fillOpacity = isLineLike ? 0.15 : 0.45; // line area or bar fill
 
     return html`
       <svg class="color-preview" width="16" height="16" viewBox="0 0 16 16">
