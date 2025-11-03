@@ -37,11 +37,11 @@ import {
 import type {
   EnergyCustomGraphCardConfig,
   EnergyCustomGraphSeriesConfig,
-  EnergyCustomGraphPeriodConfig,
   EnergyCustomGraphAxisConfig,
   EnergyCustomGraphStatisticType,
   EnergyCustomGraphCalculationConfig,
   EnergyCustomGraphCalculationTerm,
+  EnergyCustomGraphTimespanConfig,
 } from "./types";
 import { buildSeries } from "./chart/series-builder";
 import type {
@@ -50,6 +50,7 @@ import type {
   LegendOption,
   YAxisOption,
   BarSeriesOption,
+  XAxisOption,
 } from "./types/echarts";
 import { BAR_MAX_WIDTH } from "./chart/series-builder";
 
@@ -270,8 +271,11 @@ export class EnergyCustomGraphCard extends LitElement {
     const key = this._config.collection_key
       ? `_${this._config.collection_key}`
       : "_energy";
-    const connection = this.hass.connection as Record<string, unknown> | undefined;
-    const candidate = connection?.[key] as EnergyCollection | undefined;
+    const connection = this.hass.connection as unknown;
+    const candidate =
+      typeof connection === "object" && connection !== null
+        ? ((connection as Record<string, unknown>)[key] as EnergyCollection | undefined)
+        : undefined;
 
     if (candidate && typeof candidate.subscribe === "function") {
       if (this._collectionUnsub) {
@@ -416,13 +420,10 @@ export class EnergyCustomGraphCard extends LitElement {
         return energyRange;
       }
       case "relative": {
-        const base = this._defaultRelativeBase(timespanConfig.period);
-        if (!base) {
-          return undefined;
-        }
         const offset = timespanConfig.offset ?? 0;
         switch (timespanConfig.period) {
           case "hour": {
+            const base = this._defaultRelativeBase("hour");
             const start = addHours(base.start, offset);
             const end = base.end
               ? addHours(base.end, offset)
@@ -430,6 +431,7 @@ export class EnergyCustomGraphCard extends LitElement {
             return { start, end };
           }
           case "day": {
+            const base = this._defaultRelativeBase("day");
             const start = addDays(base.start, offset);
             const end = base.end
               ? addDays(base.end, offset)
@@ -437,6 +439,7 @@ export class EnergyCustomGraphCard extends LitElement {
             return { start, end };
           }
           case "week": {
+            const base = this._defaultRelativeBase("week");
             const start = addWeeks(base.start, offset);
             const end = base.end
               ? addWeeks(base.end, offset)
@@ -444,6 +447,7 @@ export class EnergyCustomGraphCard extends LitElement {
             return { start, end };
           }
           case "month": {
+            const base = this._defaultRelativeBase("month");
             const start = addMonths(base.start, offset);
             const end = base.end
               ? addMonths(base.end, offset)
@@ -476,6 +480,7 @@ export class EnergyCustomGraphCard extends LitElement {
           }
           case "year":
           default: {
+            const base = this._defaultRelativeBase("year");
             const start = addYears(base.start, offset);
             const end = base.end
               ? addYears(base.end, offset)
@@ -850,9 +855,25 @@ export class EnergyCustomGraphCard extends LitElement {
 
     const statisticIds = Array.from(statisticIdSet);
     const statTypesRaw = Array.from(statTypeSet);
-    const statTypes = statTypesRaw.length
-      ? statTypesRaw
-      : [EnergyCustomGraphCard.DEFAULT_STAT_TYPE];
+    const allowedStatTypes: EnergyCustomGraphStatisticType[] = [
+      "change",
+      "sum",
+      "mean",
+      "min",
+      "max",
+      "state",
+    ];
+    let statTypes: EnergyCustomGraphStatisticType[] | undefined;
+    if (statTypesRaw.length) {
+      const filtered = statTypesRaw.filter(
+        (type): type is EnergyCustomGraphStatisticType =>
+          allowedStatTypes.includes(type)
+      );
+      statTypes = filtered.length ? filtered : undefined;
+    }
+    if (!statTypes) {
+      statTypes = [EnergyCustomGraphCard.DEFAULT_STAT_TYPE];
+    }
 
     const aggregationPlan = this._resolveAggregationPlan(
       periodStart,
@@ -1718,7 +1739,10 @@ export class EnergyCustomGraphCard extends LitElement {
 
     const comparePlaceholders = barStackOrder
       .map((baseKey) => placeholderByBase.get(baseKey))
-      .filter((placeholder): placeholder is SeriesOption => !!placeholder);
+      .filter(
+        (placeholder): placeholder is BarSeriesOption =>
+          placeholder !== undefined
+      );
 
     const combinedSeries = [...comparePlaceholders, ...compareSeries, ...mainSeries];
 
@@ -1753,7 +1777,7 @@ export class EnergyCustomGraphCard extends LitElement {
       const axisIndex = item.yAxisIndex ?? 0;
       const axisUnit =
         axisUnitByIndex.get(axisIndex) ??
-        (this._config.show_unit === false
+        (this._config?.show_unit === false
           ? undefined
           : combinedUnits.get(item.id ?? ""));
       this._unitsBySeries.set(item.id ?? "", axisUnit);
@@ -1765,7 +1789,7 @@ export class EnergyCustomGraphCard extends LitElement {
       ? this._computeSuggestedXAxisMax(this._periodStart, this._periodEnd)
       : (this._periodEnd ?? new Date()).getTime();
 
-    const xAxis = [
+    const xAxis: XAxisOption[] = [
       {
         id: "primary",
         type: "time",
