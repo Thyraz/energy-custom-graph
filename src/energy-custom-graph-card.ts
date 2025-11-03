@@ -1850,6 +1850,17 @@ export class EnergyCustomGraphCard extends LitElement {
       this._normalizeLineSeries(combinedSeries, bucketSequence);
     }
 
+    const extendMainToNow = this._statisticsPeriod === "raw";
+    const extendCompareToNow = this._statisticsPeriodCompare === "raw";
+    if (extendMainToNow || extendCompareToNow) {
+      this._extendLineSeriesToNow(
+        combinedSeries,
+        displayEnd,
+        extendMainToNow,
+        extendCompareToNow
+      );
+    }
+
     this._applyBarStyling(combinedSeries, bucketSequence);
 
     if (!combinedSeries.length) {
@@ -2003,6 +2014,81 @@ export class EnergyCustomGraphCard extends LitElement {
       });
 
       serie.data = normalizedData;
+    });
+  }
+
+  private _extendLineSeriesToNow(
+    series: SeriesOption[],
+    displayEnd: number | null,
+    extendMain: boolean,
+    extendCompare: boolean
+  ): void {
+    if (displayEnd === null || (!extendMain && !extendCompare)) {
+      return;
+    }
+
+    const now = Date.now();
+    if (displayEnd <= now) {
+      return;
+    }
+
+    series.forEach((serie) => {
+      if (serie.type !== "line" || !Array.isArray(serie.data) || !serie.data.length) {
+        return;
+      }
+
+      const isCompare =
+        typeof serie.id === "string" && serie.id.endsWith("--compare");
+      if ((isCompare && !extendCompare) || (!isCompare && !extendMain)) {
+        return;
+      }
+
+      const data = serie.data as Array<[number, number | null]>;
+
+      // Find last non-null point at or before "now"
+      let lastValueIndex = -1;
+      let lastValue: number | null = null;
+      for (let idx = data.length - 1; idx >= 0; idx--) {
+        const [timestamp, value] = data[idx];
+        if (timestamp > now) {
+          continue;
+        }
+        if (typeof value === "number" && Number.isFinite(value)) {
+          lastValueIndex = idx;
+          lastValue = value;
+          break;
+        }
+      }
+
+      if (lastValueIndex === -1 || lastValue === null) {
+        return;
+      }
+
+      // Fill trailing nulls up to "now" with the last known value
+      for (let idx = lastValueIndex + 1; idx < data.length; idx++) {
+        const point = data[idx];
+        const timestamp = point[0];
+        if (timestamp > now) {
+          break;
+        }
+        if (point[1] === null) {
+          point[1] = lastValue;
+        }
+      }
+
+      const hasPointAtNow = data.some(
+        (point) => Math.abs(point[0] - now) <= 1000
+      );
+
+      if (!hasPointAtNow) {
+        const insertionPoint = data.findIndex((point) => point[0] > now);
+        const newPoint: [number, number] = [now, lastValue];
+        if (insertionPoint === -1) {
+          data.push(newPoint);
+        } else {
+          data.splice(insertionPoint, 0, newPoint);
+        }
+      }
     });
   }
 
