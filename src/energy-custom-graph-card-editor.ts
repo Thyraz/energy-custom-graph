@@ -15,6 +15,7 @@ import type {
   EnergyCustomGraphTimespanConfig,
 } from "./types";
 import type { StatisticsPeriod } from "./data/statistics";
+import { DEFAULT_COLORS } from "./chart/series-builder";
 
 const ENERGY_COLOR_PRESETS: Array<{ label: string; value: string }> = [
   { label: "Grid Import • Blue", value: "--energy-grid-consumption-color" },
@@ -46,6 +47,9 @@ const AGGREGATION_OPTIONS: Array<{ value: StatisticsPeriod; label: string }> = [
 
 type AggregationPickerKey = "hour" | "day" | "week" | "month" | "year";
 
+const COLOR_SELECT_DEFAULT = "__default__";
+const COLOR_SELECT_CUSTOM = "__custom__";
+
 @customElement("energy-custom-graph-card-editor")
 export class EnergyCustomGraphCardEditor
   extends LitElement
@@ -60,6 +64,8 @@ export class EnergyCustomGraphCardEditor
   @state() private _expandedTermKeys = new Set<string>();
   @state() private _axesExpanded = false;
   @state() private _aggregationExpanded = false;
+  @state() private _customColorDrafts: Map<number, string> = new Map();
+  @state() private _colorModeSelections: Map<number, string> = new Map();
 
   async connectedCallback() {
     super.connectedCallback();
@@ -89,6 +95,8 @@ export class EnergyCustomGraphCardEditor
       ...config,
       series: normalizedSeries,
     };
+    this._syncCustomColorDrafts(normalizedSeries);
+    this._syncColorSelections(normalizedSeries);
 
     if (!hadConfig) {
       this._expandedSeries = new Set();
@@ -1122,8 +1130,31 @@ ${this._renderTimespanSection(cfg)}
     const chartType = series.chart_type ?? "bar";
     const fillEnabled = chartType === "line";
     const fillActive = fillEnabled && series.fill === true;
-    const presetValue =
-      ENERGY_COLOR_PRESETS.find((item) => item.value === series.color)?.value ?? "";
+    const rawColor =
+      typeof series.color === "string" ? series.color.trim() : undefined;
+    const presetToken = this._extractPresetToken(rawColor);
+    const configColorMode = !rawColor
+      ? COLOR_SELECT_DEFAULT
+      : presetToken
+        ? presetToken
+        : COLOR_SELECT_CUSTOM;
+    const overrideMode = this._colorModeSelections.get(index);
+    const colorMode = overrideMode ?? configColorMode;
+    const storedCustom = this._customColorDrafts.get(index);
+    const autoColorToken = this._resolveAutoColorToken(index);
+    const customTextValue =
+      colorMode === COLOR_SELECT_CUSTOM
+        ? storedCustom ?? rawColor ?? ""
+        : storedCustom ?? "";
+    const previewToken =
+      colorMode === COLOR_SELECT_DEFAULT
+        ? autoColorToken
+        : colorMode === COLOR_SELECT_CUSTOM
+          ? customTextValue || rawColor || autoColorToken
+          : colorMode;
+    const previewColor =
+      previewToken !== undefined ? this._normalizeColorToken(previewToken) : undefined;
+    const customInputValue = colorMode === COLOR_SELECT_CUSTOM ? customTextValue ?? "" : "";
     return html`
       <div class="group-card">
         <div class="group-header">
@@ -1132,40 +1163,53 @@ ${this._renderTimespanSection(cfg)}
         <div class="group-body">
           <div class="color-row">
             <div class="field">
-              <label>Preset color</label>
+              <label>Series color</label>
               <div class="color-select-wrapper">
-                ${this._renderColorPreview(series.color ?? presetValue, chartType)}
+                ${this._renderColorPreview(previewColor, chartType)}
                 <select
+                  .value=${colorMode}
                   @change=${(ev: Event) =>
-                    this._updateSeries(
-                      index,
-                      "color",
-                      (ev.target as HTMLSelectElement).value || undefined
-                    )}
+                    this._handleSeriesColorSelect(index, (ev.target as HTMLSelectElement).value)}
                 >
-                  <option value="" ?selected=${presetValue === ""}>Custom</option>
+                  <option
+                    value=${COLOR_SELECT_DEFAULT}
+                    ?selected=${colorMode === COLOR_SELECT_DEFAULT}
+                  >
+                    Default (Auto palette)
+                  </option>
                   ${ENERGY_COLOR_PRESETS.map(
                     (preset) =>
-                      html`<option value=${preset.value} ?selected=${presetValue === preset.value}>
+                      html`<option
+                        value=${preset.value}
+                        ?selected=${colorMode === preset.value}
+                      >
                         ${preset.label}
                       </option>`
                   )}
+                  <option
+                    value=${COLOR_SELECT_CUSTOM}
+                    ?selected=${colorMode === COLOR_SELECT_CUSTOM}
+                  >
+                    Custom
+                  </option>
                 </select>
               </div>
             </div>
-            ${presetValue === ""
-              ? html`<ha-textfield
-                  label="Custom color"
-                  .value=${series.color ?? ""}
-                  @input=${(ev: Event) =>
-                    this._updateSeries(
-                      index,
-                      "color",
-                      (ev.target as HTMLInputElement).value || undefined
-                    )}
-                ></ha-textfield>`
-              : nothing}
           </div>
+          ${colorMode === COLOR_SELECT_CUSTOM
+            ? html`
+                <div class="color-row">
+                  <ha-textfield
+                    label="Custom color"
+                    .value=${customInputValue ?? ""}
+                    @input=${(ev: Event) => {
+                      const target = ev.target as HTMLInputElement;
+                      this._handleCustomColorInput(index, target.value);
+                    }}
+                  ></ha-textfield>
+                </div>
+              `
+            : nothing}
           <div class="row">
             <ha-switch
               .checked=${series.show_in_legend !== false}
@@ -1804,7 +1848,60 @@ ${this._renderTimespanSection(cfg)}
       config.series = [];
     }
     this._config = config;
+    this._syncCustomColorDrafts(config.series ?? []);
+    this._syncColorSelections(config.series ?? []);
     fireEvent(this, "config-changed", { config });
+  }
+
+  private _syncCustomColorDrafts(series: EnergyCustomGraphSeriesConfig[]) {
+    const nextDrafts = new Map<number, string>();
+    series.forEach((item, index) => {
+      if (!item) {
+        return;
+      }
+      const rawColor =
+        typeof item.color === "string" ? item.color.trim() : undefined;
+      const presetToken = this._extractPresetToken(rawColor);
+      const isPreset =
+        presetToken !== undefined &&
+        ENERGY_COLOR_PRESETS.some((preset) => preset.value === presetToken);
+      if (rawColor && !isPreset) {
+        nextDrafts.set(index, rawColor);
+        return;
+      }
+      if (!rawColor && this._customColorDrafts.has(index)) {
+        const existing = this._customColorDrafts.get(index);
+        if (existing !== undefined) {
+          nextDrafts.set(index, existing);
+        }
+      }
+    });
+    this._customColorDrafts = nextDrafts;
+  }
+
+  private _syncColorSelections(series: EnergyCustomGraphSeriesConfig[]) {
+    const nextSelections = new Map<number, string>();
+    series.forEach((item, index) => {
+      const rawColor =
+        typeof item.color === "string" ? item.color.trim() : undefined;
+      const presetToken = this._extractPresetToken(rawColor);
+      const defaultSelection = !rawColor
+        ? COLOR_SELECT_DEFAULT
+        : presetToken
+          ? presetToken
+          : COLOR_SELECT_CUSTOM;
+      const existing = this._colorModeSelections.get(index);
+      if (existing === COLOR_SELECT_CUSTOM) {
+        nextSelections.set(index, COLOR_SELECT_CUSTOM);
+        return;
+      }
+      if (existing && existing === defaultSelection) {
+        nextSelections.set(index, existing);
+        return;
+      }
+      nextSelections.set(index, defaultSelection);
+    });
+    this._colorModeSelections = nextSelections;
   }
 
   private _updateBooleanConfig(
@@ -1943,20 +2040,192 @@ ${this._renderTimespanSection(cfg)}
     this._activeTab = tab;
   }
 
+  private _setColorSelection(index: number, mode: string | undefined) {
+    const next = new Map(this._colorModeSelections);
+    if (mode === undefined) {
+      next.delete(index);
+    } else {
+      next.set(index, mode);
+    }
+    this._colorModeSelections = next;
+  }
+
+  private _setCustomColorDraft(index: number, value: string | undefined) {
+    const next = new Map(this._customColorDrafts);
+    if (value === undefined) {
+      next.delete(index);
+    } else {
+      const trimmed = value.trim();
+      if (trimmed) {
+        next.set(index, trimmed);
+      } else {
+        next.delete(index);
+      }
+    }
+    this._customColorDrafts = next;
+  }
+
+  private _handleSeriesColorSelect(index: number, rawValue: string) {
+    if (!this._config) {
+      return;
+    }
+
+    const trimmedValue = rawValue.trim();
+    const seriesList = this._config.series ?? [];
+    const currentEntry = seriesList[index];
+    const current =
+      typeof currentEntry?.color === "string"
+        ? currentEntry.color.trim()
+        : undefined;
+
+    if (trimmedValue === COLOR_SELECT_DEFAULT) {
+      this._setColorSelection(index, COLOR_SELECT_DEFAULT);
+      this._setCustomColorDraft(index, undefined);
+      this._updateSeries(index, "color", undefined);
+      return;
+    }
+
+    if (trimmedValue === COLOR_SELECT_CUSTOM) {
+      const fallback =
+        this._customColorDrafts.get(index) ??
+        current ??
+        this._resolveAutoColorToken(index) ??
+        "";
+      this._setCustomColorDraft(index, fallback);
+      this._setColorSelection(index, COLOR_SELECT_CUSTOM);
+      if (current && !this._extractPresetToken(current)) {
+        this._updateSeries(index, "color", current);
+      }
+      return;
+    }
+
+    this._setColorSelection(index, trimmedValue);
+    this._setCustomColorDraft(index, undefined);
+    this._updateSeries(index, "color", trimmedValue);
+  }
+
+  private _handleCustomColorInput(index: number, raw: string) {
+    const value = raw.trim();
+    this._setColorSelection(index, COLOR_SELECT_CUSTOM);
+    if (value) {
+      this._setCustomColorDraft(index, value);
+      this._updateSeries(index, "color", value);
+    } else {
+      this._setCustomColorDraft(index, undefined);
+      this._updateSeries(index, "color", undefined);
+    }
+  }
+
+  private _deriveCustomDraftForSeries(index: number): string | undefined {
+    const series = this._config?.series?.[index];
+    if (!series) {
+      return undefined;
+    }
+    const rawColor =
+      typeof series.color === "string" ? series.color.trim() : undefined;
+    if (rawColor) {
+      return rawColor;
+    }
+    return this._resolveAutoColorToken(index);
+  }
+
+  private _resolveAutoColor(index: number): string | undefined {
+    const token = this._resolveAutoColorToken(index);
+    if (!token) {
+      return undefined;
+    }
+    return this._normalizeColorToken(token);
+  }
+
+  private _resolveAutoColorToken(index: number): string | undefined {
+    const palette = this._config?.color_cycle ?? [];
+    const tokens = palette.length > 0 ? palette : DEFAULT_COLORS;
+    if (tokens.length === 0) {
+      return undefined;
+    }
+    return tokens[index % tokens.length];
+  }
+
+  private _extractPresetToken(color: string | undefined): string | undefined {
+    if (!color) {
+      return undefined;
+    }
+    const trimmed = color.trim();
+    if (!trimmed) {
+      return undefined;
+    }
+    if (trimmed.startsWith("var(") && trimmed.endsWith(")")) {
+      const inner = trimmed.slice(4, -1).trim();
+      const commaIndex = inner.indexOf(",");
+      const variable = commaIndex === -1 ? inner : inner.slice(0, commaIndex).trim();
+      return variable.startsWith("--") ? variable : undefined;
+    }
+    if (trimmed.startsWith("--")) {
+      return trimmed;
+    }
+    return undefined;
+  }
+
+  private _normalizeColorToken(color: string | undefined): string {
+    if (!color) {
+      return "";
+    }
+    const trimmed = color.trim();
+    if (!trimmed) {
+      return "";
+    }
+    if (trimmed.startsWith("var(") && trimmed.endsWith(")")) {
+      const inner = trimmed.slice(4, -1).trim();
+      const commaIndex = inner.indexOf(",");
+      const variable = commaIndex === -1 ? inner : inner.slice(0, commaIndex).trim();
+      const fallback =
+        commaIndex === -1 ? undefined : inner.slice(commaIndex + 1).trim();
+      const resolvedVar = this._lookupCssVariable(variable);
+      if (resolvedVar) {
+        return resolvedVar;
+      }
+      if (fallback) {
+        return this._normalizeColorToken(fallback);
+      }
+      return trimmed;
+    }
+    if (trimmed.startsWith("--")) {
+      const resolved = this._lookupCssVariable(trimmed);
+      return resolved ?? trimmed;
+    }
+    return trimmed;
+  }
+
+  private _lookupCssVariable(token: string | undefined): string | undefined {
+    if (!token || !token.startsWith("--")) {
+      return undefined;
+    }
+    const stylesToCheck: CSSStyleDeclaration[] = [];
+    try {
+      if (this.isConnected) {
+        stylesToCheck.push(getComputedStyle(this));
+      }
+    } catch (_e) {
+      // Ignore – getComputedStyle may throw if element is not connected yet.
+    }
+    stylesToCheck.push(getComputedStyle(document.documentElement));
+    for (const style of stylesToCheck) {
+      const value = style.getPropertyValue(token)?.trim();
+      if (value) {
+        return value;
+      }
+    }
+    return undefined;
+  }
+
   private _renderColorPreview(colorVar: string | undefined, chartType: "bar" | "line") {
     if (!colorVar) {
       return nothing;
     }
 
-    // Get computed color value from CSS variable
-    const computedStyle = getComputedStyle(this);
-    let colorValue = colorVar;
-
-    if (colorVar.startsWith("--")) {
-      colorValue = computedStyle.getPropertyValue(colorVar).trim() || colorVar;
-    } else if (colorVar.startsWith("var(")) {
-      const extracted = colorVar.slice(4, -1).trim();
-      colorValue = computedStyle.getPropertyValue(extracted).trim() || colorVar;
+    const colorValue = this._normalizeColorToken(colorVar);
+    if (!colorValue) {
+      return nothing;
     }
 
     // Default opacities from series-builder.ts
