@@ -1527,6 +1527,8 @@ export class EnergyCustomGraphCard extends LitElement {
     const normalizedBarStacks = new Map<string, string>();
     const placeholderByBase = new Map<string, BarSeriesOption>();
     const barStackOrder: string[] = [];
+    const barStackZByBase = new Map<string, number>();
+    const BAR_Z_BASE = 10;
     let generatedBarStackCounter = 0;
 
     const getBaseKeyForBar = (rawStack?: string): string => {
@@ -1543,12 +1545,16 @@ export class EnergyCustomGraphCard extends LitElement {
       return `series-${generatedBarStackCounter}`;
     };
 
-    const ensurePlaceholder = (baseKey: string) => {
-      if (placeholderByBase.has(baseKey)) {
-        return;
+    const ensurePlaceholder = (baseKey: string, baseZ: number) => {
+      const placeholderZ = Math.max(baseZ - 3, 0);
+      const existing = placeholderByBase.get(baseKey);
+      if (existing) {
+        existing.stack = `${baseKey}--current`;
+        existing.z = placeholderZ;
+        return existing;
       }
       barStackOrder.push(baseKey);
-      placeholderByBase.set(baseKey, {
+      const placeholder: BarSeriesOption = {
         id: `${baseKey}--compare-placeholder`,
         type: "bar",
         stack: `${baseKey}--current`,
@@ -1564,8 +1570,10 @@ export class EnergyCustomGraphCard extends LitElement {
           disabled: true,
         },
         barMaxWidth: BAR_MAX_WIDTH,
-        z: -2,
-      });
+        z: placeholderZ,
+      };
+      placeholderByBase.set(baseKey, placeholder);
+      return placeholder;
     };
 
     mainSeries.forEach((serie, index) => {
@@ -1579,8 +1587,17 @@ export class EnergyCustomGraphCard extends LitElement {
           : undefined;
       const baseKey = getBaseKeyForBar(rawStack);
       barStackBaseById.set(id, baseKey);
+      const baseZCandidate =
+        typeof serie.z === "number" && Number.isFinite(serie.z)
+          ? Math.max(serie.z, BAR_Z_BASE)
+          : BAR_Z_BASE;
+      const resolvedBaseZ = barStackZByBase.has(baseKey)
+        ? Math.max(barStackZByBase.get(baseKey)!, baseZCandidate)
+        : baseZCandidate;
+      serie.z = resolvedBaseZ;
       serie.stack = `${baseKey}--current`;
-      ensurePlaceholder(baseKey);
+      barStackZByBase.set(baseKey, resolvedBaseZ);
+      ensurePlaceholder(baseKey, resolvedBaseZ);
     });
 
     let compareSeries: SeriesOption[] = [];
@@ -1645,7 +1662,7 @@ export class EnergyCustomGraphCard extends LitElement {
           ...serie,
           id: compareId,
           name: `${serie.name ?? baseId} (Compare)`,
-          z: (serie.z ?? 0) - 1,
+          z: serie.z,
         };
 
         if (Array.isArray(cloned.data)) {
@@ -1663,13 +1680,25 @@ export class EnergyCustomGraphCard extends LitElement {
                 : undefined;
             baseKey = getBaseKeyForBar(rawStack);
             barStackBaseById.set(baseId, baseKey);
-            ensurePlaceholder(baseKey);
+            const fallbackZ = BAR_Z_BASE;
+            barStackZByBase.set(baseKey, fallbackZ);
+            ensurePlaceholder(baseKey, fallbackZ);
           }
+          const candidateZ =
+            typeof serie.z === "number" && Number.isFinite(serie.z)
+              ? Math.max(serie.z, BAR_Z_BASE)
+              : BAR_Z_BASE;
+          const storedZ = barStackZByBase.get(baseKey);
+          const baseZ = storedZ ? Math.max(storedZ, candidateZ) : candidateZ;
+          barStackZByBase.set(baseKey, baseZ);
+          ensurePlaceholder(baseKey, baseZ);
           const placeholder = placeholderByBase.get(baseKey);
           if (placeholder) {
             placeholder.stack = `${baseKey}--compare`;
+            placeholder.z = Math.max(baseZ - 3, 0);
           }
           cloned.stack = `${baseKey}--compare`;
+          cloned.z = Math.max(baseZ, BAR_Z_BASE);
           this._styleCompareSeries(cloned);
           compareSeriesTemp.push(cloned);
         } else {
@@ -1775,8 +1804,6 @@ export class EnergyCustomGraphCard extends LitElement {
     if (legendOption) {
       options.legend = legendOption;
     }
-
-    console.log(combinedSeries.filter((s) => s.type === "bar").map((s) => ({ id: s.id, stack: s.stack, order: (s as any).order, z: s.z })));
 
     this._chartData = combinedSeries;
     this._chartOptions = options;
@@ -2088,7 +2115,8 @@ export class EnergyCustomGraphCard extends LitElement {
       (serie as any).connectNulls = false;
     }
 
-    serie.z = (serie.z ?? 0) - 1;
+    const baseZ = (serie.z ?? 0) - 1;
+    serie.z = baseZ < 0 ? 0 : baseZ;
   }
 
   private _buildBucketSequence(
