@@ -304,7 +304,7 @@ export const buildSeries = ({
           : defaultLineFillOpacity;
       const fillColor = applyAlpha(colorValue, fillOpacity);
 
-      const lineWidth = seriesConfig.line_width ?? 2;
+      const lineWidth = seriesConfig.line_width ?? 1.5;
       const lineStyleType = seriesConfig.line_style ?? "solid";
 
       const lineItemStyle = {

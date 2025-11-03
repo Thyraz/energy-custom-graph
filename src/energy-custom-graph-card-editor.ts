@@ -1288,7 +1288,7 @@ ${this._renderTimespanSection(cfg)}
                   type="number"
                   step="0.5"
                   min="0.5"
-                  helper="Default 2"
+                  helper="Default 1.5"
                   .value=${series.line_width !== undefined ? String(series.line_width) : ""}
                   @input=${(ev: Event) =>
                     this._updateSeriesNumber(

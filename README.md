@@ -129,7 +129,7 @@ Display a fixed time range. Dates use ISO 8601 format. If omitted, `start` defau
 | `hidden_by_default` | boolean | `false` | Whether the series is initially hidden when the chart loads. The series can still be toggled via the legend. |
 | `color` | string | next in palette | Specific color (supports `#rrggbb`, `rgb()` or CSS variables). |
 | `line_opacity` | number | style default | Override stroke opacity (0–1). Defaults to 0.85 for line charts and 1.0 for bar outlines. |
-| `line_width` | number | `2` | Line thickness in pixels (line charts only). |
+| `line_width` | number | `1.5` | Line thickness in pixels (line charts only). |
 | `line_style` | `"solid"`, `"dashed"`, `"dotted"` | `"solid"` | Line pattern style (line charts only). |
 | `fill` | boolean | `false` | Fill the area underneath the line. |
 | `fill_opacity` | number | style default | Override fill opacity (0–1). Defaults to 0.15 for line charts and 0.5 for bars. |
