@@ -1259,6 +1259,18 @@ export class EnergyCustomGraphCard extends LitElement {
         number,
         { value: number | null; start?: number; end?: number }
       >;
+      timeline?: Array<{
+        timestamp: number;
+        value: number | null;
+        start?: number;
+        end?: number;
+      }>;
+      cursor?: number;
+      lastNonNull?: {
+        value: number;
+        start?: number;
+        end?: number;
+      };
       constant?: number;
       unit?: string | null;
     };
@@ -1285,6 +1297,7 @@ export class EnergyCustomGraphCard extends LitElement {
           number,
           { value: number | null; start?: number; end?: number }
         >();
+        const timeline: NonNullable<TermResolvedData["timeline"]> = [];
 
         if (!raw?.length) {
           if (!missingStatWarnings.has(term.statistic_id)) {
@@ -1317,13 +1330,21 @@ export class EnergyCustomGraphCard extends LitElement {
               start: entry.start,
               end: entry.end,
             });
+            timeline.push({
+              timestamp,
+              value: processed,
+              start: entry.start,
+              end: entry.end,
+            });
             timestampSet.add(timestamp);
           });
+          timeline.sort((a, b) => a.timestamp - b.timestamp);
         }
 
         termData.push({
           term,
           data: map,
+          timeline: timeline.length ? timeline : undefined,
           unit:
             metadata?.[term.statistic_id]?.statistics_unit_of_measurement ??
             undefined,
@@ -1364,15 +1385,21 @@ export class EnergyCustomGraphCard extends LitElement {
 
         let termValue: number;
         if (item.data) {
-          const entry = item.data.get(timestamp);
-          if (entry?.start !== undefined && start === undefined) {
-            start = entry.start;
-          }
-          if (entry?.end !== undefined && end === undefined) {
-            end = entry.end;
-          }
-
-          if (entry?.value === null || entry === undefined) {
+          const resolved = this._resolveCalculationTermValue(
+            item,
+            timestamp
+          );
+          if (resolved) {
+            const resolvedStart = resolved.start ?? timestamp;
+            const resolvedEnd = resolved.end ?? timestamp;
+            if (start === undefined) {
+              start = resolvedStart;
+            }
+            if (end === undefined) {
+              end = resolvedEnd;
+            }
+            termValue = resolved.value;
+          } else {
             termValue = 0;
             const statId = item.term.statistic_id;
             if (statId && !missingValueWarnings.has(statId)) {
@@ -1381,8 +1408,6 @@ export class EnergyCustomGraphCard extends LitElement {
               );
               missingValueWarnings.add(statId);
             }
-          } else {
-            termValue = entry.value;
           }
         } else {
           termValue = item.constant ?? 0;
@@ -1438,6 +1463,75 @@ export class EnergyCustomGraphCard extends LitElement {
       null;
 
     return { values, unit };
+  }
+
+  private _resolveCalculationTermValue(
+    termData: {
+      data?: Map<number, { value: number | null; start?: number; end?: number }>;
+      timeline?: Array<{
+        timestamp: number;
+        value: number | null;
+        start?: number;
+        end?: number;
+      }>;
+      cursor?: number;
+      lastNonNull?: {
+        value: number;
+        start?: number;
+        end?: number;
+      };
+      term: EnergyCustomGraphCalculationTerm;
+    },
+    timestamp: number
+  ): { value: number; start?: number; end?: number } | null {
+    const direct = termData.data?.get(timestamp);
+    if (direct && typeof direct.value === "number" && Number.isFinite(direct.value)) {
+      termData.lastNonNull = {
+        value: direct.value,
+        start: direct.start,
+        end: direct.end,
+      };
+      return {
+        value: direct.value,
+        start: direct.start,
+        end: direct.end,
+      };
+    }
+
+    const timeline = termData.timeline;
+    if (!timeline || !timeline.length) {
+      return null;
+    }
+
+    if (termData.cursor === undefined) {
+      termData.cursor = 0;
+    }
+
+    while (
+      termData.cursor < timeline.length &&
+      timeline[termData.cursor].timestamp <= timestamp
+    ) {
+      const candidate = timeline[termData.cursor];
+      if (typeof candidate.value === "number" && Number.isFinite(candidate.value)) {
+        termData.lastNonNull = {
+          value: candidate.value,
+          start: candidate.start,
+          end: candidate.end,
+        };
+      }
+      termData.cursor += 1;
+    }
+
+    const fallback = termData.lastNonNull;
+    if (fallback) {
+      return {
+        value: fallback.value,
+        start: fallback.start,
+        end: fallback.end,
+      };
+    }
+
+    return null;
   }
 
   private _statisticsHaveData(

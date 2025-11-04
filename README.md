@@ -145,6 +145,8 @@ Display a fixed time range. Dates use ISO 8601 format. If omitted, `start` defau
 
 Configure `calculation` instead of `statistic_id` to compute a series from multiple entity statistics. Terms are processed sequentially, starting with the `initial_value` (default `0`).
 
+> **RAW data behaviour:** When you combine raw history series, the card reuses the most recent available value for each term at the evaluated timestamp. This “last-known value” fallback keeps calculations stable even if sensors don’t report at identical times.
+
 | Key | Type | Default | Description |
 | --- | ---- | ------- | ----------- |
 | `terms` | list | – | Ordered list of calculation steps. |
