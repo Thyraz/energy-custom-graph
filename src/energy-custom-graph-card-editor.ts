@@ -51,6 +51,7 @@ type AggregationPickerKey = "hour" | "day" | "week" | "month" | "year";
 
 const COLOR_SELECT_DEFAULT = "__default__";
 const COLOR_SELECT_CUSTOM = "__custom__";
+const COLOR_SELECT_INHERIT = "__inherit__";
 
 @customElement("energy-custom-graph-card-editor")
 export class EnergyCustomGraphCardEditor
@@ -68,6 +69,8 @@ export class EnergyCustomGraphCardEditor
   @state() private _aggregationExpanded = false;
   @state() private _customColorDrafts: Map<number, string> = new Map();
   @state() private _colorModeSelections: Map<number, string> = new Map();
+  @state() private _compareCustomColorDrafts: Map<number, string> = new Map();
+  @state() private _compareColorModeSelections: Map<number, string> = new Map();
 
   async connectedCallback() {
     super.connectedCallback();
@@ -100,6 +103,8 @@ export class EnergyCustomGraphCardEditor
     this._config = nextConfig;
     this._syncCustomColorDrafts(normalizedSeries);
     this._syncColorSelections(normalizedSeries);
+    this._syncCompareCustomColorDrafts(normalizedSeries);
+    this._syncCompareColorSelections(normalizedSeries);
 
     if (!hadConfig) {
       this._expandedSeries = new Set();
@@ -1259,6 +1264,31 @@ ${this._renderTimespanSection(cfg)}
     const previewColor =
       previewToken !== undefined ? this._normalizeColorToken(previewToken) : undefined;
     const customInputValue = colorMode === COLOR_SELECT_CUSTOM ? customTextValue ?? "" : "";
+
+    const compareRawColor =
+      typeof series.compare_color === "string" ? series.compare_color.trim() : undefined;
+    const comparePresetToken = this._extractPresetToken(compareRawColor);
+    const compareConfigMode = !compareRawColor
+      ? COLOR_SELECT_INHERIT
+      : comparePresetToken
+        ? comparePresetToken
+        : COLOR_SELECT_CUSTOM;
+    const compareOverride = this._compareColorModeSelections.get(index);
+    const compareMode = compareOverride ?? compareConfigMode;
+    const compareStoredCustom = this._compareCustomColorDrafts.get(index);
+    const compareCustomText = compareMode === COLOR_SELECT_CUSTOM
+      ? compareStoredCustom ?? compareRawColor ?? ""
+      : compareStoredCustom ?? "";
+    const comparePreviewSource =
+      compareMode === COLOR_SELECT_INHERIT
+        ? previewToken
+        : compareMode === COLOR_SELECT_CUSTOM
+          ? compareStoredCustom ?? compareRawColor ?? ""
+          : compareMode;
+    const comparePreviewColor =
+      comparePreviewSource !== undefined
+        ? this._normalizeColorToken(comparePreviewSource)
+        : undefined;
     return html`
       <div class="group-card">
         <div class="group-header">
@@ -1309,6 +1339,61 @@ ${this._renderTimespanSection(cfg)}
                     @input=${(ev: Event) => {
                       const target = ev.target as HTMLInputElement;
                       this._handleCustomColorInput(index, target.value);
+                    }}
+                  ></ha-textfield>
+                </div>
+              `
+            : nothing}
+          <div class="color-row">
+            <div class="field">
+              <label>Compare series color</label>
+              <div class="color-select-wrapper">
+                ${this._renderColorPreview(
+                  comparePreviewColor,
+                  chartType
+                )}
+                <select
+                  .value=${compareMode}
+                  @change=${(ev: Event) =>
+                    this._handleCompareColorSelect(
+                      index,
+                      (ev.target as HTMLSelectElement).value
+                    )}
+                >
+                  <option
+                    value=${COLOR_SELECT_INHERIT}
+                    ?selected=${compareMode === COLOR_SELECT_INHERIT}
+                  >
+                    Inherit (default)
+                  </option>
+                  ${ENERGY_COLOR_PRESETS.map(
+                    (preset) =>
+                      html`<option
+                        value=${preset.value}
+                        ?selected=${compareMode === preset.value}
+                      >
+                        ${preset.label}
+                      </option>`
+                  )}
+                  <option
+                    value=${COLOR_SELECT_CUSTOM}
+                    ?selected=${compareMode === COLOR_SELECT_CUSTOM}
+                  >
+                    Custom
+                  </option>
+                </select>
+              </div>
+            </div>
+          </div>
+          ${compareMode === COLOR_SELECT_CUSTOM
+            ? html`
+                <div class="color-row">
+                  <ha-textfield
+                    label="Custom compare color"
+                    .value=${compareCustomText ?? ""}
+                    @input=${(ev: Event) => {
+                      const target = ev.target as HTMLInputElement;
+                      this._handleCompareCustomColorInput(index, target.value);
                     }}
                   ></ha-textfield>
                 </div>
@@ -1967,6 +2052,8 @@ ${this._renderTimespanSection(cfg)}
     this._config = config;
     this._syncCustomColorDrafts(config.series ?? []);
     this._syncColorSelections(config.series ?? []);
+    this._syncCompareCustomColorDrafts(config.series ?? []);
+    this._syncCompareColorSelections(config.series ?? []);
     fireEvent(this, "config-changed", { config });
   }
 
@@ -2019,6 +2106,57 @@ ${this._renderTimespanSection(cfg)}
       nextSelections.set(index, defaultSelection);
     });
     this._colorModeSelections = nextSelections;
+  }
+
+  private _syncCompareCustomColorDrafts(series: EnergyCustomGraphSeriesConfig[]) {
+    const nextDrafts = new Map<number, string>();
+    series.forEach((item, index) => {
+      if (!item) {
+        return;
+      }
+      const rawColor =
+        typeof item.compare_color === "string" ? item.compare_color.trim() : undefined;
+      const presetToken = this._extractPresetToken(rawColor);
+      const isPreset =
+        presetToken !== undefined &&
+        ENERGY_COLOR_PRESETS.some((preset) => preset.value === presetToken);
+      if (rawColor && !isPreset) {
+        nextDrafts.set(index, rawColor);
+        return;
+      }
+      if (!rawColor && this._compareCustomColorDrafts.has(index)) {
+        const existing = this._compareCustomColorDrafts.get(index);
+        if (existing !== undefined) {
+          nextDrafts.set(index, existing);
+        }
+      }
+    });
+    this._compareCustomColorDrafts = nextDrafts;
+  }
+
+  private _syncCompareColorSelections(series: EnergyCustomGraphSeriesConfig[]) {
+    const nextSelections = new Map<number, string>();
+    series.forEach((item, index) => {
+      const rawColor =
+        typeof item.compare_color === "string" ? item.compare_color.trim() : undefined;
+      const presetToken = this._extractPresetToken(rawColor);
+      const defaultSelection = !rawColor
+        ? COLOR_SELECT_INHERIT
+        : presetToken
+          ? presetToken
+          : COLOR_SELECT_CUSTOM;
+      const existing = this._compareColorModeSelections.get(index);
+      if (existing === COLOR_SELECT_CUSTOM) {
+        nextSelections.set(index, COLOR_SELECT_CUSTOM);
+        return;
+      }
+      if (existing && existing === defaultSelection) {
+        nextSelections.set(index, existing);
+        return;
+      }
+      nextSelections.set(index, defaultSelection);
+    });
+    this._compareColorModeSelections = nextSelections;
   }
 
   private _updateBooleanConfig(
@@ -2182,6 +2320,31 @@ ${this._renderTimespanSection(cfg)}
     this._customColorDrafts = next;
   }
 
+  private _setCompareColorSelection(index: number, mode: string | undefined) {
+    const next = new Map(this._compareColorModeSelections);
+    if (mode === undefined) {
+      next.delete(index);
+    } else {
+      next.set(index, mode);
+    }
+    this._compareColorModeSelections = next;
+  }
+
+  private _setCompareCustomColorDraft(index: number, value: string | undefined) {
+    const next = new Map(this._compareCustomColorDrafts);
+    if (value === undefined) {
+      next.delete(index);
+    } else {
+      const trimmed = value.trim();
+      if (trimmed) {
+        next.set(index, trimmed);
+      } else {
+        next.delete(index);
+      }
+    }
+    this._compareCustomColorDrafts = next;
+  }
+
   private _handleSeriesColorSelect(index: number, rawValue: string) {
     if (!this._config) {
       return;
@@ -2230,6 +2393,54 @@ ${this._renderTimespanSection(cfg)}
     } else {
       this._setCustomColorDraft(index, undefined);
       this._updateSeries(index, "color", undefined);
+    }
+  }
+
+  private _handleCompareColorSelect(index: number, rawValue: string) {
+    if (!this._config) {
+      return;
+    }
+
+    const trimmedValue = rawValue.trim();
+    const seriesList = this._config.series ?? [];
+    const currentEntry = seriesList[index];
+    const current =
+      typeof currentEntry?.compare_color === "string"
+        ? currentEntry.compare_color.trim()
+        : undefined;
+
+    if (trimmedValue === COLOR_SELECT_INHERIT) {
+      this._setCompareColorSelection(index, COLOR_SELECT_INHERIT);
+      this._setCompareCustomColorDraft(index, undefined);
+      this._updateSeries(index, "compare_color", undefined);
+      return;
+    }
+
+    if (trimmedValue === COLOR_SELECT_CUSTOM) {
+      const fallback =
+        this._compareCustomColorDrafts.get(index) ?? current ?? "";
+      this._setCompareCustomColorDraft(index, fallback);
+      this._setCompareColorSelection(index, COLOR_SELECT_CUSTOM);
+      if (current && !this._extractPresetToken(current)) {
+        this._updateSeries(index, "compare_color", current);
+      }
+      return;
+    }
+
+    this._setCompareColorSelection(index, trimmedValue);
+    this._setCompareCustomColorDraft(index, undefined);
+    this._updateSeries(index, "compare_color", trimmedValue);
+  }
+
+  private _handleCompareCustomColorInput(index: number, raw: string) {
+    const value = raw.trim();
+    this._setCompareColorSelection(index, COLOR_SELECT_CUSTOM);
+    if (value) {
+      this._setCompareCustomColorDraft(index, value);
+      this._updateSeries(index, "compare_color", value);
+    } else {
+      this._setCompareCustomColorDraft(index, undefined);
+      this._updateSeries(index, "compare_color", undefined);
     }
   }
 

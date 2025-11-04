@@ -2036,6 +2036,18 @@ export class EnergyCustomGraphCard extends LitElement {
           z: serie.z,
         };
 
+        let baseConfig = compareResult.seriesById.get(baseId);
+        if (!baseConfig && baseId.includes("__fill_")) {
+          const parentId = baseId.replace(/__fill_(base|area)$/u, "");
+          baseConfig = compareResult.seriesById.get(parentId);
+        }
+
+        const compareColorRaw = baseConfig?.compare_color?.trim();
+        const compareColor =
+          compareColorRaw && compareColorRaw !== ""
+            ? this._resolveColorToken(compareColorRaw, computedStyle)
+            : undefined;
+
         if (Array.isArray(cloned.data)) {
           cloned.data = cloned.data.map(mapEntry);
         } else if (cloned.data) {
@@ -2070,7 +2082,7 @@ export class EnergyCustomGraphCard extends LitElement {
           }
           cloned.stack = `${baseKey}--compare`;
           cloned.z = Math.max(baseZ, BAR_Z_BASE);
-          this._styleCompareSeries(cloned);
+          this._styleCompareSeries(cloned, compareColor);
           compareSeriesTemp.push(cloned);
         } else {
           if (serie.stack && serie.stack.trim() !== "") {
@@ -2078,12 +2090,11 @@ export class EnergyCustomGraphCard extends LitElement {
           } else {
             cloned.stack = `${compareId}--stack`;
           }
-          this._styleCompareSeries(cloned);
+          this._styleCompareSeries(cloned, compareColor);
           compareSeriesTemp.push(cloned);
         }
         combinedUnits.set(compareId, compareResult.unitBySeries.get(baseId));
 
-        const baseConfig = compareResult.seriesById.get(baseId);
         if (baseConfig) {
           combinedSeriesById.set(compareId, baseConfig);
         }
@@ -2746,45 +2757,236 @@ export class EnergyCustomGraphCard extends LitElement {
     });
   }
 
-  private _styleCompareSeries(serie: SeriesOption): void {
+  private _styleCompareSeries(
+    serie: SeriesOption,
+    overrideColor?: string
+  ): void {
     const baseOpacity = 0.6;
 
-    if (serie.type === "bar") {
-      const itemStyle = {
-        ...(serie.itemStyle ?? {}),
-        opacity: baseOpacity,
-      } as Record<string, any>;
-      serie.itemStyle = itemStyle;
-
-      const emphasisItemStyle = {
-        ...(serie.emphasis?.itemStyle ?? {}),
-        opacity: Math.min(1, baseOpacity + 0.2),
-      } as Record<string, any>;
-      serie.emphasis = {
-        ...(serie.emphasis ?? {}),
-        itemStyle: emphasisItemStyle,
-      } as Record<string, any>;
-    } else {
-      serie.lineStyle = {
-        ...(serie.lineStyle ?? {}),
-        opacity: baseOpacity,
-      };
-      serie.itemStyle = {
-        ...(serie.itemStyle ?? {}),
-        opacity: baseOpacity,
-      };
-      if (serie.areaStyle) {
-        const currentOpacity = (serie.areaStyle as any).opacity ?? baseOpacity / 2;
-        serie.areaStyle = {
-          ...(serie.areaStyle ?? {}),
-          opacity: currentOpacity * 0.6,
+    if (overrideColor && overrideColor.trim() !== "") {
+      const color = overrideColor.trim();
+      if (serie.type === "bar") {
+        const existingItemColor =
+          typeof serie.itemStyle === "object"
+            ? (serie.itemStyle as Record<string, any>).color
+            : undefined;
+        const resolvedItemColor =
+          EnergyCustomGraphCard._colorWithAlpha(
+            color,
+            EnergyCustomGraphCard._extractAlpha(existingItemColor)
+          ) ?? color;
+        const itemStyle = {
+          ...(serie.itemStyle ?? {}),
+          color: resolvedItemColor,
+          borderColor: resolvedItemColor,
+        } as Record<string, any>;
+        serie.itemStyle = itemStyle;
+        serie.color = resolvedItemColor;
+        const emphasisItemStyle = {
+          ...(serie.emphasis?.itemStyle ?? {}),
+          color: resolvedItemColor,
+        } as Record<string, any>;
+        serie.emphasis = {
+          ...(serie.emphasis ?? {}),
+          itemStyle: emphasisItemStyle,
+        } as Record<string, any>;
+      } else {
+        const existingLineColor =
+          typeof serie.lineStyle === "object"
+            ? (serie.lineStyle as Record<string, any>).color
+            : undefined;
+        const resolvedLineColor =
+          EnergyCustomGraphCard._colorWithAlpha(
+            color,
+            EnergyCustomGraphCard._extractAlpha(existingLineColor)
+          ) ?? color;
+        serie.color = resolvedLineColor;
+        serie.lineStyle = {
+          ...(serie.lineStyle ?? {}),
+          color: resolvedLineColor,
         };
+        const existingItemColor =
+          typeof serie.itemStyle === "object"
+            ? (serie.itemStyle as Record<string, any>).color
+            : undefined;
+        const resolvedItemColor =
+          EnergyCustomGraphCard._colorWithAlpha(
+            color,
+            EnergyCustomGraphCard._extractAlpha(existingItemColor)
+          ) ?? color;
+        serie.itemStyle = {
+          ...(serie.itemStyle ?? {}),
+          color: resolvedItemColor,
+        };
+        const emphasisItemStyle = {
+          ...(serie.emphasis?.itemStyle ?? {}),
+          color: resolvedLineColor,
+        } as Record<string, any>;
+        serie.emphasis = {
+          ...(serie.emphasis ?? {}),
+          itemStyle: emphasisItemStyle,
+        } as Record<string, any>;
+        if (serie.areaStyle) {
+          const areaStyle = {
+            ...(serie.areaStyle as Record<string, any>),
+          };
+          const existingAreaColor = areaStyle.color;
+          const resolvedAreaColor =
+            EnergyCustomGraphCard._colorWithAlpha(
+              color,
+              EnergyCustomGraphCard._extractAlpha(existingAreaColor)
+            ) ?? color;
+          areaStyle.color = resolvedAreaColor;
+          serie.areaStyle = areaStyle;
+        }
+        (serie as any).connectNulls = false;
       }
-      (serie as any).connectNulls = false;
+    } else {
+      if (serie.type === "bar") {
+        const itemStyle = {
+          ...(serie.itemStyle ?? {}),
+          opacity: baseOpacity,
+        } as Record<string, any>;
+        serie.itemStyle = itemStyle;
+
+        const emphasisItemStyle = {
+          ...(serie.emphasis?.itemStyle ?? {}),
+          opacity: Math.min(1, baseOpacity + 0.2),
+        } as Record<string, any>;
+        serie.emphasis = {
+          ...(serie.emphasis ?? {}),
+          itemStyle: emphasisItemStyle,
+        } as Record<string, any>;
+      } else {
+        serie.lineStyle = {
+          ...(serie.lineStyle ?? {}),
+          opacity: baseOpacity,
+        };
+        serie.itemStyle = {
+          ...(serie.itemStyle ?? {}),
+          opacity: baseOpacity,
+        };
+        if (serie.areaStyle) {
+          const currentOpacity = (serie.areaStyle as any).opacity ?? baseOpacity / 2;
+          serie.areaStyle = {
+            ...(serie.areaStyle ?? {}),
+            opacity: currentOpacity * 0.6,
+          };
+        }
+        (serie as any).connectNulls = false;
+      }
     }
 
     const baseZ = (serie.z ?? 0) - 1;
     serie.z = baseZ < 0 ? 0 : baseZ;
+  }
+
+  private _resolveColorToken(
+    raw: string,
+    computedStyle: CSSStyleDeclaration
+  ): string | undefined {
+    if (!raw) {
+      return undefined;
+    }
+    let token = raw.trim();
+    if (!token) {
+      return undefined;
+    }
+    if (token.startsWith("#") || token.startsWith("rgb")) {
+      return token;
+    }
+    if (token.startsWith("var(") && token.endsWith(")")) {
+      token = token.slice(4, -1).trim();
+    }
+    if (token.startsWith("--")) {
+      const resolved = computedStyle.getPropertyValue(token)?.trim();
+      if (resolved) {
+        return resolved;
+      }
+      return token;
+    }
+    const resolved = computedStyle.getPropertyValue(token)?.trim();
+    if (resolved) {
+      return resolved;
+    }
+    return token;
+  }
+
+  private static _extractAlpha(color: unknown): number | undefined {
+    if (typeof color !== "string") {
+      return undefined;
+    }
+    const trimmed = color.trim();
+    const rgbaMatch = trimmed.match(/rgba?\(([^)]+)\)/i);
+    if (rgbaMatch) {
+      const parts = rgbaMatch[1].split(",").map((part) => part.trim());
+      if (parts.length === 4) {
+        const alpha = Number(parts[3]);
+        return Number.isFinite(alpha) ? alpha : undefined;
+      }
+      if (parts.length === 3) {
+        return 1;
+      }
+    }
+    if (trimmed.startsWith("#")) {
+      const hex = trimmed.slice(1);
+      if (hex.length === 8) {
+        return parseInt(hex.slice(6, 8), 16) / 255;
+      }
+      if (hex.length === 4) {
+        return parseInt(hex.slice(3, 4).repeat(2), 16) / 255;
+      }
+    }
+    return undefined;
+  }
+
+  private static _colorWithAlpha(
+    color: string,
+    alpha: number | undefined
+  ): string | undefined {
+    if (alpha === undefined || alpha >= 1) {
+      return color;
+    }
+    const rgb = EnergyCustomGraphCard._parseColor(color);
+    if (!rgb) {
+      return color;
+    }
+    return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${alpha})`;
+  }
+
+  private static _parseColor(
+    value: string
+  ): { r: number; g: number; b: number } | undefined {
+    const trimmed = value.trim();
+    const rgbaMatch = trimmed.match(/rgba?\(([^)]+)\)/i);
+    if (rgbaMatch) {
+      const parts = rgbaMatch[1].split(",").map((part) => Number(part.trim()));
+      if (parts.length >= 3) {
+        return {
+          r: Math.round(parts[0]),
+          g: Math.round(parts[1]),
+          b: Math.round(parts[2]),
+        };
+      }
+      return undefined;
+    }
+    if (!trimmed.startsWith("#")) {
+      return undefined;
+    }
+    const hex = trimmed.slice(1);
+    if (hex.length === 3 || hex.length === 4) {
+      const r = parseInt(hex[0] + hex[0], 16);
+      const g = parseInt(hex[1] + hex[1], 16);
+      const b = parseInt(hex[2] + hex[2], 16);
+      return { r, g, b };
+    }
+    if (hex.length === 6 || hex.length === 8) {
+      const r = parseInt(hex.substring(0, 2), 16);
+      const g = parseInt(hex.substring(2, 4), 16);
+      const b = parseInt(hex.substring(4, 6), 16);
+      return { r, g, b };
+    }
+    return undefined;
   }
 
   private _buildBucketSequence(
