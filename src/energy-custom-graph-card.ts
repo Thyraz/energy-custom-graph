@@ -1137,6 +1137,11 @@ export class EnergyCustomGraphCard extends LitElement {
       return {};
     }
 
+    const { start: queryStart, end: queryEnd } = this._expandRawQueryWindow(
+      start,
+      end
+    );
+
     const rawOptions: EnergyCustomGraphRawOptions | undefined =
       this._config.aggregation?.raw_options;
 
@@ -1147,12 +1152,34 @@ export class EnergyCustomGraphCard extends LitElement {
 
     const history = await fetchRawHistoryStates(
       this.hass,
-      start,
-      end,
+      queryStart,
+      queryEnd,
       statisticIds,
       options
     );
     return historyStatesToStatistics(history);
+  }
+
+  private _expandRawQueryWindow(
+    start: Date,
+    end?: Date
+  ): { start: Date; end?: Date } {
+    if (!end) {
+      return { start, end };
+    }
+
+    const startMs = start.getTime();
+    const endMs = end.getTime();
+    const spanMs = Math.max(endMs - startMs, 0);
+    const buffer = Math.max(60000, spanMs * 0.1);
+
+    const expandedStart = new Date(startMs - buffer);
+    const expandedEnd = new Date(endMs + buffer);
+
+    return {
+      start: expandedStart,
+      end: expandedEnd,
+    };
   }
 
   private _getCalculationKey(index: number): string {
