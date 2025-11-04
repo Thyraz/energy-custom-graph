@@ -107,6 +107,7 @@ export interface EnergyCustomGraphCardConfig extends LovelaceCardConfig {
   color_cycle?: string[];
   legend_sort?: "asc" | "desc" | "none";
   collection_key?: string;
+  allow_compare?: boolean;
   y_axes?: EnergyCustomGraphAxisConfig[];
   tooltip_precision?: number;
   show_unit?: boolean;

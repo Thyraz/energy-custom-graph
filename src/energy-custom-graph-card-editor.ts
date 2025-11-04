@@ -729,6 +729,17 @@ ${this._renderTimespanSection(cfg)}
                 @input=${(ev: Event) =>
                   this._updateConfig("collection_key", (ev.target as HTMLInputElement).value || undefined)}
               ></ha-textfield>
+              <div class="row">
+                <ha-switch
+                  .checked=${cfg.allow_compare !== false}
+                  @change=${(ev: Event) =>
+                    this._updateConfig(
+                      "allow_compare",
+                      (ev.target as HTMLInputElement).checked
+                    )}
+                ></ha-switch>
+                <span>Follow compare toggle</span>
+              </div>
             `
           : nothing}
 
@@ -1948,6 +1959,7 @@ ${this._renderTimespanSection(cfg)}
     }
     if (config.timespan?.mode !== "energy") {
       delete config.collection_key;
+      delete config.allow_compare;
     }
     if (!config.series?.length) {
       config.series = [];

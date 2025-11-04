@@ -247,6 +247,10 @@ export class EnergyCustomGraphCard extends LitElement {
       this._teardownEnergyCollection();
     }
 
+    if (!this._shouldUseEnergyCompare()) {
+      this._clearCompareTracking();
+    }
+
     const periodChanged = this._recalculatePeriod();
     const compareChanged = this._recalculateComparePeriod();
     const seriesChanged =
@@ -268,6 +272,26 @@ export class EnergyCustomGraphCard extends LitElement {
     config?: EnergyCustomGraphCardConfig
   ): boolean {
     return config?.timespan?.mode === "energy";
+  }
+
+  private _shouldUseEnergyCompare(): boolean {
+    if (!this._config) {
+      return false;
+    }
+    if (this._config.timespan?.mode !== "energy") {
+      return false;
+    }
+    return this._config.allow_compare !== false;
+  }
+
+  private _clearCompareTracking(): void {
+    this._energyCompareStart = undefined;
+    this._energyCompareEnd = undefined;
+    if (this._comparePeriodStart || this._comparePeriodEnd || this._statisticsCompare) {
+      this._comparePeriodStart = undefined;
+      this._comparePeriodEnd = undefined;
+      this._resetCompareStatistics();
+    }
   }
 
   private _setupEnergyCollection(attempt = 0): void {
@@ -299,15 +323,34 @@ export class EnergyCustomGraphCard extends LitElement {
       this._energyCollection = candidate;
       this._loggedEnergyFallback = false;
       this._collectionUnsub = candidate.subscribe((data) => {
+        const useCompare = this._shouldUseEnergyCompare();
+
         this._energyStart = data.start;
         this._energyEnd = data.end ?? undefined;
-        this._energyCompareStart = data.startCompare ?? undefined;
-        this._energyCompareEnd = data.endCompare ?? undefined;
+
+        if (useCompare) {
+          this._energyCompareStart = data.startCompare ?? undefined;
+          this._energyCompareEnd = data.endCompare ?? undefined;
+        } else {
+          const hadCompareState =
+            this._comparePeriodStart !== undefined ||
+            this._comparePeriodEnd !== undefined ||
+            !!this._statisticsCompare;
+          this._energyCompareStart = undefined;
+          this._energyCompareEnd = undefined;
+          if (hadCompareState) {
+            this._clearCompareTracking();
+          }
+        }
+
         const periodChanged = this._recalculatePeriod();
-        const compareChanged = this._recalculateComparePeriod();
+        const compareChanged = useCompare
+          ? this._recalculateComparePeriod()
+          : false;
         const shouldLoadMain = periodChanged || !this._statistics;
-        const hasCompareRange = !!this._comparePeriodStart;
+        const hasCompareRange = useCompare && !!this._comparePeriodStart;
         const shouldLoadCompare =
+          useCompare &&
           hasCompareRange &&
           (compareChanged || !this._statisticsCompare);
         if (shouldLoadMain) {
@@ -328,12 +371,21 @@ export class EnergyCustomGraphCard extends LitElement {
       }
       this._energyCollection = undefined;
       this._collectionUnsub = undefined;
+      if (!this._shouldUseEnergyCompare()) {
+        this._clearCompareTracking();
+      }
       const periodChanged = this._recalculatePeriod();
-      const compareChanged = this._recalculateComparePeriod();
+      const compareChanged = this._shouldUseEnergyCompare()
+        ? this._recalculateComparePeriod()
+        : false;
       if (periodChanged || !this._statistics) {
         this._scheduleLoad("main");
       }
-      if (compareChanged && this._comparePeriodStart) {
+      if (
+        this._shouldUseEnergyCompare() &&
+        compareChanged &&
+        this._comparePeriodStart
+      ) {
         this._scheduleLoad("compare");
       }
       this._collectionPollHandle = window.setTimeout(
@@ -363,6 +415,7 @@ export class EnergyCustomGraphCard extends LitElement {
     this._energyEnd = undefined;
     this._energyCompareStart = undefined;
     this._energyCompareEnd = undefined;
+    this._clearCompareTracking();
   }
 
   private _recalculatePeriod(): boolean {
@@ -549,6 +602,9 @@ export class EnergyCustomGraphCard extends LitElement {
 
     switch (timespanConfig.mode) {
       case "energy":
+        if (!this._shouldUseEnergyCompare()) {
+          return undefined;
+        }
         if (!this._energyCompareStart) {
           return undefined;
         }
@@ -1503,6 +1559,7 @@ export class EnergyCustomGraphCard extends LitElement {
     this._config = {
       ...config,
       timespan: config.timespan ?? DEFAULT_TIMESPAN,
+      allow_compare: config.allow_compare ?? true,
     };
     this._loggedEnergyFallback = false;
     this.requestUpdate("_config", oldConfig);
@@ -1946,6 +2003,11 @@ export class EnergyCustomGraphCard extends LitElement {
       this._chartData = zeroSeries;
       this._scheduleRawAnimationCommit(combinedSeries);
       return;
+    }
+
+    if (this._rawAnimationFrame !== undefined) {
+      cancelAnimationFrame(this._rawAnimationFrame);
+      this._rawAnimationFrame = undefined;
     }
 
     this._chartData = combinedSeries;

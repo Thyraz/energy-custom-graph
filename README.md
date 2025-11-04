@@ -63,6 +63,7 @@ By default the card mirrors the core energy cards and automatically selects the 
 | `chart_height` | string | – | CSS height (e.g. `300px`). |
 | `timespan` | object | `{mode: "energy"}` | Controls the time range displayed (see below). |
 | `collection_key` | string | – | Custom key when multiple energy date pickers are present (only for `timespan.mode: "energy"`). <br>[More Info](https://www.home-assistant.io/dashboards/energy/#using-multiple-collections) |
+| `allow_compare` | boolean | `true` | For energy date picker mode: Respects the compare toggle when `true`. Set to `false` to disable this behavior. |
 | `hide_legend` | boolean | `false` | Hide the legend entirely. |
 | `legend_sort` | `"asc"`, `"desc"`, `"none"` | `"none"` | Sort order for the legend entries. |
 | `expand_legend` | boolean | `false` | Expand the legend by default. |
