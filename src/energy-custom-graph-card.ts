@@ -1878,7 +1878,11 @@ export class EnergyCustomGraphCard extends LitElement {
           this._styleCompareSeries(cloned);
           compareSeriesTemp.push(cloned);
         } else {
-          cloned.stack = serie.stack ? `${serie.stack}--compare` : "compare";
+          if (serie.stack && serie.stack.trim() !== "") {
+            cloned.stack = `${serie.stack.trim()}--compare`;
+          } else {
+            cloned.stack = `${compareId}--stack`;
+          }
           this._styleCompareSeries(cloned);
           compareSeriesTemp.push(cloned);
         }
