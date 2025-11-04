@@ -129,6 +129,7 @@ export class EnergyCustomGraphCard extends LitElement {
     main: 0,
     compare: 0,
   };
+  private _rawAnimationFrame?: number;
 
   private static readonly FALLBACK_WARNING =
     "[energy-custom-graph-card] Falling back to default period because energy date selection is unavailable.";
@@ -162,6 +163,10 @@ export class EnergyCustomGraphCard extends LitElement {
     if (this._autoRefreshTimeout) {
       clearTimeout(this._autoRefreshTimeout);
       this._autoRefreshTimeout = undefined;
+    }
+    if (this._rawAnimationFrame !== undefined) {
+      cancelAnimationFrame(this._rawAnimationFrame);
+      this._rawAnimationFrame = undefined;
     }
     for (const state of this._fetchStates.values()) {
       if (state.timeout) {
@@ -1932,8 +1937,18 @@ export class EnergyCustomGraphCard extends LitElement {
       options.legend = legendOption;
     }
 
-    this._chartData = combinedSeries;
+    const shouldAnimateFromZero = extendMainToNow || extendCompareToNow;
+
     this._chartOptions = options;
+
+    if (shouldAnimateFromZero) {
+      const zeroSeries = this._createZeroSeriesSnapshot(combinedSeries);
+      this._chartData = zeroSeries;
+      this._scheduleRawAnimationCommit(combinedSeries);
+      return;
+    }
+
+    this._chartData = combinedSeries;
   }
 
   private _computeSuggestedXAxisMax(start: Date, end: Date): number {
@@ -2177,6 +2192,69 @@ export class EnergyCustomGraphCard extends LitElement {
     } else {
       data.splice(insertionIndex, 0, [limitTime, lastValue]);
     }
+  }
+
+  private _scheduleRawAnimationCommit(series: SeriesOption[]): void {
+    if (this._rawAnimationFrame !== undefined) {
+      cancelAnimationFrame(this._rawAnimationFrame);
+    }
+    this._rawAnimationFrame = requestAnimationFrame(() => {
+      this._rawAnimationFrame = undefined;
+      this._chartData = series;
+    });
+  }
+
+  private _createZeroSeriesSnapshot(series: SeriesOption[]): SeriesOption[] {
+    const clone = this._cloneSeries(series);
+    clone.forEach((serie) => {
+      if (!Array.isArray(serie.data)) {
+        return;
+      }
+
+      if (serie.type === "line") {
+        serie.data = (serie.data as Array<[number, number | null]>).map(
+          ([timestamp, value]) => [timestamp, value === null ? null : 0]
+        );
+        return;
+      }
+
+      if (serie.type === "bar") {
+        serie.data = (serie.data as any[]).map((entry) => {
+          if (Array.isArray(entry)) {
+            const timestamp = entry[0];
+            const value =
+              entry.length > 1 && typeof entry[1] === "number"
+                ? entry[1]
+                : entry[1] === null
+                  ? null
+                  : null;
+            return [timestamp, value === null ? null : 0];
+          }
+
+          if (entry && typeof entry === "object" && "value" in entry) {
+            const next = { ...(entry as Record<string, unknown>) };
+            const tuple = Array.isArray(next.value)
+              ? (next.value as [number, number | null])
+              : undefined;
+            if (tuple) {
+              const [timestamp, value] = tuple;
+              (next as any).value = [timestamp, value === null ? null : 0];
+            }
+            return next;
+          }
+
+          return entry;
+        });
+      }
+    });
+    return clone;
+  }
+
+  private _cloneSeries(series: SeriesOption[]): SeriesOption[] {
+    if (typeof structuredClone === "function") {
+      return structuredClone(series);
+    }
+    return JSON.parse(JSON.stringify(series)) as SeriesOption[];
   }
 
   private _castSeriesDataPoints(
