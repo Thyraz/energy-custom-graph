@@ -146,6 +146,8 @@ Display a fixed time range. Dates use ISO 8601 format. If omitted, `start` defau
 Configure `calculation` instead of `statistic_id` to compute a series from multiple entity statistics. Terms are processed sequentially, starting with the `initial_value` (default `0`).
 
 > **RAW data behaviour:** When you combine raw history series, the card reuses the most recent available value for each term at the evaluated timestamp. This “last-known value” fallback keeps calculations stable even if sensors don’t report at identical times.
+>
+> **Constant-only calculations:** If every term is a constant (multiply/add/clip allowed), the card creates simulated points across the visible time range. That makes it easy to draw horizontal reference lines or to use as a baseline for filling signals stacked on top.
 
 | Key | Type | Default | Description |
 | --- | ---- | ------- | ----------- |

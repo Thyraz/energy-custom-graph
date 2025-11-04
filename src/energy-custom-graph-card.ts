@@ -1214,7 +1214,8 @@ export class EnergyCustomGraphCard extends LitElement {
         series.calculation,
         statistics,
         metadata,
-        index
+        index,
+        target
       );
       if (!result) {
         return;
@@ -1247,7 +1248,8 @@ export class EnergyCustomGraphCard extends LitElement {
     calculation: EnergyCustomGraphCalculationConfig,
     statistics: Statistics,
     metadata: Record<string, StatisticsMetaData>,
-    seriesIndex: number
+    seriesIndex: number,
+    target: "main" | "compare"
   ): { values: StatisticValue[]; unit?: string | null } | undefined {
     if (!calculation.terms?.length) {
       return undefined;
@@ -1363,8 +1365,17 @@ export class EnergyCustomGraphCard extends LitElement {
     });
 
     const timestamps = Array.from(timestampSet).sort((a, b) => a - b);
+    const constantOnly =
+      !timestamps.length &&
+      termData.every((item) =>
+        item.term.statistic_id === undefined &&
+        item.constant !== undefined
+      );
+
     if (!timestamps.length) {
-      return undefined;
+      if (!constantOnly) {
+        return undefined;
+      }
     }
 
     const initialValue = calculation.initial_value ?? 0;
@@ -1372,7 +1383,7 @@ export class EnergyCustomGraphCard extends LitElement {
     const missingValueWarnings = new Set<string>();
     let divisionWarningLogged = false;
 
-    timestamps.forEach((timestamp) => {
+    const processTimestamp = (timestamp: number) => {
       let total = initialValue;
       let start: number | undefined;
       let end: number | undefined;
@@ -1455,7 +1466,52 @@ export class EnergyCustomGraphCard extends LitElement {
         max: numericTotal,
         state: numericTotal,
       });
-    });
+    };
+
+    if (timestamps.length) {
+      timestamps.forEach(processTimestamp);
+    } else if (constantOnly) {
+      const context = this._getCalculationTimeContext(target);
+      if (context?.start) {
+        const seen = new Set<number>();
+        const addTimestamp = (ts: number | undefined | null) => {
+          if (typeof ts !== "number" || !Number.isFinite(ts)) {
+            return;
+          }
+          if (!seen.has(ts)) {
+            seen.add(ts);
+            processTimestamp(ts);
+          }
+        };
+
+        const startTs = context.start.getTime();
+        const endTs = context.end?.getTime();
+        addTimestamp(startTs);
+        if (endTs !== undefined) {
+          addTimestamp(endTs);
+        }
+
+        if (context.period && context.period !== "raw" && context.end) {
+          const buckets = this._buildBucketSequence(
+            startTs,
+            context.end.getTime(),
+            context.period
+          );
+          buckets?.forEach(addTimestamp);
+        }
+
+        Object.values(statistics).forEach((entries) => {
+          entries?.forEach((entry) => {
+            addTimestamp(entry.start);
+            addTimestamp(entry.end);
+          });
+        });
+
+        if (seen.size === 1 && endTs === undefined) {
+          addTimestamp(startTs + 1);
+        }
+      }
+    }
 
     const unit =
       calculation.unit ??
@@ -1532,6 +1588,24 @@ export class EnergyCustomGraphCard extends LitElement {
     }
 
     return null;
+  }
+
+  private _getCalculationTimeContext(
+    target: "main" | "compare"
+  ): { start?: Date; end?: Date; period?: StatisticsPeriod | "raw" } {
+    if (target === "compare") {
+      return {
+        start: this._comparePeriodStart,
+        end: this._comparePeriodEnd,
+        period: this._statisticsPeriodCompare,
+      };
+    }
+
+    return {
+      start: this._periodStart,
+      end: this._periodEnd,
+      period: this._statisticsPeriod,
+    };
   }
 
   private _statisticsHaveData(
