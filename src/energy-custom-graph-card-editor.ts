@@ -549,7 +549,7 @@ export class EnergyCustomGraphCardEditor
         ></ha-textfield>
         <ha-textfield
           label="Chart height"
-          helper="CSS height (e.g. 320px, 20rem)"
+          helper="CSS height (e.g. 320px, 20rem). Ignored when used in a section layout."
           .value=${cfg.chart_height ?? ""}
           @input=${(ev: Event) =>
             this._updateConfig("chart_height", (ev.target as HTMLInputElement).value || undefined)}

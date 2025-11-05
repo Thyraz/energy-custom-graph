@@ -60,7 +60,7 @@ By default the card mirrors the core energy cards and automatically selects the 
 | --- | ---- | ------- | ----------- |
 | `type` | string | – | Must be `custom:energy-custom-graph-card`. |
 | `title` | string | – | Optional card header. |
-| `chart_height` | string | – | CSS height (e.g. `300px`). |
+| `chart_height` | string | – | CSS height (e.g. `300px`). Ignored when the card is used inside a section layout (the grid rows control the height). |
 | `timespan` | object | `{mode: "energy"}` | Controls the time range displayed (see below). |
 | `collection_key` | string | – | Custom key when multiple energy date pickers are present (only for `timespan.mode: "energy"`). <br>[More Info](https://www.home-assistant.io/dashboards/energy/#using-multiple-collections) |
 | `allow_compare` | boolean | `true` | For energy date picker mode: Respects the compare toggle when `true`. Set to `false` to disable this behavior. |

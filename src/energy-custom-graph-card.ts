@@ -86,6 +86,17 @@ interface FetchState {
   timeout?: number;
 }
 
+interface LovelaceGridOptions {
+  columns?: number | "full";
+  rows?: number | "auto";
+  max_columns?: number;
+  min_columns?: number;
+  min_rows?: number;
+  max_rows?: number;
+  fixed_rows?: boolean;
+  fixed_columns?: boolean;
+}
+
 const DEFAULT_TIMESPAN: EnergyCustomGraphTimespanConfig = { mode: "energy" };
 
 @customElement("energy-custom-graph-card")
@@ -104,6 +115,7 @@ export class EnergyCustomGraphCard extends LitElement {
   @state() private _isLoading = false;
   @state() private _chartData: SeriesOption[] = [];
   @state() private _chartOptions?: ECOption;
+  @state() private _usesSectionLayout = false;
 
   private _energyCollection?: EnergyCollection;
   private _energyStart?: Date;
@@ -1764,6 +1776,10 @@ export class EnergyCustomGraphCard extends LitElement {
   }
 
   protected updated(changedProps: PropertyValues): void {
+    super.updated(changedProps);
+
+    this._evaluateSectionLayout();
+
     if (
       changedProps.has("_statistics") ||
       changedProps.has("_metadata") ||
@@ -1779,8 +1795,49 @@ export class EnergyCustomGraphCard extends LitElement {
     }
   }
 
+  protected firstUpdated(changedProps: PropertyValues): void {
+    super.firstUpdated(changedProps);
+    this._evaluateSectionLayout();
+  }
+
   public getCardSize(): number {
     return 5;
+  }
+
+  public getGridOptions(): LovelaceGridOptions {
+    const hasTitle = Boolean(this._config?.title && this._config.title.trim().length);
+    const legendVisible = this._config ? this._config.hide_legend !== true : true;
+    const legendExpanded = legendVisible && Boolean(this._config?.expand_legend);
+
+    const baseRows = hasTitle ? 5 : 4;
+    const baseMinRows = hasTitle ? 4 : 3;
+    const legendRows = legendExpanded ? 1 : 0;
+
+    const rows = baseRows + legendRows;
+    const minRows = baseMinRows + legendRows;
+
+    return {
+      columns: 12,
+      min_columns: 6,
+      rows,
+      min_rows: minRows,
+    };
+  }
+
+  private _evaluateSectionLayout(): void {
+    if (!this.isConnected) {
+      return;
+    }
+
+    try {
+      const columnSize = getComputedStyle(this).getPropertyValue("--column-size").trim();
+      const usesSectionLayout = columnSize !== "";
+      if (this._usesSectionLayout !== usesSectionLayout) {
+        this._usesSectionLayout = usesSectionLayout;
+      }
+    } catch (_error) {
+      // When getComputedStyle fails (e.g., during disconnection), keep previous state.
+    }
   }
 
   protected render() {
@@ -1833,13 +1890,17 @@ export class EnergyCustomGraphCard extends LitElement {
       </div>`;
     }
 
+    const usesSectionLayout = this._usesSectionLayout;
+    const chartClass = usesSectionLayout ? "chart chart--section" : "chart";
+    const chartHeight = usesSectionLayout ? "100%" : this._config?.chart_height;
+
     return html`
-      <div class="chart">
+      <div class=${chartClass}>
         <ha-chart-base
           .hass=${this.hass}
           .data=${this._chartData}
           .options=${this._chartOptions}
-          .height=${this._config?.chart_height}
+          .height=${chartHeight}
           .expandLegend=${this._config?.expand_legend}
         ></ha-chart-base>
       </div>
@@ -3444,6 +3505,23 @@ export class EnergyCustomGraphCard extends LitElement {
     .chart {
       flex: 1;
       min-height: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .chart ha-chart-base {
+      flex: 1 1 auto;
+      min-height: 0;
+      width: 100%;
+      display: block;
+    }
+
+    .chart.chart--section {
+      --chart-max-height: none;
+    }
+
+    .chart.chart--section ha-chart-base {
+      height: 100%;
     }
 
     .placeholder {
