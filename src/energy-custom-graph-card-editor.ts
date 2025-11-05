@@ -44,6 +44,7 @@ const AGGREGATION_OPTIONS: Array<{ value: EnergyCustomGraphAggregationTarget; la
   { value: "day", label: "Day" },
   { value: "week", label: "Week" },
   { value: "month", label: "Month" },
+  { value: "disabled", label: "Disable fetching" },
   { value: "raw", label: "RAW (history)" },
 ];
 

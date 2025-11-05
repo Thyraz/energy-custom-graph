@@ -64,7 +64,10 @@ export interface EnergyCustomGraphRawOptions {
   significant_changes_only?: boolean;
 }
 
-export type EnergyCustomGraphAggregationTarget = StatisticsPeriod | "raw";
+export type EnergyCustomGraphAggregationTarget =
+  | StatisticsPeriod
+  | "raw"
+  | "disabled";
 
 export interface EnergyCustomGraphAggregationConfig {
   manual?: EnergyCustomGraphAggregationTarget;

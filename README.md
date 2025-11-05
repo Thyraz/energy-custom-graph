@@ -211,7 +211,8 @@ aggregation:
 - `manual` applies when the timespan mode is `relative` or `fixed` (energy date picker not used).
 - `energy_picker` sets the aggregation used when the energy date picker selects `hour`, `day`, `week`, `month`, or `year` ranges. Any range not listed keeps the default value.
 - `fallback` Optional. Is used if the preferred interval returns no data.
-- Valid intervals: `"5minute"`, `"hour"`, `"day"`, `"week"`, `"month"`.
+- Valid intervals: `"5minute"`, `"hour"`, `"day"`, `"week"`, `"month"`, `"raw"`, `"disabled"`.
+- Use `"raw"` to fetch recorder history states without aggregation. Use `"disabled"` to skip the request entirely and show a “choose a shorter period” message instead.
 
 Tip: use fine intervals only for short ranges to avoid excessive resource usage and loading times.
 
@@ -359,6 +360,28 @@ series:
     multiply: -1
     color: "--energy-battery-in-color"
     stack: energy
+```
+
+### 5. Binary sensor with RAW short ranges and disabled long ranges
+
+This setup draws a step line for a binary sensor. RAW history is used for the shortest two picker ranges, while longer ranges disable fetching and prompt the user to narrow the period.
+
+```yaml
+type: custom:energy-custom-graph-card
+title: Garage door activity
+series:
+  - statistic_id: binary_sensor.garage_door
+    name: Garage door
+    stat_type: state
+    chart_type: step
+    smooth: false
+aggregation:
+  energy_picker:
+    hour: raw
+    day: raw
+    week: disabled
+    month: disabled
+    year: disabled
 ```
 
 ## Tips

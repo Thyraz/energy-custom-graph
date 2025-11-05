@@ -116,6 +116,7 @@ export class EnergyCustomGraphCard extends LitElement {
   @state() private _isLoading = false;
   @state() private _chartData: SeriesOption[] = [];
   @state() private _chartOptions?: ECOption;
+  @state() private _disabledMessage?: string;
   @state() private _usesSectionLayout = false;
 
   private _energyCollection?: EnergyCollection;
@@ -133,9 +134,9 @@ export class EnergyCustomGraphCard extends LitElement {
   private _calculatedSeriesDataCompare = new Map<string, StatisticValue[]>();
   private _calculatedSeriesUnitsCompare = new Map<string, string | null | undefined>();
   private _statisticsRange?: { start: number; end: number | null };
-  private _statisticsPeriod?: StatisticsPeriod | "raw";
+  private _statisticsPeriod?: StatisticsPeriod | "raw" | "disabled";
   private _statisticsRangeCompare?: { start: number; end: number | null };
-  private _statisticsPeriodCompare?: StatisticsPeriod | "raw";
+  private _statisticsPeriodCompare?: StatisticsPeriod | "raw" | "disabled";
   private _seriesConfigById: Map<string, EnergyCustomGraphSeriesConfig> = new Map();
 
   private _fetchStates: Map<FetchKey, FetchState> = new Map();
@@ -147,6 +148,19 @@ export class EnergyCustomGraphCard extends LitElement {
 
   private static readonly FALLBACK_WARNING =
     "[energy-custom-graph-card] Falling back to default period because energy date selection is unavailable.";
+
+  private static readonly DISABLED_FETCH_MESSAGE =
+    "Fetching statistics is disabled for this period. Choose a shorter time range to view data.";
+
+  private _getDisabledMessage(): string {
+    const localized = this.hass?.localize?.(
+      "ui.components.statistics_charts.choose_shorter_period"
+    );
+    if (localized && localized.trim().length > 0) {
+      return localized;
+    }
+    return EnergyCustomGraphCard.DISABLED_FETCH_MESSAGE;
+  }
 
   private static readonly DEFAULT_STAT_TYPE = "change";
   private static readonly clampValue = (
@@ -745,10 +759,18 @@ export class EnergyCustomGraphCard extends LitElement {
     }, 500);
   }
 
-  private _getRefreshTiming(aggregation: StatisticsPeriod | "raw"): {
+  private _getRefreshTiming(
+    aggregation: StatisticsPeriod | "raw" | "disabled"
+  ): {
     intervalMs: number;
     delayMs: number;
   } {
+    if (aggregation === "disabled") {
+      return {
+        intervalMs: Number.POSITIVE_INFINITY,
+        delayMs: 0,
+      };
+    }
     if (aggregation === "raw") {
       return {
         intervalMs: 60 * 1000,
@@ -785,7 +807,12 @@ export class EnergyCustomGraphCard extends LitElement {
     }
   }
 
-  private _getNextAlignedRefreshTime(aggregation: StatisticsPeriod | "raw"): number {
+  private _getNextAlignedRefreshTime(
+    aggregation: StatisticsPeriod | "raw" | "disabled"
+  ): number {
+    if (aggregation === "disabled") {
+      return Number.POSITIVE_INFINITY;
+    }
     const now = new Date();
     const timing = this._getRefreshTiming(aggregation);
     let nextRefresh = new Date(now);
@@ -874,6 +901,10 @@ export class EnergyCustomGraphCard extends LitElement {
       this._periodEnd
     );
     const aggregation = aggregationPlan[0];
+
+    if (!aggregation || aggregation === "disabled") {
+      return;
+    }
 
     // Calculate next aligned refresh time with buffer delay
     const nextRefreshTime = this._getNextAlignedRefreshTime(aggregation);
@@ -991,6 +1022,50 @@ export class EnergyCustomGraphCard extends LitElement {
       periodEnd
     );
 
+    const primaryAggregation = aggregationPlan[0];
+
+    if (primaryAggregation === "disabled") {
+      state.inFlight = false;
+      state.queued = false;
+
+      const range = {
+        start: requestedStart,
+        end: requestedEnd,
+      };
+
+      this._isLoading = false;
+
+      if (isCompare) {
+        this._statisticsRangeCompare = range;
+        this._statisticsPeriodCompare = "disabled";
+        this._metadataCompare = undefined;
+        this._statisticsCompare = undefined;
+        this._calculatedSeriesDataCompare = new Map();
+        this._calculatedSeriesUnitsCompare = new Map();
+      } else {
+        this._statisticsRange = range;
+        this._statisticsPeriod = "disabled";
+        this._metadata = undefined;
+        this._statistics = undefined;
+        this._calculatedSeriesData = new Map();
+        this._calculatedSeriesUnits = new Map();
+        this._chartData = [];
+        this._chartOptions = undefined;
+        this._unitsBySeries = new Map();
+        this._disabledMessage = this._getDisabledMessage();
+        if (this._autoRefreshTimeout) {
+          clearTimeout(this._autoRefreshTimeout);
+          this._autoRefreshTimeout = undefined;
+        }
+      }
+
+      return;
+    }
+
+    if (!isCompare) {
+      this._disabledMessage = undefined;
+    }
+
     const fetchId = ++this._activeFetchCounters[key];
     const loadingAtStart = !isCompare && !this._statistics;
     if (loadingAtStart) {
@@ -1025,6 +1100,10 @@ export class EnergyCustomGraphCard extends LitElement {
         for (let idx = 0; idx < aggregationPlan.length; idx++) {
           const aggregation = aggregationPlan[idx];
           lastTriedAggregation = aggregation;
+          if (aggregation === "disabled") {
+            selectedAggregation = aggregation;
+            break;
+          }
           try {
             if (aggregation === "raw") {
               const fetched = await this._fetchRawStatistics(
@@ -1094,21 +1173,44 @@ export class EnergyCustomGraphCard extends LitElement {
             end: requestedEnd,
           };
           this._statisticsPeriodCompare = resolvedAggregation;
-          this._metadataCompare = metadata;
-          this._statisticsCompare = statistics;
-          this._rebuildCalculatedSeries(statistics, metadata, "compare");
+          if (resolvedAggregation === "disabled") {
+            this._metadataCompare = undefined;
+            this._statisticsCompare = undefined;
+            this._calculatedSeriesDataCompare = new Map();
+            this._calculatedSeriesUnitsCompare = new Map();
+          } else {
+            this._metadataCompare = metadata;
+            this._statisticsCompare = statistics;
+            this._rebuildCalculatedSeries(statistics, metadata, "compare");
+          }
         } else {
           this._statisticsRange = {
             start: requestedStart,
             end: requestedEnd,
           };
           this._statisticsPeriod = resolvedAggregation;
-          this._metadata = metadata;
-          this._statistics = statistics;
-          this._rebuildCalculatedSeries(statistics, metadata, "main");
+          if (resolvedAggregation === "disabled") {
+            this._metadata = undefined;
+            this._statistics = undefined;
+            this._calculatedSeriesData = new Map();
+            this._calculatedSeriesUnits = new Map();
+            this._chartData = [];
+            this._chartOptions = undefined;
+            this._unitsBySeries = new Map();
+            this._disabledMessage = this._getDisabledMessage();
+            if (this._autoRefreshTimeout) {
+              clearTimeout(this._autoRefreshTimeout);
+              this._autoRefreshTimeout = undefined;
+            }
+          } else {
+            this._disabledMessage = undefined;
+            this._metadata = metadata;
+            this._statistics = statistics;
+            this._rebuildCalculatedSeries(statistics, metadata, "main");
 
-          // Schedule auto-refresh for rolling windows and future fixed timespans
-          this._scheduleAutoRefresh();
+            // Schedule auto-refresh for rolling windows and future fixed timespans
+            this._scheduleAutoRefresh();
+          }
         }
       }
     } catch (error) {
@@ -1505,7 +1607,12 @@ export class EnergyCustomGraphCard extends LitElement {
           addTimestamp(endTs);
         }
 
-        if (context.period && context.period !== "raw" && context.end) {
+        if (
+          context.period &&
+          context.period !== "raw" &&
+          context.period !== "disabled" &&
+          context.end
+        ) {
           const buckets = this._buildBucketSequence(
             startTs,
             context.end.getTime(),
@@ -1606,7 +1713,11 @@ export class EnergyCustomGraphCard extends LitElement {
 
   private _getCalculationTimeContext(
     target: "main" | "compare"
-  ): { start?: Date; end?: Date; period?: StatisticsPeriod | "raw" } {
+  ): {
+    start?: Date;
+    end?: Date;
+    period?: StatisticsPeriod | "raw" | "disabled";
+  } {
     if (target === "compare") {
       return {
         start: this._comparePeriodStart,
@@ -1641,9 +1752,16 @@ export class EnergyCustomGraphCard extends LitElement {
     const auto = this._deriveAutoStatisticsPeriod(start, end);
     const plan: EnergyCustomGraphAggregationTarget[] = [];
 
+    let stop = false;
     const pushUnique = (period?: EnergyCustomGraphAggregationTarget) => {
-      if (period && !plan.includes(period)) {
+      if (stop || !period) {
+        return;
+      }
+      if (!plan.includes(period)) {
         plan.push(period);
+      }
+      if (period === "disabled") {
+        stop = true;
       }
     };
 
@@ -1869,6 +1987,17 @@ export class EnergyCustomGraphCard extends LitElement {
         ${this.hass.localize?.(
           "ui.components.statistics_charts.loading_statistics"
         ) ?? "Loading statistics…"}
+      </div>`;
+    }
+
+    const aggregationDisabled = this._statisticsPeriod === "disabled";
+    const disabledMessage = aggregationDisabled
+      ? this._disabledMessage ?? this._getDisabledMessage()
+      : this._disabledMessage;
+
+    if (disabledMessage) {
+      return html`<div class="placeholder">
+        ${disabledMessage}
       </div>`;
     }
 
@@ -3064,9 +3193,14 @@ export class EnergyCustomGraphCard extends LitElement {
   private _buildBucketSequence(
     start: number,
     end: number | null,
-    period?: StatisticsPeriod | "raw"
+    period?: StatisticsPeriod | "raw" | "disabled"
   ): number[] | undefined {
-    if (end === null || period === undefined || period === "raw") {
+    if (
+      end === null ||
+      period === undefined ||
+      period === "raw" ||
+      period === "disabled"
+    ) {
       return undefined;
     }
     if (end < start) {
