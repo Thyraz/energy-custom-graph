@@ -45,6 +45,7 @@ export interface EnergyCustomGraphSeriesConfig {
   compare_color?: string;
   y_axis?: "left" | "right";
   show_in_legend?: boolean;
+  show_in_tooltip?: boolean;
   hidden_by_default?: boolean;
   multiply?: number;
   add?: number;

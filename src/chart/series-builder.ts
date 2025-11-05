@@ -341,6 +341,12 @@ export const buildSeries = ({
         itemStyle: { ...lineItemStyle },
         color: lineColor,
       };
+      if (seriesConfig.show_in_tooltip === false) {
+        lineSeries.tooltip = {
+          ...(lineSeries.tooltip ?? {}),
+          show: false,
+        };
+      }
       if (isStep) {
         lineSeries.step = "end";
       }
@@ -417,6 +423,12 @@ export const buildSeries = ({
         color: fillColor,
         barMaxWidth: BAR_MAX_WIDTH,
       };
+      if (seriesConfig.show_in_tooltip === false) {
+        barSeries.tooltip = {
+          ...(barSeries.tooltip ?? {}),
+          show: false,
+        };
+      }
       output.push(barSeries);
 
       if (seriesConfig.fill_to_series) {

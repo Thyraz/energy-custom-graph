@@ -136,6 +136,7 @@ export class EnergyCustomGraphCard extends LitElement {
   private _statisticsPeriod?: StatisticsPeriod | "raw";
   private _statisticsRangeCompare?: { start: number; end: number | null };
   private _statisticsPeriodCompare?: StatisticsPeriod | "raw";
+  private _seriesConfigById: Map<string, EnergyCustomGraphSeriesConfig> = new Map();
 
   private _fetchStates: Map<FetchKey, FetchState> = new Map();
   private _activeFetchCounters: Record<FetchKey, number> = {
@@ -1919,6 +1920,7 @@ export class EnergyCustomGraphCard extends LitElement {
       this._chartData = [];
       this._chartOptions = undefined;
       this._unitsBySeries = new Map();
+      this._seriesConfigById = new Map();
       return;
     }
 
@@ -1926,6 +1928,7 @@ export class EnergyCustomGraphCard extends LitElement {
       this._chartData = [];
       this._chartOptions = undefined;
       this._unitsBySeries = new Map();
+      this._seriesConfigById = new Map();
       return;
     }
 
@@ -2178,6 +2181,7 @@ export class EnergyCustomGraphCard extends LitElement {
       );
 
     const combinedSeries = [...comparePlaceholders, ...compareSeries, ...mainSeries];
+    this._seriesConfigById = new Map(combinedSeriesById);
 
     const displayEnd =
       this._periodEnd?.getTime() ?? this._statisticsRange.end ?? null;
@@ -3416,6 +3420,11 @@ export class EnergyCustomGraphCard extends LitElement {
           return "";
         }
         rendered.add(seriesKey);
+
+        const seriesConfig = this._seriesConfigById.get(seriesKey);
+        if (seriesConfig?.show_in_tooltip === false) {
+          return "";
+        }
 
         const tuple = extractTuple(item);
         const value = tuple?.[1];

@@ -1415,6 +1415,14 @@ ${this._renderTimespanSection(cfg)}
             ></ha-switch>
             <span>Hidden by default</span>
           </div>
+          <div class="row">
+            <ha-switch
+              .checked=${series.show_in_tooltip !== false}
+              @change=${(ev: Event) =>
+                this._updateSeries(index, "show_in_tooltip", (ev.target as HTMLInputElement).checked)}
+            ></ha-switch>
+            <span>Show in tooltip</span>
+          </div>
           ${fillEnabled
             ? html`
                 <div class="row">
