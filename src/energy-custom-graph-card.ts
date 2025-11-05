@@ -1,6 +1,7 @@
 import { html, css, LitElement, nothing } from "lit";
 import type { PropertyValues } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
+import { classMap } from "lit/directives/class-map.js";
 import type { HomeAssistant, LovelaceCardEditor } from "custom-card-helpers";
 import {
   addDays,
@@ -1845,10 +1846,16 @@ export class EnergyCustomGraphCard extends LitElement {
       return nothing;
     }
 
+    const hasTitle = Boolean(this._config.title && this._config.title.trim().length);
+    const contentClasses = {
+      content: true,
+      "content--no-title": !hasTitle,
+    };
+
     return html`
       <ha-card>
         ${this._config.title ? html`<h1 class="card-header">${this._config.title}</h1>` : nothing}
-        <div class="content">
+        <div class=${classMap(contentClasses)}>
           ${this._renderChart()}
         </div>
       </ha-card>
@@ -3507,6 +3514,10 @@ export class EnergyCustomGraphCard extends LitElement {
       min-height: 0;
       display: flex;
       flex-direction: column;
+    }
+
+    .content--no-title {
+      padding-top: 15px;
     }
 
     .chart ha-chart-base {
