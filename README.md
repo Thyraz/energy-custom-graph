@@ -1,8 +1,9 @@
 # Energy Custom Graph
 This card provides a lightweight graph that supports the Home Assistant energy date picker for time range selection. It reuses the built-in ECharts instance shipped with Home Assistant, so you get native styling with minimal overhead.
 
-Unlike the default energy cards like `energy-usage-graph`, this card is not limited to the energy dashboard entities. Any long-term statistic available in the recorder database can be used, as well as the short-term 'raw' history. For aggregated statistics you can choose the type (`change`, `sum`, `mean`, `min`, `max`, `state`) for each series separately.
-I know the `Statistics graph card` nowadays also support the energy date picker, but it didn't provide all the features I needed.
+Unlike the default energy cards like `energy-usage-graph`, this card is not limited to the energy dashboard entities. Any long-term statistic available in the recorder database can be used, as well as the short-term 'raw' history. For aggregated statistics you can choose the type (`change`, `sum`, `mean`, `min`, `max`, `state`) for each series separately.  
+<br>
+I know the `Statistics graph card` also supports the energy date picker nowadays, but it didn't provide all the features I needed.
 
 ## Key Features
 
@@ -148,17 +149,12 @@ timespan:
 Displays a relative time period. The card supports two types, inspired by the options in the energy date picker:
 
 ***Calendar-based periods*** (`hour`, `day`, `week`, `month`, `year`):
-- "day" would mean today from 00:00 to 23:59 as base date
-- `offset` shifts by complete periods (e.g., `-1` for yesterday, `-7` for same day last week)
+- "day" would e.g. mean today from 00:00 to 23:59 as base date
+- `offset` shifts by the complete period (hours for `hour`, days for `day`, ... )
 
 ***Rolling window periods*** (`last_60_minutes`, `last_24_hours`, `last_7_days`, `last_30_days`, `last_12_months`):
 - End date is "now"
-- `last_60_minutes`: Previous 60 minutes (offset shifts by full hours)
-- `last_7_days`: Previous 7 days
-- `last_24_hours`: Previous 24 hours (offset shifts by full days)
-- `last_30_days`: Previous 30 days
-- `last_12_months`: Previous 12 months
-- `offset` shifts den gesamten Zeitraum (Stunden für `last_60_minutes`, Tage für `last_24_hours`/`last_7_days`, Monate für `last_12_months`).
+- `offset` shifts by hours for `last_60_minutes`, days for `last_24_hours`/`last_7_days`/`last_30_days`, months for `last_12_months`.
 
 **Mode: `fixed`**
 ```yaml
@@ -169,7 +165,7 @@ timespan:
 ```
 Display a fixed time range. Dates use ISO 8601 format. If omitted, `start` defaults to the beginning of today and `end` defaults to the end of the start day.
 
-### `series` options - Configure the entities to use
+### `series` options
 
 | Key | Type | Default | Description |
 | --- | ---- | ------- | ----------- |
@@ -177,7 +173,7 @@ Display a fixed time range. Dates use ISO 8601 format. If omitted, `start` defau
 | `statistic_id` | string | – | Entity with long term statistics (e.g. `sensor.entity_id`). Required unless series uses a `calculation` instead. |
 | `stat_type` | `"change"`, `"sum"`, `"mean"`, `"min"`, `"max"`, `"state"` | `"change"` | Statistic type to display for this entity. Not used when `calculation` is provided, as each subseries has it's own setting there. |
 | `calculation` | object | – | Build a computed series from multiple statistics / terms (see below). |
-| `chart_type` | `"bar"`, `"line"`, `"step"` | `"bar"` | Chart type. Use `step` for staircase lines that hold a value until the next change. |
+| `chart_type` | `"bar"`, `"line"`, `"step"` | `"bar"` | Chart type. |
 | `stack` | string | – | Stack key for combining series. Series with identical keys will get stacked on top of each other. |
 | `y_axis` | `"left"`, `"right"` | `"left"` | Axis assignment. |
 | `show_in_legend` | boolean | `true` | Whether to display this series in the legend. If `false`, the series remains visible in the chart but has no legend entry. |
@@ -203,7 +199,7 @@ Configure `calculation` instead of `statistic_id` to compute a series from multi
 
 > **RAW data behaviour:** When you combine raw history series, the card reuses the most recent available value for each term at the evaluated timestamp. This “last-known value” fallback keeps calculations stable even if sensors don’t report at identical times.
 >
-> **Constant-only calculations:** If every term is a constant (multiply/add/clip allowed), the card creates simulated points across the visible time range. That makes it easy to draw horizontal reference lines or to use as a baseline for filling signals stacked on top.
+> **Constant-only calculations:** If every term is a constant, the card creates simulated points across the visible time range. That makes it easy to draw horizontal reference lines or to use as a baseline for filling signals stacked on top.
 
 | Key | Type | Default | Description |
 | --- | ---- | ------- | ----------- |
@@ -229,9 +225,9 @@ Each term accepts the following options:
 Set `fill_to_series` on a line series to fill the area between this and the targeted line. The value must match the `name` of the target series. Requirements:
 
 - Both series must be rendered as lines (no bars) and must not use stacking.
-- The referenced `name` has to be unique within the configuration.
+- The referenced `name` has to be unique within the card configuration.
 - When the upper series drops below the lower one, the card sets the fill to zero and logs a warning.
-- The fill_opacity used is the one configured on the upper series' `fill_opacity` (or the default if unspecified).
+- The fill_opacity used is the one configured on the upper series (or the default if unspecified).
 
 ### `y_axes` options
 
@@ -243,7 +239,7 @@ Configure both left and right Y axes individually. The right axis appears automa
 | `min` | number | auto | Minimum axis value. **Note:** Ignored when `center_zero` is active. |
 | `max` | number | auto | Maximum axis value. When `center_zero` is active, this value is used for both positive and negative bounds (e.g., `max: 10` creates range -10 to +10). |
 | `fit_y_data` | boolean | `false` | Force this axis to fit its data range tightly. |
-| `center_zero` | boolean | `false` | Center the axis around zero by making min/max symmetric (e.g., -10 to +10). Useful for visualizing positive and negative values with zero aligned. If `max` is set, uses ±max; otherwise calculates from data. |
+| `center_zero` | boolean | `false` | Center the axis around zero by making min/max symmetric (e.g., -10 to +10). Useful for visualizing values from different y-axes with zero aligned. If `max` is not set, it will be calculated from the data. |
 | `logarithmic_scale` | boolean | `false` | Apply logarithmic scaling to this axis. |
 | `unit` | string | metadata | Override unit label for this axis. |
 
