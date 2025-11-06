@@ -99,6 +99,17 @@ interface LovelaceGridOptions {
 }
 
 const DEFAULT_TIMESPAN: EnergyCustomGraphTimespanConfig = { mode: "energy" };
+const LOG_PREFIX = "[energy-custom-graph-card]";
+const FETCH_TIMEOUT_MS = 60_000;
+const VISIBILITY_REFRESH_DELAY_MS = 200;
+const ACTIVE_LOG_LEVEL: "debug" | "info" | "warn" | "error" = "warn";
+
+class TimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TimeoutError";
+  }
+}
 
 @customElement("energy-custom-graph-card")
 export class EnergyCustomGraphCard extends LitElement {
@@ -154,6 +165,34 @@ export class EnergyCustomGraphCard extends LitElement {
     compare_live: 0,
   };
   private _rawAnimationFrame?: number;
+  private _isPageVisible =
+    typeof document === "undefined"
+      ? true
+      : document.visibilityState !== "hidden";
+  private _visibilityQueuedLoads: Set<FetchKey> = new Set();
+  private _pendingVisibilityRefresh?: number;
+  private _visibilityListenerAttached = false;
+  private _handleVisibilityChange = () => {
+    const visible =
+      typeof document === "undefined"
+        ? true
+        : document.visibilityState !== "hidden";
+    if (this._isPageVisible === visible) {
+      return;
+    }
+    this._isPageVisible = visible;
+    if (!visible) {
+      this._log("info", "Document hidden; pausing scheduled refresh", {
+        hidden: true,
+      });
+      this._pauseVisibilityTimers();
+    } else {
+      this._log("info", "Document visible; scheduling refresh", {
+        hidden: false,
+      });
+      this._scheduleVisibilityResume();
+    }
+  };
 
   private static readonly FALLBACK_WARNING =
     "[energy-custom-graph-card] Falling back to default period because energy date selection is unavailable.";
@@ -189,6 +228,11 @@ export class EnergyCustomGraphCard extends LitElement {
 
   public connectedCallback(): void {
     super.connectedCallback();
+    if (!this._visibilityListenerAttached && typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", this._handleVisibilityChange);
+      this._visibilityListenerAttached = true;
+      this._isPageVisible = document.visibilityState !== "hidden";
+    }
     if (this.hass && this._config) {
       this._syncWithConfig();
     }
@@ -196,6 +240,14 @@ export class EnergyCustomGraphCard extends LitElement {
 
   public disconnectedCallback(): void {
     super.disconnectedCallback();
+    if (this._visibilityListenerAttached && typeof document !== "undefined") {
+      document.removeEventListener("visibilitychange", this._handleVisibilityChange);
+      this._visibilityListenerAttached = false;
+    }
+    if (this._pendingVisibilityRefresh) {
+      clearTimeout(this._pendingVisibilityRefresh);
+      this._pendingVisibilityRefresh = undefined;
+    }
     this._teardownEnergyCollection();
     if (this._autoRefreshTimeout) {
       clearTimeout(this._autoRefreshTimeout);
@@ -407,7 +459,9 @@ export class EnergyCustomGraphCard extends LitElement {
     const MAX_ATTEMPTS = 50;
     if (attempt >= MAX_ATTEMPTS) {
       if (!this._loggedEnergyFallback) {
-        console.warn(EnergyCustomGraphCard.FALLBACK_WARNING);
+        this._log("warn", EnergyCustomGraphCard.FALLBACK_WARNING, {
+          hidden: !this._isPageVisible,
+        });
         this._loggedEnergyFallback = true;
       }
       this._energyCollection = undefined;
@@ -751,8 +805,55 @@ export class EnergyCustomGraphCard extends LitElement {
     return state;
   }
 
+  private async _withTimeout<T>(
+    promise: Promise<T>,
+    timeoutMs: number,
+    context: string,
+    details?: Record<string, unknown>
+  ): Promise<T> {
+    let timeoutHandle: number | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutHandle = window.setTimeout(() => {
+        reject(new TimeoutError(`${context} timed out after ${timeoutMs} ms`));
+      }, timeoutMs);
+    });
+
+    try {
+      return await Promise.race([promise, timeoutPromise]);
+    } catch (error) {
+      const info = {
+        ...(details ?? {}),
+        context,
+        timeoutMs,
+      };
+      if (error instanceof TimeoutError) {
+        this._log("error", error.message, info);
+      } else {
+        this._log("error", `Request failed in ${context}`, info);
+      }
+      throw error;
+    } finally {
+      if (timeoutHandle !== undefined) {
+        clearTimeout(timeoutHandle);
+      }
+    }
+  }
+
   private _scheduleLoad(key: FetchKey = "main"): void {
     const state = this._getFetchState(key);
+
+    if (!this._isPageVisible) {
+      state.queued = true;
+      if (state.timeout) {
+        clearTimeout(state.timeout);
+        state.timeout = undefined;
+      }
+      this._visibilityQueuedLoads.add(key);
+      this._log("debug", "Deferring load while page is hidden", {
+        key,
+      });
+      return;
+    }
 
     if (state.inFlight) {
       state.queued = true;
@@ -768,6 +869,14 @@ export class EnergyCustomGraphCard extends LitElement {
     }
     state.timeout = window.setTimeout(() => {
       state.timeout = undefined;
+      if (!this._isPageVisible) {
+        state.queued = true;
+        this._visibilityQueuedLoads.add(key);
+        this._log("debug", "Cancelled load execution because page is hidden", {
+          key,
+        });
+        return;
+      }
       void this._loadStatistics(key);
     }, 500);
   }
@@ -775,6 +884,19 @@ export class EnergyCustomGraphCard extends LitElement {
   private _scheduleLiveHourLoad(target: "main" | "compare"): void {
     const key: FetchKey = target === "compare" ? "compare_live" : "main_live";
     const state = this._getFetchState(key);
+
+    if (!this._isPageVisible) {
+      state.queued = true;
+      if (state.timeout) {
+        clearTimeout(state.timeout);
+        state.timeout = undefined;
+      }
+      this._visibilityQueuedLoads.add(key);
+      this._log("debug", "Deferring live-hour load while page is hidden", {
+        key,
+      });
+      return;
+    }
 
     if (state.inFlight) {
       state.queued = true;
@@ -786,12 +908,87 @@ export class EnergyCustomGraphCard extends LitElement {
     }
     state.timeout = window.setTimeout(() => {
       state.timeout = undefined;
+      if (!this._isPageVisible) {
+        state.queued = true;
+        this._visibilityQueuedLoads.add(key);
+        this._log("debug", "Cancelled live-hour execution because page is hidden", {
+          key,
+        });
+        return;
+      }
       void this._loadLiveHourPatch(target);
     }, 250);
   }
 
+  private _pauseVisibilityTimers(): void {
+    if (this._autoRefreshTimeout) {
+      clearTimeout(this._autoRefreshTimeout);
+      this._autoRefreshTimeout = undefined;
+    }
+    if (this._liveHourTimeout) {
+      clearTimeout(this._liveHourTimeout);
+      this._liveHourTimeout = undefined;
+    }
+    for (const state of this._fetchStates.values()) {
+      if (state.timeout) {
+        clearTimeout(state.timeout);
+        state.timeout = undefined;
+      }
+    }
+  }
+
+  private _scheduleVisibilityResume(): void {
+    if (this._pendingVisibilityRefresh) {
+      return;
+    }
+    this._pendingVisibilityRefresh = window.setTimeout(() => {
+      this._pendingVisibilityRefresh = undefined;
+      if (!this._isPageVisible) {
+        return;
+      }
+      const queued = Array.from(this._visibilityQueuedLoads);
+      this._visibilityQueuedLoads.clear();
+      this._log("debug", "Resuming after visibility change", {
+        queued: queued.join(",") || undefined,
+      });
+      if (!queued.length) {
+        queued.push("main");
+        if (this._shouldUseEnergyCompare() && this._comparePeriodStart) {
+          queued.push("compare");
+        }
+      }
+      queued.forEach((key) => {
+        if (key === "main_live") {
+          this._scheduleLiveHourLoad("main");
+        } else if (key === "compare_live") {
+          this._scheduleLiveHourLoad("compare");
+        } else {
+          this._scheduleLoad(key);
+        }
+      });
+      if (!queued.includes("main")) {
+        this._scheduleLoad("main");
+      }
+      if (
+        this._shouldUseEnergyCompare() &&
+        this._comparePeriodStart &&
+        !queued.includes("compare")
+      ) {
+        this._scheduleLoad("compare");
+      }
+      this._scheduleAutoRefresh();
+    }, VISIBILITY_REFRESH_DELAY_MS);
+  }
+
   private async _loadLiveHourPatch(target: "main" | "compare"): Promise<void> {
     if (!this.hass) {
+      return;
+    }
+
+    if (!this._isPageVisible) {
+      this._log("debug", "Aborting live-hour load while hidden", {
+        target,
+      });
       return;
     }
 
@@ -827,25 +1024,46 @@ export class EnergyCustomGraphCard extends LitElement {
       return;
     }
 
+    const requestId = `${key}-${Date.now()}`;
+    const requestStarted = performance.now();
+
     state.inFlight = true;
     state.queued = false;
 
     const { fetchStart, fetchEnd, currentHourStart } = liveContext;
+    const requestContext: Record<string, unknown> = {
+      key,
+      target,
+      hidden: !this._isPageVisible,
+      requestId,
+      fetchStart: new Date(fetchStart).toISOString(),
+      fetchEnd: new Date(fetchEnd).toISOString(),
+      stats: statisticIds.length,
+    };
+    this._log("debug", "Loading live-hour statistics", requestContext);
 
     try {
-      const fetched = await fetchStatistics(
-        this.hass,
-        new Date(fetchStart),
-        new Date(fetchEnd),
-        statisticIds,
-        "5minute",
-        undefined,
-        statTypes
+      const fetched = await this._withTimeout(
+        fetchStatistics(
+          this.hass,
+          new Date(fetchStart),
+          new Date(fetchEnd),
+          statisticIds,
+          "5minute",
+          undefined,
+          statTypes
+        ),
+        FETCH_TIMEOUT_MS,
+        "fetchStatistics:liveHour",
+        requestContext
       );
       const patch = this._buildLiveHourPatch(target, fetched, liveContext, statisticIds);
       this._applyLiveHourPatch(target, patch);
     } catch (error) {
-      console.error("[energy-custom-graph-card] Failed to load live hour statistics", error);
+      this._log("error", "Failed to load live-hour statistics", {
+        ...requestContext,
+        error: error instanceof Error ? error.message : error,
+      });
     } finally {
       state.inFlight = false;
       if (state.queued) {
@@ -855,6 +1073,11 @@ export class EnergyCustomGraphCard extends LitElement {
       if (target === "main" && this._shouldComputeCurrentHour("main")) {
         this._scheduleNextLiveHourTick();
       }
+      const durationMs = Math.round(performance.now() - requestStarted);
+      this._log("debug", "Live-hour request completed", {
+        ...requestContext,
+        durationMs,
+      });
     }
   }
 
@@ -1301,6 +1524,13 @@ export class EnergyCustomGraphCard extends LitElement {
       this._autoRefreshTimeout = undefined;
     }
 
+    if (!this._isPageVisible) {
+      this._log("debug", "Skipping auto-refresh scheduling while hidden", {
+        hidden: true,
+      });
+      return;
+    }
+
     const timespanConfig = this._config?.timespan;
     if (!timespanConfig) {
       return;
@@ -1341,7 +1571,13 @@ export class EnergyCustomGraphCard extends LitElement {
 
     if (msUntilRefresh <= 0) {
       // Should not happen, but schedule for 1 minute from now as fallback
-      console.warn("[energy-custom-graph-card] Calculated refresh time is in the past, using 1 minute fallback");
+      this._log(
+        "warn",
+        "Calculated refresh time is in the past, using 1 minute fallback",
+        {
+          hidden: !this._isPageVisible,
+        }
+      );
       this._autoRefreshTimeout = window.setTimeout(() => {
         this._scheduleAutoRefresh();
       }, 60000);
@@ -1350,6 +1586,12 @@ export class EnergyCustomGraphCard extends LitElement {
 
     this._autoRefreshTimeout = window.setTimeout(() => {
       this._autoRefreshTimeout = undefined;
+      if (!this._isPageVisible) {
+        this._log("debug", "Auto-refresh timer fired while hidden", {
+          hidden: true,
+        });
+        return;
+      }
 
       const periodChanged = this._recalculatePeriod();
       const compareChanged = this._recalculateComparePeriod();
@@ -1387,13 +1629,32 @@ export class EnergyCustomGraphCard extends LitElement {
     }
 
     const isCompare = key === "compare";
+    const requestId = `${key}-${Date.now()}`;
+    const requestStarted = performance.now();
+    const requestDetails: Record<string, unknown> = {
+      key,
+      compare: isCompare,
+      hidden: !this._isPageVisible,
+    };
+    requestDetails.requestId = requestId;
+
     const periodStart = isCompare ? this._comparePeriodStart : this._periodStart;
     const periodEnd = isCompare ? this._comparePeriodEnd : this._periodEnd;
 
     if (!periodStart) {
+      this._log("debug", "Skipping statistics load; no period defined", {
+        ...requestDetails,
+      });
       if (isCompare) {
         this._resetCompareStatistics();
       }
+      return;
+    }
+
+    if (!this._isPageVisible) {
+      this._log("debug", "Aborting statistics load while hidden", {
+        ...requestDetails,
+      });
       return;
     }
 
@@ -1402,6 +1663,9 @@ export class EnergyCustomGraphCard extends LitElement {
 
     const requestedStart = periodStart.getTime();
     const requestedEnd = periodEnd?.getTime() ?? null;
+    requestDetails.start = new Date(requestedStart).toISOString();
+    requestDetails.end =
+      requestedEnd !== null ? new Date(requestedEnd).toISOString() : null;
 
     const statisticIdSet = new Set<string>();
     const statTypeSet = new Set<EnergyCustomGraphStatisticType>();
@@ -1444,6 +1708,7 @@ export class EnergyCustomGraphCard extends LitElement {
     if (!statTypes) {
       statTypes = [EnergyCustomGraphCard.DEFAULT_STAT_TYPE];
     }
+    requestDetails.statistics = statisticIds.length;
 
     if (isCompare) {
       this._lastStatisticIdsCompare = statisticIds;
@@ -1459,6 +1724,8 @@ export class EnergyCustomGraphCard extends LitElement {
     );
 
     const primaryAggregation = aggregationPlan[0];
+    requestDetails.aggregationPlan = aggregationPlan.join(" -> ");
+    this._log("info", "Loading statistics", requestDetails);
 
     if (primaryAggregation === "disabled") {
       state.inFlight = false;
@@ -1470,6 +1737,9 @@ export class EnergyCustomGraphCard extends LitElement {
       };
 
       this._isLoading = false;
+      this._log("info", "Aggregation disabled; skipping data load", {
+        ...requestDetails,
+      });
 
       if (isCompare) {
         this._liveStatisticsCompare = undefined;
@@ -1514,23 +1784,32 @@ export class EnergyCustomGraphCard extends LitElement {
       this._isLoading = true;
     }
 
+    let lastError: unknown;
+
     try {
       const metadata: Record<string, StatisticsMetaData> = {};
 
       if (statisticIds.length) {
         try {
-          const metadataArray = await getStatisticMetadata(
-            this.hass,
-            statisticIds
+          const metadataArray = await this._withTimeout(
+            getStatisticMetadata(this.hass, statisticIds),
+            FETCH_TIMEOUT_MS,
+            "getStatisticMetadata",
+            {
+              ...requestDetails,
+              stats: statisticIds.length,
+            }
           );
           metadataArray.forEach((item) => {
             metadata[item.statistic_id] = item;
           });
         } catch (error) {
-          console.error(
-            "[energy-custom-graph-card] Failed to load statistics metadata",
-            error
-          );
+          if (!(error instanceof TimeoutError)) {
+            this._log("error", "Failed to load statistics metadata", {
+              ...requestDetails,
+              error: error instanceof Error ? error.message : error,
+            });
+          }
         }
       }
 
@@ -1551,54 +1830,88 @@ export class EnergyCustomGraphCard extends LitElement {
               const fetched = await this._fetchRawStatistics(
                 periodStart,
                 periodEnd,
-                statisticIds
+                statisticIds,
+                requestDetails
               );
               statistics = fetched;
               if (this._statisticsHaveData(fetched, statisticIds)) {
+                lastError = undefined;
                 if (idx > 0) {
-                  console.warn(
-                    `[energy-custom-graph-card] Aggregation "${aggregationPlan[0]}" returned no data. Using fallback "raw".`
+                  this._log(
+                    "warn",
+                    `Aggregation "${aggregationPlan[0]}" returned no data. Using fallback "raw".`,
+                    {
+                      ...requestDetails,
+                      aggregation,
+                    }
                   );
                 }
                 selectedAggregation = aggregation;
                 break;
               }
               if (idx < aggregationPlan.length - 1) {
-                console.warn(
-                  `[energy-custom-graph-card] Aggregation "raw" returned no data. Trying fallback "${aggregationPlan[idx + 1]}".`
+                this._log(
+                  "warn",
+                  `Aggregation "raw" returned no data. Trying fallback "${aggregationPlan[idx + 1]}".`,
+                  {
+                    ...requestDetails,
+                    aggregation,
+                  }
                 );
               }
             } else {
-              const fetched = await fetchStatistics(
-                this.hass,
-                periodStart,
-                periodEnd,
-                statisticIds,
-                aggregation,
-                undefined,
-                statTypes
+              const fetched = await this._withTimeout(
+                fetchStatistics(
+                  this.hass,
+                  periodStart,
+                  periodEnd,
+                  statisticIds,
+                  aggregation,
+                  undefined,
+                  statTypes
+                ),
+                FETCH_TIMEOUT_MS,
+                `fetchStatistics:${aggregation}`,
+                {
+                  ...requestDetails,
+                  aggregation,
+                  stats: statisticIds.length,
+                }
               );
               statistics = fetched;
               if (this._statisticsHaveData(fetched, statisticIds)) {
+                lastError = undefined;
                 if (idx > 0) {
-                  console.warn(
-                    `[energy-custom-graph-card] Aggregation "${aggregationPlan[0]}" returned no data. Using fallback "${aggregation}".`
+                  this._log(
+                    "warn",
+                    `Aggregation "${aggregationPlan[0]}" returned no data. Using fallback "${aggregation}".`,
+                    {
+                      ...requestDetails,
+                      aggregation,
+                    }
                   );
                 }
                 selectedAggregation = aggregation;
                 break;
               }
               if (idx < aggregationPlan.length - 1) {
-                console.warn(
-                  `[energy-custom-graph-card] Aggregation "${aggregation}" returned no data. Trying fallback "${aggregationPlan[idx + 1]}".`
+                this._log(
+                  "warn",
+                  `Aggregation "${aggregation}" returned no data. Trying fallback "${aggregationPlan[idx + 1]}".`,
+                  {
+                    ...requestDetails,
+                    aggregation,
+                  }
                 );
               }
             }
           } catch (error) {
-            console.error(
-              `[energy-custom-graph-card] Failed to load statistics for aggregation "${aggregation}"`,
-              error
-            );
+            lastError = error;
+            this._log("error", `Failed to load statistics for aggregation "${aggregation}"`, {
+              ...requestDetails,
+              aggregation,
+              error: error instanceof Error ? error.message : error,
+            });
           }
         }
       }
@@ -1670,11 +1983,12 @@ export class EnergyCustomGraphCard extends LitElement {
         }
       }
     } catch (error) {
+      lastError = error;
       if (fetchId === this._activeFetchCounters[key]) {
-        console.error(
-          "[energy-custom-graph-card] Failed to load statistics",
-          error
-        );
+        this._log("error", "Failed to load statistics", {
+          ...requestDetails,
+          error: error instanceof Error ? error.message : error,
+        });
         if (isCompare) {
           this._resetCompareStatistics();
         } else {
@@ -1696,6 +2010,16 @@ export class EnergyCustomGraphCard extends LitElement {
           state.queued = false;
           this._scheduleLoad(key);
         }
+        const durationMs = Math.round(performance.now() - requestStarted);
+        const resolvedAggregation = isCompare
+          ? this._statisticsPeriodCompare
+          : this._statisticsPeriod;
+        this._log(lastError ? "warn" : "info", "Statistics request completed", {
+          ...requestDetails,
+          aggregation: resolvedAggregation,
+          durationMs,
+          status: lastError ? "error" : "success",
+        });
       }
     }
   }
@@ -1703,7 +2027,8 @@ export class EnergyCustomGraphCard extends LitElement {
   private async _fetchRawStatistics(
     start: Date,
     end: Date | undefined,
-    statisticIds: string[]
+    statisticIds: string[],
+    contextDetails?: Record<string, unknown>
   ): Promise<Statistics> {
     if (!this._config || !this.hass || !statisticIds.length) {
       return {};
@@ -1722,12 +2047,21 @@ export class EnergyCustomGraphCard extends LitElement {
       options.significant_changes_only = rawOptions.significant_changes_only;
     }
 
-    const history = await fetchRawHistoryStates(
-      this.hass,
-      queryStart,
-      queryEnd,
-      statisticIds,
-      options
+    const history = await this._withTimeout(
+      fetchRawHistoryStates(
+        this.hass,
+        queryStart,
+        queryEnd,
+        statisticIds,
+        options
+      ),
+      FETCH_TIMEOUT_MS,
+      "fetchRawHistoryStates",
+      {
+        ...(contextDetails ?? {}),
+        raw: true,
+        stats: statisticIds.length,
+      }
     );
     return historyStatesToStatistics(history);
   }
@@ -4365,6 +4699,30 @@ export class EnergyCustomGraphCard extends LitElement {
       _error
     ) {
       return date.toLocaleString();
+    }
+  }
+
+  private _log(
+    level: "debug" | "info" | "warn" | "error",
+    message: string,
+    details?: Record<string, unknown>
+  ): void {
+    const levelOrder = {
+      debug: 0,
+      info: 1,
+      warn: 2,
+      error: 3,
+    } as const;
+    if (levelOrder[level] < levelOrder[ACTIVE_LOG_LEVEL]) {
+      return;
+    }
+    const logger =
+      ((console as Record<string, (...args: unknown[]) => void>)[level] ??
+        console.log).bind(console);
+    if (details && Object.keys(details).length) {
+      logger(`${LOG_PREFIX} ${message}`, details);
+    } else {
+      logger(`${LOG_PREFIX} ${message}`);
     }
   }
 
