@@ -1,19 +1,73 @@
 # Energy Custom Graph
-This is a lightweight graph card that supports the Home Assistant energy date picker for time range selection. It reuses the built-in ECharts instance shipped with Home Assistant, so you get native styling with minimal overhead.
+This card provides a lightweight graph that supports the Home Assistant energy date picker for time range selection. It reuses the built-in ECharts instance shipped with Home Assistant, so you get native styling with minimal overhead.
 
-Unlike the default energy cards like `energy-usage-graph`, this card is not limited to the energy dashboard entities. Any long-term statistic available in the recorder database can be used. You can choose the statistic type (`change`, `sum`, `mean`, `min`, `max`, `state`) for each series displayed.
+Unlike the default energy cards like `energy-usage-graph`, this card is not limited to the energy dashboard entities. Any long-term statistic available in the recorder database can be used, as well as the short-term 'raw' history. For aggregated statistics you can choose the type (`change`, `sum`, `mean`, `min`, `max`, `state`) for each series separately.
 I know the `Statistics graph card` nowadays also support the energy date picker, but it didn't provide all the features I needed.
 
 ## Key Features
 
 - This card has an full-featured graphical editor, so almost all settings can be done through the UI.
 - Displayed timespan sync with the energy date picker (`energy-date-selection`).
-- Supports any entity that exposes long-term statistics.
-- Quick access to colors from the HA energy color palette and native styles so mixed dashboards look consistent.
+- Supports any entity that exposes long-term statistics, as well as the short-term 'raw' history.
+- Allows to compute values for the current running hour before HA provides the final aggregation.
 - Uses Home Assistant's bundled ECharts runtime – no extra framework needs to be loaded.
+- Override the energy date pickers default aggregation periods, to e.g. display hourly instead of daily bars when viewing a monthly report.
 - Per-series control over aggregation type, chart type (bar, line or step), stacking, color, unit, scaling and offsets.
 - Optional fill-between-rendering for line series to fill the space e.g. between min / max line-charts
 - Optional manual timespan selection (fixed ranges or relative day/week/month/year offsets) when you don't want to use the energy date picker.
+- Support for calculated series, so you can e.g. add and subtract sensor values as a computed signal
+- Quick access to colors from the HA energy color palette and native styles so mixed dashboards look consistent.
+
+## Screenshots
+
+<p>
+  <img
+    src="docs/img/1 mixed-line-and-bar-charts.jpg"
+    width="797"
+    height="356"
+    alt="Mix of bar and line charts with stacked series"
+  />
+</p>
+<p>
+  <img
+    src="docs/img/2 line-charts.jpg"
+    width="806"
+    height="309"
+    alt="Multiple line charts displayed together"
+  />
+</p>
+<p>
+  <img
+    src="docs/img/3 step-chart.jpg"
+    width="793"
+    height="323"
+    alt="Step chart visualizing a binary sensor"
+  />
+</p>
+<p>
+  <img
+    src="docs/img/4 fill-area-between-signals.jpg"
+    width="787"
+    height="352"
+    alt="Filled area between two line series"
+  />
+</p>
+<p>
+  <img
+    src="docs/img/5 compare-different-color.jpg"
+    width="1015"
+    height="295"
+    alt="Compare mode using different highlight colors"
+  />
+</p>
+<p>
+  <img
+    src="docs/img/6 editor.jpg"
+    width="799"
+    height="481"
+    alt="Graphical editor for configuring the card"
+  />
+</p>
 
 ## Installation
 
@@ -48,7 +102,7 @@ series:
     fill: true
 ```
 
-The card supports the energy date pickerfor timespan selection. Place an `energy-date-selection` control on the same dashboard and set `timespan.mode: "energy"` (which is the default). For other timespan modes, see the `timespan` configuration below.
+The card supports the energy date picker for timespan selection. Set `timespan.mode: "energy"` (which is the default) and place an `energy-date-selection` control on the same dashboard. For other timespan modes, see the `timespan` configuration below.
 
 ## Configuration
 
@@ -313,12 +367,10 @@ series:
     stat_type: max
     chart_type: line
     fill_to_series: Min temperature
-    smooth: 0
   - statistic_id: sensor.outdoor_temperature
     name: Min temperature
     stat_type: min
     chart_type: line
-    smooth: 0
 ```
 
 ### 4. Recreate the energy dashboard usage card
@@ -365,9 +417,9 @@ series:
     stack: energy
 ```
 
-### 5. Binary sensor with RAW short ranges and disabled long ranges
+### 5. Binary sensor with short ranges in RAW and disabled long ranges
 
-This setup draws a step line for a binary sensor. RAW history is used for the shortest two picker ranges, while longer ranges disable fetching and prompt the user to narrow the period.
+This setup draws a step line for a binary sensor. RAW history is used for the shortest two picker ranges, while longer ranges disable fetching and prompt the user to select a shorter period.
 
 ```yaml
 type: custom:energy-custom-graph-card
