@@ -341,6 +341,17 @@ export class EnergyCustomGraphCardEditor
                 (ev.target as HTMLInputElement).value
               )}
           ></ha-textfield>
+          <div class="row">
+            <ha-switch
+              .checked=${cfg.show_stack_sums === true}
+              @change=${(ev: Event) =>
+                this._updateConfig(
+                  "show_stack_sums",
+                  (ev.target as HTMLInputElement).checked
+                )}
+            ></ha-switch>
+            <span>Show stack sums</span>
+          </div>
         </div>
       </div>
     `;

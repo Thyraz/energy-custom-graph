@@ -124,6 +124,7 @@ By default the card mirrors the core energy cards and automatically selects the 
 | `expand_legend` | boolean | `false` | Expand the legend by default. |
 | `tooltip_precision` | number | – | Override numeric precision in the tooltip. |
 | `show_unit` | boolean | `true` | Show corresponding units from the recorder database when available in tooltips and axes. |
+| `show_stack_sums` | boolean | `false` | When `true`, adds positive/negative totals for each visible stack to the tooltip. |
 | `y_axes` | list | – | Y axis configuration for both left and right axes (see below). |
 | `aggregation` | object | auto | Control recorder aggregation intervals. See below. |
 | `series` | list | – | One or more series definitions (see below). |

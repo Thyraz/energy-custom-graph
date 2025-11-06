@@ -2587,6 +2587,7 @@ export class EnergyCustomGraphCard extends LitElement {
     const combinedSeriesById = new Map(seriesById);
     const combinedUnits = new Map<string, string | null | undefined>();
     unitBySeries.forEach((value, key) => combinedUnits.set(key, value));
+    const legendSecondaryIds = new Map<string, string[]>();
 
     const barStackBaseById = new Map<string, string>();
     const normalizedBarStacks = new Map<string, string>();
@@ -2697,7 +2698,7 @@ export class EnergyCustomGraphCard extends LitElement {
           const originalTs = Number(entry[0]);
           const mappedTs = applyTransform(originalTs);
           const rest = entry.slice(1);
-          return [mappedTs, ...rest];
+          return [mappedTs, ...rest, originalTs];
         }
         if (entry && typeof entry === "object" && "value" in entry) {
           const tuple = Array.isArray((entry as any).value)
@@ -2710,6 +2711,7 @@ export class EnergyCustomGraphCard extends LitElement {
           const mappedTs = applyTransform(originalTs);
           const newTuple = [...tuple];
           newTuple[0] = mappedTs;
+          newTuple.push(originalTs);
           return {
             ...(entry as Record<string, unknown>),
             value: newTuple,
@@ -2792,6 +2794,15 @@ export class EnergyCustomGraphCard extends LitElement {
         if (baseConfig) {
           combinedSeriesById.set(compareId, baseConfig);
         }
+
+        const legendEntryId = legend.find(
+          (entry) => entry.id === (serie.id ?? baseId)
+        )?.id;
+        if (legendEntryId) {
+          const secondaryList = legendSecondaryIds.get(legendEntryId) ?? [];
+          secondaryList.push(compareId);
+          legendSecondaryIds.set(legendEntryId, secondaryList);
+        }
       });
       compareSeries = compareSeriesTemp;
     }
@@ -2853,7 +2864,7 @@ export class EnergyCustomGraphCard extends LitElement {
       this._unitsBySeries.set(item.id ?? "", axisUnit);
     });
 
-    const legendOption = this._buildLegendOption(legend);
+    const legendOption = this._buildLegendOption(legend, legendSecondaryIds);
 
     const axisMax = this._periodEnd
       ? this._computeSuggestedXAxisMax(this._periodStart, this._periodEnd)
@@ -3769,7 +3780,8 @@ export class EnergyCustomGraphCard extends LitElement {
       name: string;
       color?: string;
       hidden?: boolean;
-    }[]
+    }[],
+    secondaryIds: Map<string, string[]>
   ): LegendOption | undefined {
     if (!entries.length) {
       return undefined;
@@ -3787,12 +3799,18 @@ export class EnergyCustomGraphCard extends LitElement {
     const data = sortedEntries.map((entry) => ({
       id: entry.id,
       name: entry.name,
+      secondaryIds: secondaryIds.get(entry.id) ?? [],
       itemStyle: entry.color ? { color: entry.color } : undefined,
     }));
 
     const selected: Record<string, boolean> = {};
     sortedEntries.forEach((entry) => {
-      selected[entry.id] = entry.hidden ? false : true;
+      const isVisible = entry.hidden ? false : true;
+      selected[entry.id] = isVisible;
+      const linked = secondaryIds.get(entry.id);
+      linked?.forEach((secondaryId) => {
+        selected[secondaryId] = isVisible;
+      });
     });
 
     return {
@@ -4011,77 +4029,302 @@ export class EnergyCustomGraphCard extends LitElement {
     }
 
     const items = params as Array<Record<string, any>>;
+    const precision = this._config?.tooltip_precision ?? 2;
+    const includeStackSums = this._config?.show_stack_sums === true;
 
-    const extractTuple = (param: Record<string, any>): [number, number | null] | undefined => {
+    const extractTuple = (
+      param: Record<string, any>
+    ): { display: number; value: number | null; original?: number } | undefined => {
       const value = param.value ?? param.data ?? param?.value?.value;
       if (Array.isArray(value)) {
-        const x = value[0];
-        const y = value[value.length - 1];
-        return [x, typeof y === "number" ? y : null];
+        const displayTs = Number(value[0]);
+        const yVal =
+          value.length > 1 && typeof value[1] === "number" ? value[1] : null;
+        const originalCandidate =
+          value.length > 2 && typeof value[value.length - 1] === "number"
+            ? value[value.length - 1]
+            : undefined;
+        return {
+          display: displayTs,
+          value: yVal,
+          original:
+            originalCandidate !== undefined &&
+            originalCandidate !== displayTs
+              ? originalCandidate
+              : undefined,
+        };
       }
       if (typeof value === "number") {
-        return [param.axisValue ?? param.axisValueLabel ?? 0, value];
+        return {
+          display: Number(param.axisValue ?? param.axisValueLabel ?? 0),
+          value,
+        };
       }
       if (value && Array.isArray(value.value)) {
         const tuple = value.value as any[];
-        const x = tuple[0];
-        const y = tuple[tuple.length - 1];
-        return [x, typeof y === "number" ? y : null];
+        const displayTs = Number(tuple[0]);
+        const yVal =
+          tuple.length > 1 && typeof tuple[1] === "number" ? tuple[1] : null;
+        const originalCandidate =
+          tuple.length > 2 && typeof tuple[tuple.length - 1] === "number"
+            ? tuple[tuple.length - 1]
+            : undefined;
+        return {
+          display: displayTs,
+          value: yVal,
+          original:
+            originalCandidate !== undefined &&
+            originalCandidate !== displayTs
+              ? originalCandidate
+              : undefined,
+        };
+      }
+      return undefined;
+    };
+
+    const toDate = (input: number | string | undefined): Date | undefined => {
+      if (typeof input === "number") {
+        return Number.isFinite(input) ? new Date(input) : undefined;
+      }
+      if (typeof input === "string") {
+        const parsed = Date.parse(input);
+        if (!Number.isNaN(parsed)) {
+          return new Date(parsed);
+        }
       }
       return undefined;
     };
 
     const firstTuple = extractTuple(items[0]);
-    const header = firstTuple
-      ? `${this._formatDateTime(new Date(firstTuple[0]))}<br>`
-      : "";
+    const headerDate = firstTuple ? toDate(firstTuple.display) : undefined;
+    const header = headerDate ? `<strong>${this._formatDateTime(headerDate)}</strong>` : "";
 
-    const precision = this._config?.tooltip_precision ?? 2;
     const rendered = new Set<string>();
 
-    const lines = items
-      .map((item, index) => {
-        const seriesKey = String(
-          item.seriesId ?? item.seriesIndex ?? item.seriesName ?? index
-        );
-        if (rendered.has(seriesKey)) {
-          return "";
-        }
-        rendered.add(seriesKey);
+    type StackAccumulator = {
+      name: string;
+      positive: number;
+      negative: number;
+      count: number;
+      unit?: string | null;
+      isCompare: boolean;
+    };
 
-        const seriesConfig = this._seriesConfigById.get(seriesKey);
-        if (seriesConfig?.show_in_tooltip === false) {
-          return "";
-        }
+    const stackTotals = new Map<string, StackAccumulator>();
+    const groupData = {
+      main: { header: undefined as string | undefined, lines: [] as string[], totals: [] as string[] },
+      compare: {
+        header: undefined as string | undefined,
+        lines: [] as string[],
+        totals: [] as string[],
+      },
+    };
 
-        const tuple = extractTuple(item);
-        const value = tuple?.[1];
-        if (value === null || value === undefined || Number.isNaN(value)) {
-          return "";
-        }
-        const unit =
-          this._config?.show_unit === false
-            ? undefined
-            : this._unitsBySeries.get(seriesKey);
-        const formattedValue = this._formatNumber(value, {
-          maximumFractionDigits: precision,
-        });
-        const unitLabel = unit ? ` ${unit}` : "";
-        const marker =
-          typeof item.marker === "string"
-            ? item.marker
-            : item.color
-              ? `<span style="display:inline-block;margin-right:4px;border-radius:50%;width:8px;height:8px;background:${item.color}"></span>`
-              : "";
-        return `${marker} ${item.seriesName ?? ""}: ${formattedValue}${unitLabel}`;
-      })
-      .filter(Boolean);
+    let firstCompareDisplay: number | undefined;
+    let firstCompareOriginal: number | undefined;
 
-    if (!lines.length) {
+    items.forEach((item, index) => {
+      const seriesKey =
+        (typeof item.seriesId === "string" && item.seriesId) ??
+        (typeof item.seriesName === "string" && item.seriesName) ??
+        (typeof item.seriesIndex === "number" ? String(item.seriesIndex) : undefined) ??
+        String(index);
+
+      if (rendered.has(seriesKey)) {
+        return;
+      }
+      rendered.add(seriesKey);
+
+      const seriesConfig = this._seriesConfigById.get(seriesKey);
+      if (seriesConfig?.show_in_tooltip === false) {
+        return;
+      }
+
+      const tuple = extractTuple(item);
+      if (!tuple) {
+        return;
+      }
+      const { display, value, original } = tuple;
+      if (value === null || value === undefined || Number.isNaN(value)) {
+        return;
+      }
+
+      const isCompare = seriesKey.endsWith("--compare");
+      const groupKey = isCompare ? "compare" : "main";
+
+      if (isCompare) {
+        if (firstCompareDisplay === undefined) {
+          firstCompareDisplay = display;
+        }
+        if (original !== undefined && firstCompareOriginal === undefined) {
+          firstCompareOriginal = original;
+        }
+      }
+
+      const unit =
+        this._config?.show_unit === false
+          ? undefined
+          : this._unitsBySeries.get(seriesKey);
+      const formattedValue = this._formatNumber(value, {
+        maximumFractionDigits: precision,
+      });
+      const unitLabel = unit ? ` ${unit}` : "";
+      const marker =
+        typeof item.marker === "string"
+          ? item.marker
+          : item.color
+            ? `<span style="display:inline-block;margin-right:4px;border-radius:50%;width:8px;height:8px;background:${item.color}"></span>`
+            : "";
+      groupData[groupKey as "main" | "compare"].lines.push(
+        `${marker} ${item.seriesName ?? ""}: ${formattedValue}${unitLabel}`
+      );
+      if (isCompare && original !== undefined && !groupData.compare.header) {
+        const compareDate = toDate(original);
+        if (compareDate) {
+          groupData.compare.header = `<strong>${this._formatDateTime(compareDate)}</strong>`;
+        }
+      }
+
+      if (includeStackSums) {
+        const stackName = seriesConfig?.stack?.trim();
+        if (!stackName || stackName.startsWith("__energy_fill_")) {
+          return;
+        }
+        const totalsKey = `${isCompare ? "compare" : "main"}::${stackName}`;
+        const accumulator = stackTotals.get(totalsKey) ?? {
+          name: stackName,
+          positive: 0,
+          negative: 0,
+          count: 0,
+          unit,
+          isCompare,
+        };
+        if (accumulator.unit === undefined && unit !== undefined) {
+          accumulator.unit = unit;
+        }
+        accumulator.count += 1;
+        if (value > 0) {
+          accumulator.positive += value;
+        } else if (value < 0) {
+          accumulator.negative += value;
+        }
+        stackTotals.set(totalsKey, accumulator);
+      }
+    });
+
+    if (includeStackSums && stackTotals.size) {
+      stackTotals.forEach((accumulator) => {
+        if (accumulator.count < 2) {
+          return;
+        }
+        const unitLabel =
+          accumulator.unit && this._config?.show_unit !== false
+            ? ` ${accumulator.unit}`
+            : "";
+        const format = (value: number) =>
+          this._formatNumber(value, { maximumFractionDigits: precision });
+        const prefix = accumulator.isCompare ? " (Compare)" : "";
+        const targetGroup = accumulator.isCompare ? "compare" : "main";
+        if (accumulator.positive > 0) {
+          groupData[targetGroup].totals.push(
+            `<strong>Total ${accumulator.name}${prefix} (pos): ${format(accumulator.positive)}${unitLabel}</strong>`
+          );
+        }
+        if (accumulator.negative < 0) {
+          groupData[targetGroup].totals.push(
+            `<strong>Total ${accumulator.name}${prefix} (neg): ${format(accumulator.negative)}${unitLabel}</strong>`
+          );
+        }
+      });
+    }
+
+    if (!groupData.compare.header) {
+      const candidateOriginal =
+        firstCompareOriginal !== undefined
+          ? firstCompareOriginal
+          : firstCompareDisplay !== undefined
+            ? this._computeCompareOriginalTimestamp(firstCompareDisplay)
+            : undefined;
+      if (candidateOriginal !== undefined) {
+        const compareDate = toDate(candidateOriginal);
+        if (compareDate) {
+          groupData.compare.header = `<strong>${this._formatDateTime(compareDate)}</strong>`;
+        }
+      }
+    }
+
+    const buildSection = (group: "main" | "compare"): string | undefined => {
+      const parts: string[] = [];
+      if (groupData[group].header) {
+        parts.push(groupData[group].header!);
+      }
+      if (groupData[group].lines.length) {
+        parts.push(groupData[group].lines.join("<br>"));
+      }
+      if (groupData[group].totals.length) {
+        parts.push(groupData[group].totals.join("<br>"));
+      }
+      if (!parts.length) {
+        return undefined;
+      }
+      return parts.join("<br>");
+    };
+
+    const bodySegments: string[] = [];
+    const mainSection = buildSection("main");
+    const compareSection = buildSection("compare");
+    if (mainSection) {
+      bodySegments.push(mainSection);
+    }
+    if (compareSection) {
+      bodySegments.push(compareSection);
+    }
+
+    if (!bodySegments.length) {
       return header || "";
     }
 
-    return `${header}${lines.join("<br>")}`;
+    const body = bodySegments.join("<br><br>");
+    if (!header) {
+      return body;
+    }
+    return `${header}<br>${body}`;
+  }
+
+  private _computeCompareOriginalTimestamp(display: number): number | undefined {
+    if (!this._periodStart || !this._comparePeriodStart) {
+      return undefined;
+    }
+
+    const start = this._periodStart;
+    const compareStart = this._comparePeriodStart;
+
+    const compareYearDiff = differenceInYears(start, compareStart);
+    if (
+      compareYearDiff !== 0 &&
+      start.getTime() === startOfYear(start).getTime()
+    ) {
+      return addYears(new Date(display), -compareYearDiff).getTime();
+    }
+
+    const compareMonthDiff = differenceInMonths(start, compareStart);
+    if (
+      compareMonthDiff !== 0 &&
+      start.getTime() === startOfMonth(start).getTime()
+    ) {
+      return addMonths(new Date(display), -compareMonthDiff).getTime();
+    }
+
+    const compareDayDiff = differenceInDays(start, compareStart);
+    if (
+      compareDayDiff !== 0 &&
+      start.getTime() === startOfDay(start).getTime()
+    ) {
+      return addDays(new Date(display), -compareDayDiff).getTime();
+    }
+
+    const compareOffset = start.getTime() - compareStart.getTime();
+    return display - compareOffset;
   }
 
   private _formatNumber(
