@@ -18,6 +18,7 @@ I know the `Statistics graph card` also supports the energy date picker nowadays
 - Optional manual timespan selection (fixed ranges or relative day/week/month/year offsets) when you don't want to use the energy date picker.
 - Support for calculated series, so you can e.g. add and subtract sensor values as a computed signal
 - Quick access to colors from the HA energy color palette and native styles so mixed dashboards look consistent.
+- Maps boolean strings like `on/off`, `true/false` to the numeric values `0/1`
 
 ## Screenshots
 
@@ -107,7 +108,8 @@ The card supports the energy date picker for timespan selection. Set `timespan.m
 
 ## Configuration
 
-By default the card mirrors the core energy cards and automatically selects the recorder statistics period (5-minute, hourly, daily, or monthly) based on the chosen timespan. You can override this behaviour via the `aggregation` options described below.
+By default the card mirrors the core energy cards and automatically selects the recorder statistics period (5-minute, hourly, daily, or monthly) based on the chosen timespan. You can override this behaviour via the `aggregation` options described below.  
+
 
 ### Generic card options
 
@@ -267,6 +269,8 @@ aggregation:
 - `compute_current_hour` (boolean) creates a live estimate for the ongoing hour by combining the most recent 5 minute statistics until Home Assistant publishes the official hourly aggregate.
 
 > **Heads up:** Enabling `compute_current_hour` issues an extra 5 minute statistics query every few minutes while the current hour is visible. This increases database load slightly, so only enable it when you need near real-time hourly numbers.
+
+> **Autoamtic raw data mapping:** When you use RAW history, boolean-like strings (`on/off`, `open/closed`, `true/false`) are automatically mapped to the numbers `1/0` so binary sensors can be rendered as numeric lines.
 
 Tip: use fine intervals only for short ranges to avoid excessive resource usage and loading times.
 
