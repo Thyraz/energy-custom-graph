@@ -76,6 +76,7 @@ export interface EnergyCustomGraphAggregationConfig {
     Record<"hour" | "day" | "week" | "month" | "year", EnergyCustomGraphAggregationTarget>
   >;
   raw_options?: EnergyCustomGraphRawOptions;
+  compute_current_hour?: boolean;
 }
 
 export type EnergyCustomGraphTimespanConfig =

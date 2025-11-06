@@ -213,6 +213,9 @@ aggregation:
 - `fallback` Optional. Is used if the preferred interval returns no data.
 - Valid intervals: `"5minute"`, `"hour"`, `"day"`, `"week"`, `"month"`, `"raw"`, `"disabled"`.
 - Use `"raw"` to fetch recorder history states without aggregation. Use `"disabled"` to skip the request entirely and show a “choose a shorter period” message instead.
+- `compute_current_hour` (boolean) creates a live estimate for the ongoing hour by combining the most recent 5 minute statistics until Home Assistant publishes the official hourly aggregate.
+
+> **Heads up:** Enabling `compute_current_hour` issues an extra 5 minute statistics query every few minutes while the current hour is visible. This increases database load slightly, so only enable it when you need near real-time hourly numbers.
 
 Tip: use fine intervals only for short ranges to avoid excessive resource usage and loading times.
 
@@ -383,6 +386,29 @@ aggregation:
     month: disabled
     year: disabled
 ```
+
+### 6. Hourly consumption with live current hour
+
+```yaml
+type: custom:energy-custom-graph-card
+title: Consumption
+aggregation:
+  energy_picker:
+    hour: hour
+    day: day
+  compute_current_hour: true
+series:
+  - statistic_id: sensor.energy_import
+    name: Import
+    stat_type: change
+    chart_type: bar
+  - statistic_id: sensor.energy_solar
+    name: Solar
+    stat_type: change
+    chart_type: bar
+```
+
+With `compute_current_hour` enabled the card keeps the current hour up to date using 5 minute statistics, while historical hours continue to come from Home Assistant’s long-term database.
 
 ## Tips
 

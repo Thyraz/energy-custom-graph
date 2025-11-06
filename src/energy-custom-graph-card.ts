@@ -79,7 +79,7 @@ interface EnergyCollection {
   setCompare?(compare: unknown): void;
 }
 
-type FetchKey = "main" | "compare";
+type FetchKey = "main" | "compare" | "main_live" | "compare_live";
 
 interface FetchState {
   inFlight: boolean;
@@ -128,6 +128,7 @@ export class EnergyCustomGraphCard extends LitElement {
   private _collectionUnsub?: () => void;
   private _collectionPollHandle?: number;
   private _autoRefreshTimeout?: number;
+  private _liveHourTimeout?: number;
   private _loggedEnergyFallback = false;
   private _calculatedSeriesData = new Map<string, StatisticValue[]>();
   private _calculatedSeriesUnits = new Map<string, string | null | undefined>();
@@ -138,11 +139,19 @@ export class EnergyCustomGraphCard extends LitElement {
   private _statisticsRangeCompare?: { start: number; end: number | null };
   private _statisticsPeriodCompare?: StatisticsPeriod | "raw" | "disabled";
   private _seriesConfigById: Map<string, EnergyCustomGraphSeriesConfig> = new Map();
+  private _liveStatistics?: Statistics;
+  private _liveStatisticsCompare?: Statistics;
+  private _lastStatisticIds?: string[];
+  private _lastStatisticIdsCompare?: string[];
+  private _lastStatTypes?: EnergyCustomGraphStatisticType[];
+  private _lastStatTypesCompare?: EnergyCustomGraphStatisticType[];
 
   private _fetchStates: Map<FetchKey, FetchState> = new Map();
   private _activeFetchCounters: Record<FetchKey, number> = {
     main: 0,
     compare: 0,
+    main_live: 0,
+    compare_live: 0,
   };
   private _rawAnimationFrame?: number;
 
@@ -191,6 +200,10 @@ export class EnergyCustomGraphCard extends LitElement {
     if (this._autoRefreshTimeout) {
       clearTimeout(this._autoRefreshTimeout);
       this._autoRefreshTimeout = undefined;
+    }
+    if (this._liveHourTimeout) {
+      clearTimeout(this._liveHourTimeout);
+      this._liveHourTimeout = undefined;
     }
     if (this._rawAnimationFrame !== undefined) {
       cancelAnimationFrame(this._rawAnimationFrame);
@@ -759,6 +772,421 @@ export class EnergyCustomGraphCard extends LitElement {
     }, 500);
   }
 
+  private _scheduleLiveHourLoad(target: "main" | "compare"): void {
+    const key: FetchKey = target === "compare" ? "compare_live" : "main_live";
+    const state = this._getFetchState(key);
+
+    if (state.inFlight) {
+      state.queued = true;
+      return;
+    }
+
+    if (state.timeout) {
+      clearTimeout(state.timeout);
+    }
+    state.timeout = window.setTimeout(() => {
+      state.timeout = undefined;
+      void this._loadLiveHourPatch(target);
+    }, 250);
+  }
+
+  private async _loadLiveHourPatch(target: "main" | "compare"): Promise<void> {
+    if (!this.hass) {
+      return;
+    }
+
+    const key: FetchKey = target === "compare" ? "compare_live" : "main_live";
+    const state = this._getFetchState(key);
+    if (state.inFlight) {
+      return;
+    }
+
+    if (!this._shouldComputeCurrentHour(target)) {
+      if (target === "compare") {
+        this._liveStatisticsCompare = undefined;
+      } else {
+        this._liveStatistics = undefined;
+        if (this._liveHourTimeout) {
+          clearTimeout(this._liveHourTimeout);
+          this._liveHourTimeout = undefined;
+        }
+      }
+      return;
+    }
+
+    const statisticIds =
+      target === "compare" ? this._lastStatisticIdsCompare : this._lastStatisticIds;
+    const statTypes =
+      target === "compare" ? this._lastStatTypesCompare : this._lastStatTypes;
+    if (!statisticIds || !statisticIds.length) {
+      return;
+    }
+
+    const liveContext = this._computeLiveHourContext(target);
+    if (!liveContext) {
+      return;
+    }
+
+    state.inFlight = true;
+    state.queued = false;
+
+    const { fetchStart, fetchEnd, currentHourStart } = liveContext;
+
+    try {
+      const fetched = await fetchStatistics(
+        this.hass,
+        new Date(fetchStart),
+        new Date(fetchEnd),
+        statisticIds,
+        "5minute",
+        undefined,
+        statTypes
+      );
+      const patch = this._buildLiveHourPatch(target, fetched, liveContext, statisticIds);
+      this._applyLiveHourPatch(target, patch);
+    } catch (error) {
+      console.error("[energy-custom-graph-card] Failed to load live hour statistics", error);
+    } finally {
+      state.inFlight = false;
+      if (state.queued) {
+        state.queued = false;
+        this._scheduleLiveHourLoad(target);
+      }
+      if (target === "main" && this._shouldComputeCurrentHour("main")) {
+        this._scheduleNextLiveHourTick();
+      }
+    }
+  }
+
+  private _computeLiveHourContext(
+    target: "main" | "compare"
+  ):
+    | {
+        fetchStart: number;
+        fetchEnd: number;
+        currentHourStart: number;
+        previousHourStart: number;
+        periodStartMs?: number;
+        periodEndMs?: number;
+        nowMs: number;
+      }
+    | undefined {
+    const periodStart =
+      target === "compare" ? this._comparePeriodStart : this._periodStart;
+    const periodEnd = target === "compare" ? this._comparePeriodEnd : this._periodEnd;
+
+    const now = new Date();
+    const nowMs = now.getTime();
+    const currentHourStart = startOfHour(now).getTime();
+    const previousHourStart = subHours(new Date(currentHourStart), 1).getTime();
+
+    const periodStartMs = periodStart?.getTime();
+    const periodEndMs = periodEnd?.getTime();
+
+    const fetchStart = Math.max(
+      previousHourStart,
+      periodStartMs !== undefined ? periodStartMs : previousHourStart
+    );
+    const fetchEnd = nowMs;
+
+    if (fetchEnd <= fetchStart) {
+      return undefined;
+    }
+
+    return {
+      fetchStart,
+      fetchEnd,
+      currentHourStart,
+      previousHourStart,
+      periodStartMs,
+      periodEndMs,
+      nowMs,
+    };
+  }
+
+  private _buildLiveHourPatch(
+    target: "main" | "compare",
+    fiveMinuteStats: Statistics,
+    context: {
+      fetchStart: number;
+      fetchEnd: number;
+      currentHourStart: number;
+      previousHourStart: number;
+      periodStartMs?: number;
+      periodEndMs?: number;
+      nowMs: number;
+    },
+    statisticIds: string[]
+  ): Statistics | undefined {
+    const baseStatistics =
+      target === "compare" ? this._statisticsCompare : this._statistics;
+    if (!baseStatistics) {
+      return undefined;
+    }
+
+    const periodStartMs = context.periodStartMs;
+    const periodEndMs = context.periodEndMs;
+    const nowMs = context.nowMs;
+    const currentHourStart = context.currentHourStart;
+
+    const patch: Statistics = {};
+    let hasValues = false;
+
+    const hoursToEvaluate: number[] = [];
+    const currentIncluded = this._hourInDisplay(
+      currentHourStart,
+      periodStartMs,
+      periodEndMs
+    );
+    if (currentIncluded) {
+      hoursToEvaluate.push(currentHourStart);
+    }
+
+    const previousHourStart = context.previousHourStart;
+    if (
+      previousHourStart >= context.fetchStart &&
+      this._hourInDisplay(previousHourStart, periodStartMs, periodEndMs)
+    ) {
+      hoursToEvaluate.push(previousHourStart);
+    }
+
+    if (!hoursToEvaluate.length) {
+      return undefined;
+    }
+
+    for (const statisticId of statisticIds) {
+      const entries = fiveMinuteStats[statisticId] ?? [];
+      const baseEntries = baseStatistics[statisticId] ?? [];
+      const perIdPatch: StatisticValue[] = [];
+
+      for (const hourStart of hoursToEvaluate) {
+        const hourEndLimit = Math.min(
+          hourStart + 60 * 60 * 1000,
+          periodEndMs ?? hourStart + 60 * 60 * 1000,
+          nowMs
+        );
+
+        const existing = baseEntries.find(
+          (entry) =>
+            typeof entry.start === "number" &&
+            Math.abs(entry.start - hourStart) < 30 * 1000
+        );
+
+        if (hourStart === currentHourStart) {
+          const hasCompleteCurrent =
+            existing &&
+            typeof existing.end === "number" &&
+            existing.end >= hourStart + 59 * 60 * 1000;
+          if (hasCompleteCurrent) {
+            continue;
+          }
+        } else if (existing) {
+          // Previous hour already available; no patch needed.
+          continue;
+        }
+
+        const aggregated = this._aggregateFiveMinuteEntries(
+          entries,
+          hourStart,
+          hourEndLimit
+        );
+        if (aggregated) {
+          perIdPatch.push(aggregated);
+        }
+      }
+
+      if (perIdPatch.length) {
+        perIdPatch.sort((a, b) => (a.start ?? 0) - (b.start ?? 0));
+        patch[statisticId] = perIdPatch;
+        hasValues = true;
+      }
+    }
+
+    return hasValues ? patch : undefined;
+  }
+
+  private _applyLiveHourPatch(target: "main" | "compare", patch?: Statistics): void {
+    if (!patch || !Object.keys(patch).length) {
+      if (target === "compare") {
+        this._liveStatisticsCompare = undefined;
+      } else {
+        this._liveStatistics = undefined;
+      }
+      return;
+    }
+
+    const baseStatistics =
+      target === "compare" ? this._statisticsCompare : this._statistics;
+    if (!baseStatistics) {
+      return;
+    }
+
+    const updated: Statistics = { ...baseStatistics };
+    for (const [statisticId, patchValues] of Object.entries(patch)) {
+      if (!patchValues || !patchValues.length) {
+        continue;
+      }
+      const patchStarts = new Set(
+        patchValues
+          .map((item) => (typeof item.start === "number" ? item.start : undefined))
+          .filter((item): item is number => item !== undefined)
+      );
+      const existing = updated[statisticId] ?? [];
+      const filteredExisting = existing.filter((entry) => {
+        if (typeof entry.start !== "number") {
+          return true;
+        }
+        return !patchStarts.has(entry.start);
+      });
+      updated[statisticId] = [...filteredExisting, ...patchValues].sort(
+        (a, b) => (a.start ?? 0) - (b.start ?? 0)
+      );
+    }
+
+    if (target === "compare") {
+      this._liveStatisticsCompare = patch;
+      this._statisticsCompare = updated;
+      if (this._metadataCompare) {
+        this._rebuildCalculatedSeries(updated, this._metadataCompare, "compare");
+      } else {
+        this._rebuildCalculatedSeries(updated, {}, "compare");
+      }
+    } else {
+      this._liveStatistics = patch;
+      this._statistics = updated;
+      if (this._metadata) {
+        this._rebuildCalculatedSeries(updated, this._metadata, "main");
+      } else {
+        this._rebuildCalculatedSeries(updated, {}, "main");
+      }
+    }
+  }
+
+  private _aggregateFiveMinuteEntries(
+    entries: StatisticValue[],
+    hourStart: number,
+    hourEnd: number
+  ): StatisticValue | undefined {
+    const relevant = entries.filter(
+      (entry) =>
+        typeof entry.start === "number" &&
+        entry.start >= hourStart &&
+        entry.start < hourEnd
+    );
+
+    if (!relevant.length) {
+      return undefined;
+    }
+
+    let changeTotal = 0;
+    let sumTotal = 0;
+    let hasChange = false;
+    let hasSum = false;
+    let meanWeighted = 0;
+    let meanWeight = 0;
+    let minValue: number | null = null;
+    let maxValue: number | null = null;
+    let lastState: number | null = null;
+
+    for (const entry of relevant) {
+      const entryStart = typeof entry.start === "number" ? entry.start : hourStart;
+      const entryEnd =
+        typeof entry.end === "number"
+          ? entry.end
+          : entryStart + 5 * 60 * 1000;
+      const duration = Math.max(0, entryEnd - entryStart);
+
+      if (typeof entry.change === "number" && Number.isFinite(entry.change)) {
+        changeTotal += entry.change;
+        hasChange = true;
+      }
+      if (typeof entry.sum === "number" && Number.isFinite(entry.sum)) {
+        sumTotal += entry.sum;
+        hasSum = true;
+      }
+      if (typeof entry.min === "number" && Number.isFinite(entry.min)) {
+        minValue = minValue === null ? entry.min : Math.min(minValue, entry.min);
+      }
+      if (typeof entry.max === "number" && Number.isFinite(entry.max)) {
+        maxValue = maxValue === null ? entry.max : Math.max(maxValue, entry.max);
+      }
+
+      const meanCandidate =
+        typeof entry.mean === "number" && Number.isFinite(entry.mean)
+          ? entry.mean
+          : typeof entry.state === "number" && Number.isFinite(entry.state)
+            ? entry.state
+            : undefined;
+      if (meanCandidate !== undefined && duration > 0) {
+        meanWeighted += meanCandidate * duration;
+        meanWeight += duration;
+      }
+
+      if (typeof entry.state === "number" && Number.isFinite(entry.state)) {
+        lastState = entry.state;
+      }
+    }
+
+    const aggregated: StatisticValue = {
+      start: hourStart,
+      end: hourEnd,
+    } as StatisticValue;
+
+    if (hasChange) {
+      aggregated.change = changeTotal;
+    }
+    if (hasSum) {
+      aggregated.sum = sumTotal;
+    }
+    if (minValue !== null) {
+      aggregated.min = minValue;
+    }
+    if (maxValue !== null) {
+      aggregated.max = maxValue;
+    }
+    if (meanWeight > 0) {
+      aggregated.mean = meanWeighted / meanWeight;
+    } else if (lastState !== null) {
+      aggregated.mean = lastState;
+    }
+    if (lastState !== null) {
+      aggregated.state = lastState;
+    }
+
+    return aggregated;
+  }
+
+  private _hourInDisplay(
+    hourStart: number,
+    periodStartMs?: number,
+    periodEndMs?: number
+  ): boolean {
+    const hourEnd = hourStart + 60 * 60 * 1000;
+    if (periodEndMs !== undefined && periodEndMs <= hourStart) {
+      return false;
+    }
+    if (periodStartMs !== undefined && periodStartMs >= hourEnd) {
+      return false;
+    }
+    return true;
+  }
+
+  private _scheduleNextLiveHourTick(): void {
+    if (this._liveHourTimeout) {
+      clearTimeout(this._liveHourTimeout);
+      this._liveHourTimeout = undefined;
+    }
+    if (!this._shouldComputeCurrentHour("main")) {
+      return;
+    }
+    const nextRefreshTime = this._getNextAlignedRefreshTime("5minute");
+    const delay = Math.max(nextRefreshTime - Date.now(), 30 * 1000);
+    this._liveHourTimeout = window.setTimeout(() => {
+      this._liveHourTimeout = undefined;
+      this._scheduleLiveHourLoad("main");
+    }, delay);
+  }
+
   private _getRefreshTiming(
     aggregation: StatisticsPeriod | "raw" | "disabled"
   ): {
@@ -1017,6 +1445,14 @@ export class EnergyCustomGraphCard extends LitElement {
       statTypes = [EnergyCustomGraphCard.DEFAULT_STAT_TYPE];
     }
 
+    if (isCompare) {
+      this._lastStatisticIdsCompare = statisticIds;
+      this._lastStatTypesCompare = statTypes;
+    } else {
+      this._lastStatisticIds = statisticIds;
+      this._lastStatTypes = statTypes;
+    }
+
     const aggregationPlan = this._resolveAggregationPlan(
       periodStart,
       periodEnd
@@ -1036,6 +1472,7 @@ export class EnergyCustomGraphCard extends LitElement {
       this._isLoading = false;
 
       if (isCompare) {
+        this._liveStatisticsCompare = undefined;
         this._statisticsRangeCompare = range;
         this._statisticsPeriodCompare = "disabled";
         this._metadataCompare = undefined;
@@ -1043,6 +1480,7 @@ export class EnergyCustomGraphCard extends LitElement {
         this._calculatedSeriesDataCompare = new Map();
         this._calculatedSeriesUnitsCompare = new Map();
       } else {
+        this._liveStatistics = undefined;
         this._statisticsRange = range;
         this._statisticsPeriod = "disabled";
         this._metadata = undefined;
@@ -1056,6 +1494,10 @@ export class EnergyCustomGraphCard extends LitElement {
         if (this._autoRefreshTimeout) {
           clearTimeout(this._autoRefreshTimeout);
           this._autoRefreshTimeout = undefined;
+        }
+        if (this._liveHourTimeout) {
+          clearTimeout(this._liveHourTimeout);
+          this._liveHourTimeout = undefined;
         }
       }
 
@@ -1182,6 +1624,9 @@ export class EnergyCustomGraphCard extends LitElement {
             this._metadataCompare = metadata;
             this._statisticsCompare = statistics;
             this._rebuildCalculatedSeries(statistics, metadata, "compare");
+            if (!this._shouldComputeCurrentHour("compare")) {
+              this._liveStatisticsCompare = undefined;
+            }
           }
         } else {
           this._statisticsRange = {
@@ -1210,6 +1655,17 @@ export class EnergyCustomGraphCard extends LitElement {
 
             // Schedule auto-refresh for rolling windows and future fixed timespans
             this._scheduleAutoRefresh();
+
+            if (this._shouldComputeCurrentHour("main")) {
+              this._scheduleLiveHourLoad("main");
+              this._scheduleNextLiveHourTick();
+            } else {
+              this._liveStatistics = undefined;
+              if (this._liveHourTimeout) {
+                clearTimeout(this._liveHourTimeout);
+                this._liveHourTimeout = undefined;
+              }
+            }
           }
         }
       }
@@ -1743,6 +2199,33 @@ export class EnergyCustomGraphCard extends LitElement {
     return ids.some((id) => statistics?.[id]?.length);
   }
 
+  private _shouldComputeCurrentHour(target: "main" | "compare"): boolean {
+    if (!this._config?.aggregation?.compute_current_hour) {
+      return false;
+    }
+    const period =
+      target === "compare" ? this._statisticsPeriodCompare : this._statisticsPeriod;
+    if (period !== "hour") {
+      return false;
+    }
+    const periodStart =
+      target === "compare" ? this._comparePeriodStart : this._periodStart;
+    const periodEnd =
+      target === "compare" ? this._comparePeriodEnd : this._periodEnd;
+    if (!periodStart) {
+      return false;
+    }
+    const now = new Date();
+    if (periodStart > now) {
+      return false;
+    }
+    const currentHourStart = startOfHour(now);
+    if (periodEnd && periodEnd <= currentHourStart) {
+      return false;
+    }
+    return true;
+  }
+
   private _resolveAggregationPlan(
     start: Date,
     end?: Date
@@ -1888,6 +2371,17 @@ export class EnergyCustomGraphCard extends LitElement {
       timespan: config.timespan ?? DEFAULT_TIMESPAN,
       allow_compare: config.allow_compare ?? true,
     };
+    if (
+      oldConfig?.aggregation?.compute_current_hour &&
+      !this._config.aggregation?.compute_current_hour
+    ) {
+      this._liveStatistics = undefined;
+      this._liveStatisticsCompare = undefined;
+      if (this._liveHourTimeout) {
+        clearTimeout(this._liveHourTimeout);
+        this._liveHourTimeout = undefined;
+      }
+    }
     this._loggedEnergyFallback = false;
     this.requestUpdate("_config", oldConfig);
     if (this.hass) {

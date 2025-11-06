@@ -479,6 +479,31 @@ export class EnergyCustomGraphCardEditor
     `;
   }
 
+  private _renderComputeCurrentHourOption(
+    aggregation: EnergyCustomGraphAggregationConfig | undefined
+  ) {
+    const enabled = aggregation?.compute_current_hour === true;
+    return html`
+      <div class="section">
+        <div class="row">
+          <ha-switch
+            .checked=${enabled}
+            @change=${(ev: Event) =>
+              this._updateAggregationFlag(
+                "compute_current_hour",
+                (ev.target as HTMLInputElement).checked
+              )}
+          ></ha-switch>
+          <span>Compute current hour value</span>
+        </div>
+        <p class="hint">
+          Adds a live estimate for the ongoing hour by aggregating recent 5 minute statistics.
+          This requires additional database queries, so server load might increase slightly.
+        </p>
+      </div>
+    `;
+  }
+
   private _aggregationUsesRaw(
     aggregation: EnergyCustomGraphAggregationConfig | undefined
   ): boolean {
@@ -579,6 +604,7 @@ ${this._renderTimespanSection(cfg)}
                   ? this._renderAggregationPickerOptions(pickerAggregation)
                   : this._renderAggregationManualOptions(aggregationConfig)}
                 ${this._renderRawOptions(aggregationConfig)}
+                ${this._renderComputeCurrentHourOption(aggregationConfig)}
               </div>
             `
           : nothing}
@@ -1926,6 +1952,19 @@ ${this._renderTimespanSection(cfg)}
       delete aggregation[field];
     } else {
       (aggregation as any)[field] = value as EnergyCustomGraphAggregationTarget;
+    }
+    const cleaned = this._cleanupAggregation(aggregation);
+    this._updateConfig("aggregation", cleaned);
+  }
+
+  private _updateAggregationFlag(field: keyof EnergyCustomGraphAggregationConfig, value: boolean) {
+    const aggregation: EnergyCustomGraphAggregationConfig = {
+      ...this._config!.aggregation,
+    };
+    if (!value) {
+      delete aggregation[field];
+    } else {
+      (aggregation as any)[field] = value;
     }
     const cleaned = this._cleanupAggregation(aggregation);
     this._updateConfig("aggregation", cleaned);
