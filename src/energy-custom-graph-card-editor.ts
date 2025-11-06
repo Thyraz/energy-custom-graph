@@ -63,7 +63,7 @@ export class EnergyCustomGraphCardEditor
 
   @state() private _config?: EnergyCustomGraphCardConfig;
 
-  @state() private _activeTab: "general" | "series" | "advanced" = "general";
+  @state() private _activeTab: "general" | "series" = "general";
   @state() private _expandedSeries = new Set<number>();
   @state() private _expandedTermKeys = new Set<string>();
   @state() private _axesExpanded = false;
@@ -124,14 +124,11 @@ export class EnergyCustomGraphCardEditor
       <div class="tab-bar">
         ${this._renderTabButton("general", "General")}
         ${this._renderTabButton("series", "Series")}
-        ${this._renderTabButton("advanced", "Advanced")}
       </div>
       <div class="editor-container">
         ${this._activeTab === "general"
           ? this._renderGeneralTab()
-          : this._activeTab === "series"
-            ? this._renderSeriesTab()
-            : this._renderAdvancedTab()}
+          : this._renderSeriesTab()}
       </div>
     `;
   }
@@ -1651,18 +1648,6 @@ ${this._renderTimespanSection(cfg)}
     if (isCalculation) {
       this._convertSeriesToStatistic(index);
     }
-  }
-
-  private _renderAdvancedTab() {
-    return html`
-      <div class="section">
-        <p class="hint">
-          Advanced configuration (such as multiple Y axes or custom color cycles) is currently only
-          available in YAML mode. Use the "Show code editor" button in the top-right corner of the
-          Lovelace editor to edit the raw configuration.
-        </p>
-      </div>
-    `;
   }
 
   private _addSeries() {
