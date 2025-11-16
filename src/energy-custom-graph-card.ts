@@ -103,6 +103,7 @@ const LOG_PREFIX = "[energy-custom-graph-card]";
 const FETCH_TIMEOUT_MS = 60_000;
 const VISIBILITY_REFRESH_DELAY_MS = 200;
 const ACTIVE_LOG_LEVEL: "debug" | "info" | "warn" | "error" = "warn";
+const DEFAULT_CHART_HEIGHT = "300px";
 
 class TimeoutError extends Error {
   constructor(message: string) {
@@ -2778,8 +2779,8 @@ export class EnergyCustomGraphCard extends LitElement {
     }
 
     try {
-      const columnSize = getComputedStyle(this).getPropertyValue("--column-size").trim();
-      const usesSectionLayout = columnSize !== "";
+      const layoutFlag = (this as unknown as { layout?: string }).layout;
+      const usesSectionLayout = layoutFlag === "grid";
       if (this._usesSectionLayout !== usesSectionLayout) {
         this._usesSectionLayout = usesSectionLayout;
       }
@@ -2857,7 +2858,9 @@ export class EnergyCustomGraphCard extends LitElement {
 
     const usesSectionLayout = this._usesSectionLayout;
     const chartClass = usesSectionLayout ? "chart chart--section" : "chart";
-    const chartHeight = usesSectionLayout ? "100%" : this._config?.chart_height;
+    const chartHeight = usesSectionLayout
+      ? "100%"
+      : this._config?.chart_height ?? DEFAULT_CHART_HEIGHT;
 
     return html`
       <div class=${chartClass}>
