@@ -4116,6 +4116,9 @@ export class EnergyCustomGraphCard extends LitElement {
       id: string;
       name: string;
       color?: string;
+      fillColor?: string;
+      borderColor?: string;
+      borderWidth?: number;
       hidden?: boolean;
     }[],
     secondaryIds: Map<string, string[]>
@@ -4137,7 +4140,14 @@ export class EnergyCustomGraphCard extends LitElement {
       id: entry.id,
       name: entry.name,
       secondaryIds: secondaryIds.get(entry.id) ?? [],
-      itemStyle: entry.color ? { color: entry.color } : undefined,
+      itemStyle:
+        entry.fillColor || entry.color || entry.borderColor
+          ? {
+              color: entry.fillColor ?? entry.color,
+              borderColor: entry.borderColor ?? entry.color,
+              borderWidth: entry.borderWidth ?? (entry.borderColor ? 2 : 1),
+            }
+          : undefined,
     }));
 
     const selected: Record<string, boolean> = {};
@@ -4462,8 +4472,8 @@ export class EnergyCustomGraphCard extends LitElement {
 
     items.forEach((item, index) => {
       const seriesKey =
-        (typeof item.seriesId === "string" && item.seriesId) ??
-        (typeof item.seriesName === "string" && item.seriesName) ??
+        (typeof item.seriesId === "string" ? item.seriesId : undefined) ??
+        (typeof item.seriesName === "string" ? item.seriesName : undefined) ??
         (typeof item.seriesIndex === "number" ? String(item.seriesIndex) : undefined) ??
         String(index);
 
@@ -4720,7 +4730,7 @@ export class EnergyCustomGraphCard extends LitElement {
       return;
     }
     const logger =
-      ((console as Record<string, (...args: unknown[]) => void>)[level] ??
+      (((console as unknown as Record<string, (...args: unknown[]) => void>)[level]) ??
         console.log).bind(console);
     if (details && Object.keys(details).length) {
       logger(`${LOG_PREFIX} ${message}`, details);

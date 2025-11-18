@@ -29,7 +29,9 @@ export interface BuiltSeriesResult {
     id: string;
     name: string;
     color?: string;
+    fillColor?: string;
     borderColor?: string;
+    borderWidth?: number;
     hidden?: boolean;
   }[];
   unitBySeries: Map<string, string | null | undefined>;
@@ -301,6 +303,9 @@ export const buildSeries = ({
       }
     );
 
+    let legendFill: string | undefined;
+    let legendBorder: string | undefined;
+
     if (isLineLike) {
       const fillOpacity =
         typeof seriesConfig.fill_opacity === "number"
@@ -357,6 +362,9 @@ export const buildSeries = ({
         };
       }
       output.push(lineSeries);
+
+      legendFill = shouldFill ? fillColor : lineColor;
+      legendBorder = lineColor;
 
       const nameKey = name;
       if (lineSeriesByName.has(nameKey)) {
@@ -437,6 +445,9 @@ export const buildSeries = ({
           `Series "${name}" is configured as bar chart and cannot use fill_to_series.`
         );
       }
+
+      legendFill = fillColor;
+      legendBorder = borderColor;
     }
 
     // Only add to legend if show_in_legend is not explicitly false
@@ -444,7 +455,10 @@ export const buildSeries = ({
       legend.push({
         id,
         name,
-        color: isLineLike ? lineColor : colorValue,
+        color: legendFill,
+        fillColor: legendFill,
+        borderColor: legendBorder,
+        borderWidth: isLineLike ? 2 : 1,
         hidden: seriesConfig.hidden_by_default === true,
       });
     }
