@@ -1537,9 +1537,10 @@ export class EnergyCustomGraphCard extends LitElement {
       return;
     }
 
-    // Energy mode uses its own collection refresh - don't add our own
+    // For energy mode, skip only when we rely on energy collection stats.
+    // If aggregation resolves to raw, we still want our own refresh.
     if (timespanConfig.mode === "energy") {
-      return;
+      // We'll decide below based on resolved aggregation; keep going.
     }
 
     // For fixed timespan: only refresh if end is in the future
@@ -1569,6 +1570,12 @@ export class EnergyCustomGraphCard extends LitElement {
     const nextRefreshTime = this._getNextAlignedRefreshTime(aggregation);
     const now = Date.now();
     const msUntilRefresh = nextRefreshTime - now;
+    this._log("debug", "Auto-refresh scheduled", {
+      aggregation,
+      nextRefreshIso: new Date(nextRefreshTime).toISOString(),
+      msUntilRefresh,
+      mode: this._config?.timespan?.mode,
+    });
 
     if (msUntilRefresh <= 0) {
       // Should not happen, but schedule for 1 minute from now as fallback
@@ -1594,6 +1601,10 @@ export class EnergyCustomGraphCard extends LitElement {
         return;
       }
 
+      this._log("debug", "Auto-refresh executing", {
+        aggregation,
+      });
+
       const periodChanged = this._recalculatePeriod();
       const compareChanged = this._recalculateComparePeriod();
       const currentTimespanConfig = this._config?.timespan;
@@ -1602,8 +1613,13 @@ export class EnergyCustomGraphCard extends LitElement {
       const isRollingWindow = currentTimespanConfig?.mode === "relative" &&
                               currentTimespanConfig.period?.startsWith("last_");
 
-      // Fixed periods + fixed timespans: Always refresh (new data arrives)
-      const shouldRefresh = isRollingWindow ? periodChanged : true;
+      const primaryAggregation = aggregation;
+      const shouldRefresh =
+        primaryAggregation === "raw"
+          ? true // always reload raw to pick up new samples
+          : isRollingWindow
+            ? periodChanged
+            : true;
 
       if (shouldRefresh) {
         this._scheduleLoad("main");
