@@ -254,6 +254,7 @@ Possibility to override the aggregation interval. By default, the card mirrors H
 aggregation:
   manual: hour          # Used when the card is not linked to the energy date picker
   fallback: day         # Used if the preferred aggregation returns no data
+  raw_refresh_interval_seconds: 60
   energy_picker:
     day: 5minute
     week: hour
@@ -267,6 +268,7 @@ aggregation:
 - Valid intervals: `"5minute"`, `"hour"`, `"day"`, `"week"`, `"month"`, `"raw"`, `"disabled"`.
 - Use `"raw"` to fetch recorder history states without aggregation. Use `"disabled"` to skip the request entirely and show a “choose a shorter period” message instead.
 - `compute_current_hour` (boolean) creates a live estimate for the ongoing hour by combining the most recent 5 minute statistics until Home Assistant publishes the official hourly aggregate.
+- `raw_refresh_interval_seconds` sets the auto-refresh interval for RAW polling (default 60s, minimum 5s). Shorter intervals increase database load. 
 
 > **Heads up:** Enabling `compute_current_hour` issues an extra 5 minute statistics query every few minutes while the current hour is visible. This increases database load slightly, so only enable it when you need near real-time hourly numbers.
 

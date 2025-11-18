@@ -1427,7 +1427,7 @@ export class EnergyCustomGraphCard extends LitElement {
       };
     }
     if (aggregation === "raw") {
-      const rawInterval = this._config?.aggregation?.raw_options?.refresh_interval_seconds;
+      const rawInterval = this._config?.aggregation?.raw_refresh_interval_seconds;
       const intervalMs = Math.max(5, rawInterval ?? 60) * 1000;
       return {
         intervalMs,
