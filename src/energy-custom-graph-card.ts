@@ -160,6 +160,7 @@ export class EnergyCustomGraphCard extends LitElement {
   private _lastStatisticIdsCompare?: string[];
   private _lastStatTypes?: EnergyCustomGraphStatisticType[];
   private _lastStatTypesCompare?: EnergyCustomGraphStatisticType[];
+  private _lastRenderedRange?: { start: number; end: number | null };
 
   private _fetchStates: Map<FetchKey, FetchState> = new Map();
   private _activeFetchCounters: Record<FetchKey, number> = {
@@ -533,6 +534,7 @@ export class EnergyCustomGraphCard extends LitElement {
     if (changed) {
       this._periodStart = start;
       this._periodEnd = end;
+      this._lastRawEndMain = undefined;
     }
     return changed;
   }
@@ -547,6 +549,7 @@ export class EnergyCustomGraphCard extends LitElement {
         this._comparePeriodStart = undefined;
         this._comparePeriodEnd = undefined;
         this._resetCompareStatistics();
+        this._lastRawEndCompare = undefined;
         return true;
       }
       return false;
@@ -561,6 +564,7 @@ export class EnergyCustomGraphCard extends LitElement {
       this._comparePeriodStart = start;
       this._comparePeriodEnd = end;
       this._resetCompareStatistics();
+      this._lastRawEndCompare = undefined;
     }
 
     return changed;
@@ -1855,12 +1859,18 @@ export class EnergyCustomGraphCard extends LitElement {
               const incrementalFrom =
                 lastEnd !== undefined ? lastEnd - RAW_DELTA_OVERLAP_MS : undefined;
 
+              const requestedEndMs = requestedEnd ?? null;
+              const safeIncrementalFrom =
+                incrementalFrom !== undefined && requestedEndMs !== null && incrementalFrom >= requestedEndMs
+                  ? undefined
+                  : incrementalFrom;
+
               const fetched = await this._fetchRawStatistics(
                 periodStart,
                 periodEnd,
                 statisticIds,
                 requestDetails,
-                incrementalFrom
+                safeIncrementalFrom
               );
               statistics = fetched;
               if (this._statisticsHaveData(fetched, statisticIds)) {
@@ -3316,15 +3326,34 @@ export class EnergyCustomGraphCard extends LitElement {
       options.legend = legendOption;
     }
 
-    const hasExistingChartData = Array.isArray(this._chartData) && this._chartData.length > 0;
-    const shouldAnimateFromZero = (extendMainToNow || extendCompareToNow) && !hasExistingChartData;
+    let hasExistingChartData = Array.isArray(this._chartData) && this._chartData.length > 0;
+    const rangeChanged =
+      !this._lastRenderedRange ||
+      this._lastRenderedRange.start !== currentStart ||
+      (this._lastRenderedRange.end ?? null) !== (this._periodEnd?.getTime() ?? null);
 
+    // On range switches, avoid ECharts morphing old data into a new domain
+    // by treating this as a fresh render (no existing data).
+    if (rangeChanged && hasExistingChartData) {
+      hasExistingChartData = false;
+      this._chartData = [];
+    }
+
+    const shouldAnimateFromZero =
+      // Range switch: always animate from zero to avoid side-fly transitions
+      rangeChanged ||
+      // Initial raw/live render when no data yet
+      (!hasExistingChartData && (extendMainToNow || extendCompareToNow));
+
+    // Control animation explicitly: only animate when we decided to animate from zero
+    options.animation = shouldAnimateFromZero;
     this._chartOptions = options;
 
     if (shouldAnimateFromZero) {
+      const targetRange = { start: currentStart, end: currentEnd };
       const zeroSeries = this._createZeroSeriesSnapshot(combinedSeries);
       this._chartData = zeroSeries;
-      this._scheduleRawAnimationCommit(combinedSeries);
+      this._scheduleRawAnimationCommit(combinedSeries, targetRange);
       return;
     }
 
@@ -3334,6 +3363,7 @@ export class EnergyCustomGraphCard extends LitElement {
     }
 
     this._chartData = combinedSeries;
+    this._lastRenderedRange = { start: currentStart, end: currentEnd };
   }
 
   private _computeSuggestedXAxisMax(start: Date, end: Date): number {
@@ -3579,13 +3609,19 @@ export class EnergyCustomGraphCard extends LitElement {
     }
   }
 
-  private _scheduleRawAnimationCommit(series: SeriesOption[]): void {
+  private _scheduleRawAnimationCommit(
+    series: SeriesOption[],
+    targetRange?: { start: number; end: number | null }
+  ): void {
     if (this._rawAnimationFrame !== undefined) {
       cancelAnimationFrame(this._rawAnimationFrame);
     }
     this._rawAnimationFrame = requestAnimationFrame(() => {
       this._rawAnimationFrame = undefined;
       this._chartData = series;
+      if (targetRange) {
+        this._lastRenderedRange = targetRange;
+      }
     });
   }
 
@@ -3699,14 +3735,40 @@ export class EnergyCustomGraphCard extends LitElement {
   ): Statistics {
     const trimmed: Statistics = {};
     Object.entries(statistics).forEach(([id, entries]) => {
-      trimmed[id] = entries.filter((entry) => {
+      if (!entries || !entries.length) {
+        trimmed[id] = [];
+        return;
+      }
+
+      let pre: StatisticValue | undefined;
+      let post: StatisticValue | undefined;
+      const inRange: StatisticValue[] = [];
+
+      entries.forEach((entry) => {
         const s = entry.start ?? entry.end;
         const e = entry.end ?? entry.start;
-        if (s === undefined || e === undefined) return false;
-        if (end !== null && s > end) return false;
-        if (e < start) return false;
-        return true;
+        if (s === undefined || e === undefined) {
+          return;
+        }
+        if (end !== null && s > end) {
+          if (!post) post = entry;
+          return;
+        }
+        if (e < start) {
+          pre = entry;
+          return;
+        }
+        inRange.push(entry);
       });
+
+      if (pre) {
+        inRange.unshift(pre);
+      }
+      if (post) {
+        inRange.push(post);
+      }
+
+      trimmed[id] = inRange;
     });
     return trimmed;
   }
