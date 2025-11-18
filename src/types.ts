@@ -62,6 +62,7 @@ export interface EnergyCustomGraphSeriesConfig {
 
 export interface EnergyCustomGraphRawOptions {
   significant_changes_only?: boolean;
+  refresh_interval_seconds?: number;
 }
 
 export type EnergyCustomGraphAggregationTarget =

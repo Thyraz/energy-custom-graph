@@ -103,6 +103,7 @@ const LOG_PREFIX = "[energy-custom-graph-card]";
 const FETCH_TIMEOUT_MS = 60_000;
 const VISIBILITY_REFRESH_DELAY_MS = 200;
 const ACTIVE_LOG_LEVEL: "debug" | "info" | "warn" | "error" = "warn";
+const RAW_DELTA_OVERLAP_MS = 60_000;
 const DEFAULT_CHART_HEIGHT = "300px";
 
 class TimeoutError extends Error {
@@ -150,6 +151,8 @@ export class EnergyCustomGraphCard extends LitElement {
   private _statisticsPeriod?: StatisticsPeriod | "raw" | "disabled";
   private _statisticsRangeCompare?: { start: number; end: number | null };
   private _statisticsPeriodCompare?: StatisticsPeriod | "raw" | "disabled";
+  private _lastRawEndMain?: number;
+  private _lastRawEndCompare?: number;
   private _seriesConfigById: Map<string, EnergyCustomGraphSeriesConfig> = new Map();
   private _liveStatistics?: Statistics;
   private _liveStatisticsCompare?: Statistics;
@@ -1424,8 +1427,10 @@ export class EnergyCustomGraphCard extends LitElement {
       };
     }
     if (aggregation === "raw") {
+      const rawInterval = this._config?.aggregation?.raw_options?.refresh_interval_seconds;
+      const intervalMs = Math.max(5, rawInterval ?? 60) * 1000;
       return {
-        intervalMs: 60 * 1000,
+        intervalMs,
         delayMs: 0,
       };
     }
@@ -1844,11 +1849,18 @@ export class EnergyCustomGraphCard extends LitElement {
           }
           try {
             if (aggregation === "raw") {
+              const lastEnd = isCompare
+                ? this._lastRawEndCompare
+                : this._lastRawEndMain;
+              const incrementalFrom =
+                lastEnd !== undefined ? lastEnd - RAW_DELTA_OVERLAP_MS : undefined;
+
               const fetched = await this._fetchRawStatistics(
                 periodStart,
                 periodEnd,
                 statisticIds,
-                requestDetails
+                requestDetails,
+                incrementalFrom
               );
               statistics = fetched;
               if (this._statisticsHaveData(fetched, statisticIds)) {
@@ -1950,10 +1962,28 @@ export class EnergyCustomGraphCard extends LitElement {
             this._statisticsCompare = undefined;
             this._calculatedSeriesDataCompare = new Map();
             this._calculatedSeriesUnitsCompare = new Map();
+            this._lastRawEndCompare = undefined;
           } else {
-            this._metadataCompare = metadata;
-            this._statisticsCompare = statistics;
-            this._rebuildCalculatedSeries(statistics, metadata, "compare");
+            if (resolvedAggregation === "raw") {
+              const merged =
+                lastTriedAggregation === "raw" && this._statisticsCompare
+                  ? this._mergeStatistics(this._statisticsCompare, statistics)
+                  : statistics;
+              const trimmed = this._trimStatisticsToRange(
+                merged,
+                requestedStart,
+                requestedEnd
+              );
+              this._metadataCompare = metadata;
+              this._statisticsCompare = trimmed;
+              this._lastRawEndCompare = this._computeMaxEnd(trimmed);
+              this._rebuildCalculatedSeries(trimmed, metadata, "compare");
+            } else {
+              this._metadataCompare = metadata;
+              this._statisticsCompare = statistics;
+              this._lastRawEndCompare = undefined;
+              this._rebuildCalculatedSeries(statistics, metadata, "compare");
+            }
             if (!this._shouldComputeCurrentHour("compare")) {
               this._liveStatisticsCompare = undefined;
             }
@@ -1977,11 +2007,29 @@ export class EnergyCustomGraphCard extends LitElement {
               clearTimeout(this._autoRefreshTimeout);
               this._autoRefreshTimeout = undefined;
             }
+            this._lastRawEndMain = undefined;
           } else {
             this._disabledMessage = undefined;
-            this._metadata = metadata;
-            this._statistics = statistics;
-            this._rebuildCalculatedSeries(statistics, metadata, "main");
+            if (resolvedAggregation === "raw") {
+              const merged =
+                lastTriedAggregation === "raw" && this._statistics
+                  ? this._mergeStatistics(this._statistics, statistics)
+                  : statistics;
+              const trimmed = this._trimStatisticsToRange(
+                merged,
+                requestedStart,
+                requestedEnd
+              );
+              this._metadata = metadata;
+              this._statistics = trimmed;
+              this._lastRawEndMain = this._computeMaxEnd(trimmed);
+              this._rebuildCalculatedSeries(trimmed, metadata, "main");
+            } else {
+              this._metadata = metadata;
+              this._statistics = statistics;
+              this._lastRawEndMain = undefined;
+              this._rebuildCalculatedSeries(statistics, metadata, "main");
+            }
 
             // Schedule auto-refresh for rolling windows and future fixed timespans
             this._scheduleAutoRefresh();
@@ -2045,14 +2093,19 @@ export class EnergyCustomGraphCard extends LitElement {
     start: Date,
     end: Date | undefined,
     statisticIds: string[],
-    contextDetails?: Record<string, unknown>
+    contextDetails?: Record<string, unknown>,
+    incrementalFrom?: number
   ): Promise<Statistics> {
     if (!this._config || !this.hass || !statisticIds.length) {
       return {};
     }
 
+    const baseStart = incrementalFrom
+      ? new Date(Math.max(start.getTime(), incrementalFrom))
+      : start;
+
     const { start: queryStart, end: queryEnd } = this._expandRawQueryWindow(
-      start,
+      baseStart,
       end
     );
 
@@ -3263,7 +3316,8 @@ export class EnergyCustomGraphCard extends LitElement {
       options.legend = legendOption;
     }
 
-    const shouldAnimateFromZero = extendMainToNow || extendCompareToNow;
+    const hasExistingChartData = Array.isArray(this._chartData) && this._chartData.length > 0;
+    const shouldAnimateFromZero = (extendMainToNow || extendCompareToNow) && !hasExistingChartData;
 
     this._chartOptions = options;
 
@@ -3586,6 +3640,75 @@ export class EnergyCustomGraphCard extends LitElement {
       return structuredClone(series);
     }
     return JSON.parse(JSON.stringify(series)) as SeriesOption[];
+  }
+
+  private _computeMaxEnd(statistics: Statistics | undefined): number | undefined {
+    if (!statistics) return undefined;
+    let maxEnd: number | undefined;
+    Object.values(statistics).forEach((entries) => {
+      entries?.forEach((entry) => {
+        const end = entry.end ?? entry.start;
+        if (typeof end === "number") {
+          maxEnd = maxEnd === undefined ? end : Math.max(maxEnd, end);
+        }
+      });
+    });
+    return maxEnd;
+  }
+
+  private _mergeStatistics(
+    base: Statistics | undefined,
+    patch: Statistics
+  ): Statistics {
+    if (!base) {
+      return patch;
+    }
+    const merged: Statistics = { ...base };
+    Object.entries(patch).forEach(([id, entries]) => {
+      const existing = merged[id];
+      if (!existing || !existing.length) {
+        merged[id] = entries;
+        return;
+      }
+      const byKey = new Map<number, number>();
+      const combined: StatisticValue[] = [...existing];
+      combined.forEach((entry, idx) => {
+        const key = entry.end ?? entry.start ?? idx;
+        byKey.set(key, idx);
+      });
+      entries.forEach((entry) => {
+        const key = entry.end ?? entry.start ?? Math.random();
+        const idx = byKey.get(key);
+        if (idx !== undefined) {
+          combined[idx] = entry;
+        } else {
+          combined.push(entry);
+          byKey.set(key, combined.length - 1);
+        }
+      });
+      combined.sort((a, b) => (a.end ?? a.start ?? 0) - (b.end ?? b.start ?? 0));
+      merged[id] = combined;
+    });
+    return merged;
+  }
+
+  private _trimStatisticsToRange(
+    statistics: Statistics,
+    start: number,
+    end: number | null
+  ): Statistics {
+    const trimmed: Statistics = {};
+    Object.entries(statistics).forEach(([id, entries]) => {
+      trimmed[id] = entries.filter((entry) => {
+        const s = entry.start ?? entry.end;
+        const e = entry.end ?? entry.start;
+        if (s === undefined || e === undefined) return false;
+        if (end !== null && s > end) return false;
+        if (e < start) return false;
+        return true;
+      });
+    });
+    return trimmed;
   }
 
   private _castSeriesDataPoints(

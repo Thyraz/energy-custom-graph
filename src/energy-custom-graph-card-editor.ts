@@ -462,6 +462,7 @@ export class EnergyCustomGraphCardEditor
         : options.significant_changes_only
           ? "true"
           : "false";
+    const refreshSeconds = options.refresh_interval_seconds ?? 60;
 
     return html`
       <div class="section">
@@ -482,6 +483,20 @@ export class EnergyCustomGraphCardEditor
             <option value="true" ?selected=${current === "true"}>Yes</option>
             <option value="false" ?selected=${current === "false"}>No</option>
           </select>
+        </div>
+        <div class="field">
+          <label>RAW auto-refresh interval (seconds)</label>
+          <ha-textfield
+            type="number"
+            min="5"
+            helper="Minimum 5 seconds. Default 60s."
+            .value=${String(refreshSeconds)}
+            @input=${(ev: Event) =>
+              this._updateRawOption(
+                "refresh_interval_seconds",
+                (ev.target as HTMLInputElement).value
+              )}
+          ></ha-textfield>
         </div>
       </div>
     `;
