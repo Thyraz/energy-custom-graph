@@ -10,6 +10,12 @@ interface EntityHistoryState {
 
 export type HistoryStates = Record<string, EntityHistoryState[]>;
 
+export interface HistoryStreamMessage {
+  states: HistoryStates;
+  start_time?: number;
+  end_time?: number;
+}
+
 export interface FetchRawHistoryOptions {
   significant_changes_only?: boolean;
 }

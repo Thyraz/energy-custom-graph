@@ -1,5 +1,6 @@
 import { html, css, LitElement, nothing } from "lit";
 import type { PropertyValues } from "lit";
+import type { UnsubscribeFunc } from "home-assistant-js-websocket";
 import { customElement, property, state } from "lit/decorators.js";
 import { classMap } from "lit/directives/class-map.js";
 import type { HomeAssistant, LovelaceCardEditor } from "custom-card-helpers";
@@ -40,7 +41,8 @@ import {
   fetchRawHistoryStates,
   historyStatesToStatistics,
 } from "./data/history";
-import type { FetchRawHistoryOptions } from "./data/history";
+import type { FetchRawHistoryOptions, HistoryStreamMessage } from "./data/history";
+import type { HistoryStates } from "./data/history";
 import type {
   EnergyCustomGraphCardConfig,
   EnergyCustomGraphSeriesConfig,
@@ -161,6 +163,8 @@ export class EnergyCustomGraphCard extends LitElement {
   private _lastStatTypes?: EnergyCustomGraphStatisticType[];
   private _lastStatTypesCompare?: EnergyCustomGraphStatisticType[];
   private _lastRenderedRange?: { start: number; end: number | null };
+  private _rawStreamUnsubMain?: Promise<UnsubscribeFunc | void>;
+  private _rawStreamUnsubCompare?: Promise<UnsubscribeFunc | void>;
 
   private _fetchStates: Map<FetchKey, FetchState> = new Map();
   private _activeFetchCounters: Record<FetchKey, number> = {
@@ -191,6 +195,8 @@ export class EnergyCustomGraphCard extends LitElement {
         hidden: true,
       });
       this._pauseVisibilityTimers();
+      void this._teardownRawStream("main");
+      void this._teardownRawStream("compare");
     } else {
       this._log("info", "Document visible; scheduling refresh", {
         hidden: false,
@@ -266,6 +272,8 @@ export class EnergyCustomGraphCard extends LitElement {
       cancelAnimationFrame(this._rawAnimationFrame);
       this._rawAnimationFrame = undefined;
     }
+    void this._teardownRawStream("main");
+    void this._teardownRawStream("compare");
     for (const state of this._fetchStates.values()) {
       if (state.timeout) {
         clearTimeout(state.timeout);
@@ -355,6 +363,13 @@ export class EnergyCustomGraphCard extends LitElement {
       !!oldConfig &&
       JSON.stringify(oldConfig.series) !== JSON.stringify(this._config.series);
 
+    if (periodChanged || seriesChanged) {
+      void this._teardownRawStream("main");
+    }
+    if (compareChanged || seriesChanged) {
+      void this._teardownRawStream("compare");
+    }
+
     if (periodChanged || seriesChanged || !this._statistics) {
       this._scheduleLoad("main");
     }
@@ -390,6 +405,7 @@ export class EnergyCustomGraphCard extends LitElement {
       this._comparePeriodEnd = undefined;
       this._resetCompareStatistics();
     }
+    void this._teardownRawStream("compare");
   }
 
   private _setupEnergyCollection(attempt = 0): void {
@@ -1431,13 +1447,12 @@ export class EnergyCustomGraphCard extends LitElement {
       };
     }
     if (aggregation === "raw") {
-      const rawInterval = this._config?.aggregation?.raw_refresh_interval_seconds;
-      const intervalMs = Math.max(5, rawInterval ?? 60) * 1000;
       return {
-        intervalMs,
+        intervalMs: 60 * 1000,
         delayMs: 0,
       };
     }
+
     switch (aggregation) {
       case "5minute":
         return {
@@ -1479,8 +1494,7 @@ export class EnergyCustomGraphCard extends LitElement {
     let nextRefresh = new Date(now);
 
     if (aggregation === "raw") {
-      nextRefresh = new Date(now.getTime() + timing.intervalMs);
-      return nextRefresh.getTime();
+      return new Date(now.getTime() + timing.intervalMs).getTime();
     }
 
     switch (aggregation) {
@@ -1622,18 +1636,26 @@ export class EnergyCustomGraphCard extends LitElement {
       const isRollingWindow = currentTimespanConfig?.mode === "relative" &&
                               currentTimespanConfig.period?.startsWith("last_");
 
-      const primaryAggregation = aggregation;
-      const shouldRefresh =
-        primaryAggregation === "raw"
-          ? true // always reload raw to pick up new samples
-          : isRollingWindow
-            ? periodChanged
-            : true;
+      let shouldRefresh = isRollingWindow ? periodChanged : true;
+
+      const mainStreaming = aggregation === "raw" && this._hasActiveRawStream("main");
+      if (aggregation === "raw" && mainStreaming) {
+        if (periodChanged) {
+          this._applyRollingWindowShift("main");
+        }
+        shouldRefresh = false;
+      }
 
       if (shouldRefresh) {
         this._scheduleLoad("main");
-        const hasCompare = !!this._comparePeriodStart;
-        if (hasCompare && (compareChanged || shouldRefresh)) {
+      }
+      const hasCompare = !!this._comparePeriodStart;
+      if (hasCompare) {
+        const compareStreaming =
+          this._statisticsPeriodCompare === "raw" && this._hasActiveRawStream("compare");
+        if (compareStreaming && compareChanged) {
+          this._applyRollingWindowShift("compare");
+        } else if (!compareStreaming && (compareChanged || shouldRefresh)) {
           this._scheduleLoad("compare");
         }
       }
@@ -1974,29 +1996,31 @@ export class EnergyCustomGraphCard extends LitElement {
             this._calculatedSeriesUnitsCompare = new Map();
             this._lastRawEndCompare = undefined;
           } else {
-            if (resolvedAggregation === "raw") {
-              const merged =
-                lastTriedAggregation === "raw" && this._statisticsCompare
-                  ? this._mergeStatistics(this._statisticsCompare, statistics)
-                  : statistics;
-              const trimmed = this._trimStatisticsToRange(
-                merged,
-                requestedStart,
-                requestedEnd
-              );
-              this._metadataCompare = metadata;
-              this._statisticsCompare = trimmed;
-              this._lastRawEndCompare = this._computeMaxEnd(trimmed);
-              this._rebuildCalculatedSeries(trimmed, metadata, "compare");
-            } else {
-              this._metadataCompare = metadata;
-              this._statisticsCompare = statistics;
-              this._lastRawEndCompare = undefined;
-              this._rebuildCalculatedSeries(statistics, metadata, "compare");
-            }
-            if (!this._shouldComputeCurrentHour("compare")) {
-              this._liveStatisticsCompare = undefined;
-            }
+        if (resolvedAggregation === "raw") {
+          const merged =
+            lastTriedAggregation === "raw" && this._statisticsCompare
+              ? this._mergeStatistics(this._statisticsCompare, statistics)
+              : statistics;
+          const trimmed = this._trimStatisticsToRange(
+            merged,
+            requestedStart,
+            requestedEnd
+          );
+          this._metadataCompare = metadata;
+          this._statisticsCompare = trimmed;
+          this._lastRawEndCompare = this._computeMaxEnd(trimmed);
+          this._rebuildCalculatedSeries(trimmed, metadata, "compare");
+          void this._restartRawStream("compare");
+        } else {
+          this._metadataCompare = metadata;
+          this._statisticsCompare = statistics;
+          this._lastRawEndCompare = undefined;
+          this._rebuildCalculatedSeries(statistics, metadata, "compare");
+          void this._teardownRawStream("compare");
+        }
+        if (!this._shouldComputeCurrentHour("compare")) {
+          this._liveStatisticsCompare = undefined;
+        }
           }
         } else {
           this._statisticsRange = {
@@ -2020,29 +2044,31 @@ export class EnergyCustomGraphCard extends LitElement {
             this._lastRawEndMain = undefined;
           } else {
             this._disabledMessage = undefined;
-            if (resolvedAggregation === "raw") {
-              const merged =
-                lastTriedAggregation === "raw" && this._statistics
-                  ? this._mergeStatistics(this._statistics, statistics)
-                  : statistics;
-              const trimmed = this._trimStatisticsToRange(
-                merged,
-                requestedStart,
-                requestedEnd
-              );
-              this._metadata = metadata;
-              this._statistics = trimmed;
-              this._lastRawEndMain = this._computeMaxEnd(trimmed);
-              this._rebuildCalculatedSeries(trimmed, metadata, "main");
-            } else {
-              this._metadata = metadata;
-              this._statistics = statistics;
-              this._lastRawEndMain = undefined;
-              this._rebuildCalculatedSeries(statistics, metadata, "main");
-            }
+        if (resolvedAggregation === "raw") {
+          const merged =
+            lastTriedAggregation === "raw" && this._statistics
+              ? this._mergeStatistics(this._statistics, statistics)
+              : statistics;
+          const trimmed = this._trimStatisticsToRange(
+            merged,
+            requestedStart,
+            requestedEnd
+          );
+          this._metadata = metadata;
+          this._statistics = trimmed;
+          this._lastRawEndMain = this._computeMaxEnd(trimmed);
+          this._rebuildCalculatedSeries(trimmed, metadata, "main");
+          void this._restartRawStream("main");
+        } else {
+          this._metadata = metadata;
+          this._statistics = statistics;
+          this._lastRawEndMain = undefined;
+          this._rebuildCalculatedSeries(statistics, metadata, "main");
+          void this._teardownRawStream("main");
+        }
 
-            // Schedule auto-refresh for rolling windows and future fixed timespans
-            this._scheduleAutoRefresh();
+        // Schedule auto-refresh for rolling windows and future fixed timespans
+        this._scheduleAutoRefresh();
 
             if (this._shouldComputeCurrentHour("main")) {
               this._scheduleLiveHourLoad("main");
@@ -2166,6 +2192,204 @@ export class EnergyCustomGraphCard extends LitElement {
       start: expandedStart,
       end: expandedEnd,
     };
+  }
+
+  private _hasActiveRawStream(target: "main" | "compare"): boolean {
+    return target === "compare"
+      ? this._rawStreamUnsubCompare !== undefined
+      : this._rawStreamUnsubMain !== undefined;
+  }
+
+  private async _restartRawStream(target: "main" | "compare"): Promise<void> {
+    await this._teardownRawStream(target);
+    await this._setupRawStream(target);
+  }
+
+  private async _teardownRawStream(target: "main" | "compare"): Promise<void> {
+    const handle =
+      target === "compare" ? this._rawStreamUnsubCompare : this._rawStreamUnsubMain;
+    if (!handle) {
+      return;
+    }
+    if (target === "compare") {
+      this._rawStreamUnsubCompare = undefined;
+    } else {
+      this._rawStreamUnsubMain = undefined;
+    }
+    try {
+      const unsubscribe = await handle;
+      if (typeof unsubscribe === "function") {
+        await unsubscribe();
+      }
+      this._log("debug", "Raw history stream unsubscribed", { target });
+    } catch (error) {
+      this._log("warn", "Failed to unsubscribe RAW history stream", {
+        target,
+        error: error instanceof Error ? error.message : error,
+      });
+    }
+  }
+
+  private async _setupRawStream(target: "main" | "compare"): Promise<void> {
+    if (!this.hass || !this._shouldUseRawStream(target)) {
+      return;
+    }
+
+    const statisticIds =
+      target === "compare" ? this._lastStatisticIdsCompare : this._lastStatisticIds;
+    if (!statisticIds?.length) {
+      return;
+    }
+
+    const lastEnd = target === "compare" ? this._lastRawEndCompare : this._lastRawEndMain;
+    const range = target === "compare" ? this._statisticsRangeCompare : this._statisticsRange;
+    const periodStart = target === "compare" ? this._comparePeriodStart : this._periodStart;
+
+    const fallbackStart = range?.start ?? periodStart?.getTime() ?? Date.now();
+    let startMs = fallbackStart;
+    if (lastEnd !== undefined) {
+      startMs = Math.max(lastEnd - RAW_DELTA_OVERLAP_MS, fallbackStart);
+    }
+
+    const rawOptions = this._config?.aggregation?.raw_options;
+    const params: Record<string, unknown> = {
+      type: "history/stream",
+      entity_ids: statisticIds,
+      start_time: new Date(startMs).toISOString(),
+      minimal_response: true,
+      no_attributes: true,
+    };
+    if (rawOptions?.significant_changes_only !== undefined) {
+      params.significant_changes_only = rawOptions.significant_changes_only;
+    }
+
+    const subscription = this.hass.connection
+      .subscribeMessage<HistoryStreamMessage>((message) => {
+        this._handleRawStreamMessage(target, message);
+      }, params)
+      .then((unsub) => {
+        this._log("debug", "Subscribed to RAW history stream", {
+          target,
+          start: new Date(startMs).toISOString(),
+          stats: statisticIds.length,
+        });
+        return unsub;
+      })
+      .catch((error) => {
+        this._log("error", "Failed to subscribe to RAW history stream", {
+          target,
+          error: error instanceof Error ? error.message : error,
+        });
+        if (target === "compare") {
+          this._rawStreamUnsubCompare = undefined;
+        } else {
+          this._rawStreamUnsubMain = undefined;
+        }
+        this._scheduleLoad(target === "compare" ? "compare" : "main");
+        return undefined;
+      });
+
+    if (target === "compare") {
+      this._rawStreamUnsubCompare = subscription;
+    } else {
+      this._rawStreamUnsubMain = subscription;
+    }
+  }
+
+  private _handleRawStreamMessage(
+    target: "main" | "compare",
+    message: HistoryStreamMessage
+  ): void {
+    if (!message?.states || !Object.keys(message.states).length) {
+      return;
+    }
+    this._applyRawStreamStates(target, message.states);
+  }
+
+  private _applyRawStreamStates(target: "main" | "compare", states: HistoryStates): void {
+    if (!this._shouldUseRawStream(target)) {
+      return;
+    }
+
+    const statsPatch = historyStatesToStatistics(states);
+    const hasValues = Object.values(statsPatch).some((entries) => entries?.length);
+    if (!hasValues) {
+      return;
+    }
+
+    const metadata = target === "compare" ? this._metadataCompare : this._metadata;
+    const baseStatistics = target === "compare" ? this._statisticsCompare : this._statistics;
+    const merged = this._mergeStatistics(baseStatistics, statsPatch);
+    const periodStart = target === "compare" ? this._comparePeriodStart : this._periodStart;
+    const periodEnd = target === "compare" ? this._comparePeriodEnd : this._periodEnd;
+    const existingRange =
+      target === "compare" ? this._statisticsRangeCompare : this._statisticsRange;
+
+    const rangeStart = existingRange?.start ?? periodStart?.getTime();
+    const rangeEnd = existingRange?.end ?? periodEnd?.getTime() ?? null;
+
+    const trimmed =
+      rangeStart !== undefined
+        ? this._trimStatisticsToRange(merged, rangeStart, rangeEnd)
+        : merged;
+
+    if (target === "compare") {
+      this._statisticsCompare = trimmed;
+      this._statisticsRangeCompare =
+        rangeStart !== undefined
+          ? { start: rangeStart, end: rangeEnd }
+          : this._statisticsRangeCompare;
+      this._lastRawEndCompare = this._computeMaxEnd(trimmed);
+      this._rebuildCalculatedSeries(trimmed, metadata ?? {}, "compare");
+    } else {
+      this._statistics = trimmed;
+      this._statisticsRange =
+        rangeStart !== undefined ? { start: rangeStart, end: rangeEnd } : this._statisticsRange;
+      this._lastRawEndMain = this._computeMaxEnd(trimmed);
+      this._rebuildCalculatedSeries(trimmed, metadata ?? {}, "main");
+    }
+  }
+
+  private _applyRollingWindowShift(target: "main" | "compare"): void {
+    const stats = target === "compare" ? this._statisticsCompare : this._statistics;
+    const periodStart = target === "compare" ? this._comparePeriodStart : this._periodStart;
+    if (!stats || !periodStart) {
+      return;
+    }
+    const periodEnd = target === "compare" ? this._comparePeriodEnd : this._periodEnd;
+    const range = {
+      start: periodStart.getTime(),
+      end: periodEnd?.getTime() ?? null,
+    };
+    const trimmed = this._trimStatisticsToRange(stats, range.start, range.end);
+    if (target === "compare") {
+      this._statisticsCompare = trimmed;
+      this._statisticsRangeCompare = range;
+      this._lastRawEndCompare = this._computeMaxEnd(trimmed);
+      this._rebuildCalculatedSeries(trimmed, this._metadataCompare ?? {}, "compare");
+    } else {
+      this._statistics = trimmed;
+      this._statisticsRange = range;
+      this._lastRawEndMain = this._computeMaxEnd(trimmed);
+      this._rebuildCalculatedSeries(trimmed, this._metadata ?? {}, "main");
+    }
+  }
+
+  private _shouldUseRawStream(target: "main" | "compare"): boolean {
+    if (target === "compare") {
+      return false;
+    }
+    if (!this._isPageVisible || !this.hass) {
+      return false;
+    }
+    const aggregation =
+      target === "compare" ? this._statisticsPeriodCompare : this._statisticsPeriod;
+    if (aggregation !== "raw") {
+      return false;
+    }
+    const statisticIds =
+      target === "compare" ? this._lastStatisticIdsCompare : this._lastStatisticIds;
+    return Array.isArray(statisticIds) && statisticIds.length > 0;
   }
 
   private _getCalculationKey(index: number): string {

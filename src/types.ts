@@ -75,7 +75,6 @@ export interface EnergyCustomGraphAggregationConfig {
   energy_picker?: Partial<
     Record<"hour" | "day" | "week" | "month" | "year", EnergyCustomGraphAggregationTarget>
   >;
-  raw_refresh_interval_seconds?: number;
   raw_options?: EnergyCustomGraphRawOptions;
   compute_current_hour?: boolean;
 }

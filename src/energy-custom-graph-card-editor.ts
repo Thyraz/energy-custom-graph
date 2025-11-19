@@ -462,8 +462,6 @@ export class EnergyCustomGraphCardEditor
         : options.significant_changes_only
           ? "true"
           : "false";
-    const refreshSeconds = aggregation?.raw_refresh_interval_seconds ?? 60;
-
     return html`
       <div class="section">
         <p class="hint">
@@ -483,20 +481,6 @@ export class EnergyCustomGraphCardEditor
             <option value="true" ?selected=${current === "true"}>Yes</option>
             <option value="false" ?selected=${current === "false"}>No</option>
           </select>
-        </div>
-        <div class="field">
-          <label>RAW auto-refresh interval (seconds)</label>
-          <ha-textfield
-            type="number"
-            min="5"
-            helper="Minimum 5 seconds. Default 60s."
-            .value=${String(refreshSeconds)}
-            @input=${(ev: Event) =>
-              this._updateAggregationNumber(
-                "raw_refresh_interval_seconds",
-                (ev.target as HTMLInputElement).value
-              )}
-          ></ha-textfield>
         </div>
       </div>
     `;
@@ -1963,20 +1947,6 @@ ${this._renderTimespanSection(cfg)}
       delete aggregation[field];
     } else {
       (aggregation as any)[field] = value as EnergyCustomGraphAggregationTarget;
-    }
-    const cleaned = this._cleanupAggregation(aggregation);
-    this._updateConfig("aggregation", cleaned);
-  }
-
-  private _updateAggregationNumber(field: keyof EnergyCustomGraphAggregationConfig, value: string) {
-    const aggregation: EnergyCustomGraphAggregationConfig = {
-      ...this._config!.aggregation,
-    };
-    const num = Number(value);
-    if (!Number.isFinite(num)) {
-      delete aggregation[field];
-    } else {
-      (aggregation as any)[field] = num;
     }
     const cleaned = this._cleanupAggregation(aggregation);
     this._updateConfig("aggregation", cleaned);
