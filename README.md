@@ -10,7 +10,8 @@ I know the `Statistics graph card` also supports the energy date picker nowadays
 - This card has an full-featured graphical editor, so almost all settings can be done through the UI.
 - Displayed timespan sync with the energy date picker (`energy-date-selection`).
 - Supports any entity that exposes long-term statistics, as well as the short-term 'raw' history.
-- Allows to compute values for the current running hour before HA provides the final aggregation.
+- Solar forecast entities that are used in the energy dashboard can also be shown in the charts. 
+- Allows to compute and display 'live' values for the current running hour before HA provides the final aggregation.
 - Uses Home Assistant's bundled ECharts runtime – no extra framework needs to be loaded.
 - Override the energy date pickers default aggregation periods, to e.g. display hourly instead of daily bars when viewing a monthly report.
 - Per-series control over aggregation type, chart type (bar, line or step), stacking, color, unit, scaling and offsets.
@@ -227,11 +228,12 @@ Each term accepts the following options:
 
 #### Solar forecast series
 
-Set `source: forecast` on a series to render the solar forecasts that Home Assistant exposes through the Energy dashboard. Requirements:
+Set `source: forecast` on a series to render a solar forecasts used in the  Home Assistant energy dashboard settings. Only these are accessable through the websocket API.  
+Requirements:
 
-- In *Settings → Dashboards → Energy* you must assign at least one solar forecast integration to a PV production statistic.
+- In *Settings → Dashboards → Energy* you must assign at least one solar forecast integration in a PV production entry.
 - Forecast data is retrieved via the `energy/solar_forecast` WebSocket API. The card always works in kWh. Convert using `multiply`/`add` if you need another unit.
-- Optional `pv_production_entity` limits the series to the forecasts specified for a single PV production sensor entity. When omitted, the card sums all available forecasts.
+- Optional `pv_production_entity` limits the series to the forecasts assigned to this PV production sensor entity in the energy dashboard settings. When omitted, the card sums all available forecasts.
 
 Example:
 
@@ -241,7 +243,6 @@ series:
     pv_production_entity: sensor.rooftop_pv_energy
     chart_type: line
     name: PV forecast
-    smooth: true
 ```
 
 All display options (colors, stacking, smoothing, etc.) work exactly like for statistic-based series.
