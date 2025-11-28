@@ -173,6 +173,7 @@ Display a fixed time range. Dates use ISO 8601 format. If omitted, `start` defau
 | Key | Type | Default | Description |
 | --- | ---- | ------- | ----------- |
 | `name` | string | entity name | Display name shown in tooltip and legend. |
+| `source` | `"statistic"`, `"calculation"`, `"forecast"` | inferred | Data source type. When omitted the card can auto-detect the source based on the other fields for `statistic` and `calculation` signals. Use `forecast` to plot solar forecasts configured in the Energy dashboard. |
 | `statistic_id` | string | – | Entity with long term statistics (e.g. `sensor.entity_id`). Required unless series uses a `calculation` instead. |
 | `stat_type` | `"change"`, `"sum"`, `"mean"`, `"min"`, `"max"`, `"state"` | `"change"` | Statistic type to display for this entity. Not used when `calculation` is provided, as each subseries has it's own setting there. |
 | `calculation` | object | – | Build a computed series from multiple statistics / terms (see below). |
@@ -195,6 +196,7 @@ Display a fixed time range. Dates use ISO 8601 format. If omitted, `start` defau
 | `add` | number | `0` | Apply an additive offset after multiplication. |
 | `clip_min` | number | – | Values will be set to this value if they are smaller. |
 | `clip_max` | number | – | Values will be set to this value if they are larger. |
+| `pv_production_entity` | string | – | (Forecast only) Sensor entity you configured as PV production in the Energy dashboard. Leave unset to sum all configured forecasts. |
 
 #### Calculated series
 
@@ -222,6 +224,27 @@ Each term accepts the following options:
 | `add` | number | `0` | Apply an additive offset after multiplication. |
 | `clip_min` | number | – | Values will be set to this value if they are smaller. |
 | `clip_max` | number | – | Values will be set to this value if they are larger. |
+
+#### Solar forecast series
+
+Set `source: forecast` on a series to render the solar forecasts that Home Assistant exposes through the Energy dashboard. Requirements:
+
+- In *Settings → Dashboards → Energy* you must assign at least one solar forecast integration to a PV production statistic.
+- Forecast data is retrieved via the `energy/solar_forecast` WebSocket API. The card always works in kWh. Convert using `multiply`/`add` if you need another unit.
+- Optional `pv_production_entity` limits the series to the forecasts specified for a single PV production sensor entity. When omitted, the card sums all available forecasts.
+
+Example:
+
+```yaml
+series:
+  - source: forecast
+    pv_production_entity: sensor.rooftop_pv_energy
+    chart_type: line
+    name: PV forecast
+    smooth: true
+```
+
+All display options (colors, stacking, smoothing, etc.) work exactly like for statistic-based series.
 
 #### Fill between line series
 

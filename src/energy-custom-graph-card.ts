@@ -43,6 +43,12 @@ import {
 } from "./data/history";
 import type { FetchRawHistoryOptions, HistoryStreamMessage } from "./data/history";
 import type { HistoryStates } from "./data/history";
+import {
+  fetchEnergyPreferences,
+  fetchEnergySolarForecasts,
+  type EnergySolarForecasts,
+  type SolarSourceTypeEnergyPreference,
+} from "./data/energy";
 import type {
   EnergyCustomGraphCardConfig,
   EnergyCustomGraphSeriesConfig,
@@ -107,6 +113,8 @@ const VISIBILITY_REFRESH_DELAY_MS = 200;
 const ACTIVE_LOG_LEVEL: "debug" | "info" | "warn" | "error" = "warn";
 const RAW_DELTA_OVERLAP_MS = 60_000;
 const DEFAULT_CHART_HEIGHT = "300px";
+const SOLAR_FORECAST_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
 
 class TimeoutError extends Error {
   constructor(message: string) {
@@ -165,6 +173,13 @@ export class EnergyCustomGraphCard extends LitElement {
   private _lastRenderedRange?: { start: number; end: number | null };
   private _rawStreamUnsubMain?: Promise<UnsubscribeFunc | void>;
   private _rawStreamUnsubCompare?: Promise<UnsubscribeFunc | void>;
+  private _solarSourcesByStatistic: Map<string, SolarSourceTypeEnergyPreference> = new Map();
+  private _solarForecasts?: EnergySolarForecasts;
+  private _lastSolarForecastFetch?: number;
+  @state() private _forecastSeriesData: Map<string, StatisticValue[]> = new Map();
+  @state() private _forecastSeriesUnits: Map<string, string | null | undefined> = new Map();
+  @state() private _forecastSeriesDataCompare: Map<string, StatisticValue[]> = new Map();
+  @state() private _forecastSeriesUnitsCompare: Map<string, string | null | undefined> = new Map();
 
   private _fetchStates: Map<FetchKey, FetchState> = new Map();
   private _activeFetchCounters: Record<FetchKey, number> = {
@@ -387,6 +402,38 @@ export class EnergyCustomGraphCard extends LitElement {
     return config?.timespan?.mode === "energy";
   }
 
+  private _getSeriesSource(
+    series: EnergyCustomGraphSeriesConfig
+  ): "statistic" | "calculation" | "forecast" {
+    if (series.source) {
+      return series.source;
+    }
+    if (series.calculation) {
+      return "calculation";
+    }
+    if (series.statistic_id) {
+      return "statistic";
+    }
+    return "statistic";
+  }
+
+  private _seriesUsesForecast(series?: EnergyCustomGraphSeriesConfig): boolean {
+    if (!series) {
+      return false;
+    }
+    return this._getSeriesSource(series) === "forecast";
+  }
+
+  private _hasForecastSeries(config: EnergyCustomGraphCardConfig | undefined = this._config): boolean {
+    return Boolean(
+      config?.series?.some((series) => this._seriesUsesForecast(series))
+    );
+  }
+
+  private _getForecastKey(index: number): string {
+    return `forecast_${index}`;
+  }
+
   private _shouldUseEnergyCompare(): boolean {
     if (!this._config) {
       return false;
@@ -406,6 +453,8 @@ export class EnergyCustomGraphCard extends LitElement {
       this._resetCompareStatistics();
     }
     void this._teardownRawStream("compare");
+    this._forecastSeriesDataCompare = new Map();
+    this._forecastSeriesUnitsCompare = new Map();
   }
 
   private _setupEnergyCollection(attempt = 0): void {
@@ -1720,19 +1769,25 @@ export class EnergyCustomGraphCard extends LitElement {
     this._config.series.forEach((series) => {
       const defaultStatType =
         series.stat_type ?? EnergyCustomGraphCard.DEFAULT_STAT_TYPE;
-      if (series.statistic_id && series.statistic_id.trim()) {
+      if (
+        this._getSeriesSource(series) === "statistic" &&
+        series.statistic_id &&
+        series.statistic_id.trim()
+      ) {
         const id = series.statistic_id.trim();
         statisticIdSet.add(id);
         statTypeSet.add(defaultStatType);
       }
-      series.calculation?.terms?.forEach((term) => {
-        const termStatType =
-          term.stat_type ?? defaultStatType ?? EnergyCustomGraphCard.DEFAULT_STAT_TYPE;
-        if (term.statistic_id && term.statistic_id.trim()) {
-          statisticIdSet.add(term.statistic_id.trim());
-          statTypeSet.add(termStatType);
-        }
-      });
+      if (this._getSeriesSource(series) === "calculation") {
+        series.calculation?.terms?.forEach((term) => {
+          const termStatType =
+            term.stat_type ?? defaultStatType ?? EnergyCustomGraphCard.DEFAULT_STAT_TYPE;
+          if (term.statistic_id && term.statistic_id.trim()) {
+            statisticIdSet.add(term.statistic_id.trim());
+            statTypeSet.add(termStatType);
+          }
+        });
+      }
     });
 
     const statisticIds = Array.from(statisticIdSet);
@@ -1995,32 +2050,36 @@ export class EnergyCustomGraphCard extends LitElement {
             this._calculatedSeriesDataCompare = new Map();
             this._calculatedSeriesUnitsCompare = new Map();
             this._lastRawEndCompare = undefined;
+            this._forecastSeriesDataCompare = new Map();
+            this._forecastSeriesUnitsCompare = new Map();
           } else {
-        if (resolvedAggregation === "raw") {
-          const merged =
-            lastTriedAggregation === "raw" && this._statisticsCompare
-              ? this._mergeStatistics(this._statisticsCompare, statistics)
-              : statistics;
-          const trimmed = this._trimStatisticsToRange(
-            merged,
-            requestedStart,
-            requestedEnd
-          );
-          this._metadataCompare = metadata;
-          this._statisticsCompare = trimmed;
-          this._lastRawEndCompare = this._computeMaxEnd(trimmed);
-          this._rebuildCalculatedSeries(trimmed, metadata, "compare");
-          void this._restartRawStream("compare");
-        } else {
-          this._metadataCompare = metadata;
-          this._statisticsCompare = statistics;
-          this._lastRawEndCompare = undefined;
-          this._rebuildCalculatedSeries(statistics, metadata, "compare");
-          void this._teardownRawStream("compare");
-        }
-        if (!this._shouldComputeCurrentHour("compare")) {
-          this._liveStatisticsCompare = undefined;
-        }
+            if (resolvedAggregation === "raw") {
+              const merged =
+                lastTriedAggregation === "raw" && this._statisticsCompare
+                  ? this._mergeStatistics(this._statisticsCompare, statistics)
+                  : statistics;
+              const trimmed = this._trimStatisticsToRange(
+                merged,
+                requestedStart,
+                requestedEnd
+              );
+              this._metadataCompare = metadata;
+              this._statisticsCompare = trimmed;
+              this._lastRawEndCompare = this._computeMaxEnd(trimmed);
+              this._rebuildCalculatedSeries(trimmed, metadata, "compare");
+              void this._restartRawStream("compare");
+            } else {
+              this._metadataCompare = metadata;
+              this._statisticsCompare = statistics;
+              this._lastRawEndCompare = undefined;
+              this._rebuildCalculatedSeries(statistics, metadata, "compare");
+              void this._teardownRawStream("compare");
+            }
+            if (!this._shouldComputeCurrentHour("compare")) {
+              this._liveStatisticsCompare = undefined;
+            }
+            this._forecastSeriesDataCompare = new Map();
+            this._forecastSeriesUnitsCompare = new Map();
           }
         } else {
           this._statisticsRange = {
@@ -2042,33 +2101,36 @@ export class EnergyCustomGraphCard extends LitElement {
               this._autoRefreshTimeout = undefined;
             }
             this._lastRawEndMain = undefined;
+            this._clearForecastData();
           } else {
             this._disabledMessage = undefined;
-        if (resolvedAggregation === "raw") {
-          const merged =
-            lastTriedAggregation === "raw" && this._statistics
-              ? this._mergeStatistics(this._statistics, statistics)
-              : statistics;
-          const trimmed = this._trimStatisticsToRange(
-            merged,
-            requestedStart,
-            requestedEnd
-          );
-          this._metadata = metadata;
-          this._statistics = trimmed;
-          this._lastRawEndMain = this._computeMaxEnd(trimmed);
-          this._rebuildCalculatedSeries(trimmed, metadata, "main");
-          void this._restartRawStream("main");
-        } else {
-          this._metadata = metadata;
-          this._statistics = statistics;
-          this._lastRawEndMain = undefined;
-          this._rebuildCalculatedSeries(statistics, metadata, "main");
-          void this._teardownRawStream("main");
-        }
+            if (resolvedAggregation === "raw") {
+              const merged =
+                lastTriedAggregation === "raw" && this._statistics
+                  ? this._mergeStatistics(this._statistics, statistics)
+                  : statistics;
+              const trimmed = this._trimStatisticsToRange(
+                merged,
+                requestedStart,
+                requestedEnd
+              );
+              this._metadata = metadata;
+              this._statistics = trimmed;
+              this._lastRawEndMain = this._computeMaxEnd(trimmed);
+              this._rebuildCalculatedSeries(trimmed, metadata, "main");
+              void this._restartRawStream("main");
+            } else {
+              this._metadata = metadata;
+              this._statistics = statistics;
+              this._lastRawEndMain = undefined;
+              this._rebuildCalculatedSeries(statistics, metadata, "main");
+              void this._teardownRawStream("main");
+            }
 
-        // Schedule auto-refresh for rolling windows and future fixed timespans
-        this._scheduleAutoRefresh();
+            await this._refreshForecastData();
+
+            // Schedule auto-refresh for rolling windows and future fixed timespans
+            this._scheduleAutoRefresh();
 
             if (this._shouldComputeCurrentHour("main")) {
               this._scheduleLiveHourLoad("main");
@@ -2099,6 +2161,7 @@ export class EnergyCustomGraphCard extends LitElement {
           this._statisticsPeriod = undefined;
           this._calculatedSeriesData = new Map();
           this._calculatedSeriesUnits = new Map();
+          this._clearForecastData();
         }
       }
     } finally {
@@ -2192,6 +2255,238 @@ export class EnergyCustomGraphCard extends LitElement {
       start: expandedStart,
       end: expandedEnd,
     };
+  }
+
+  private _clearForecastData(): void {
+    this._forecastSeriesData = new Map();
+    this._forecastSeriesUnits = new Map();
+    this._forecastSeriesDataCompare = new Map();
+    this._forecastSeriesUnitsCompare = new Map();
+  }
+
+  private async _ensureEnergyPreferences(): Promise<void> {
+    if (!this.hass) {
+      return;
+    }
+    if (this._solarSourcesByStatistic.size) {
+      return;
+    }
+    try {
+      const prefs = await fetchEnergyPreferences(this.hass);
+      const nextMap = new Map<string, SolarSourceTypeEnergyPreference>();
+      prefs.energy_sources?.forEach((source) => {
+        if (
+          source?.type === "solar" &&
+          typeof source.stat_energy_from === "string" &&
+          source.stat_energy_from.trim().length
+        ) {
+          nextMap.set(source.stat_energy_from, {
+            type: "solar",
+            stat_energy_from: source.stat_energy_from,
+            config_entry_solar_forecast: source.config_entry_solar_forecast ?? null,
+          });
+        }
+      });
+      this._solarSourcesByStatistic = nextMap;
+    } catch (error) {
+      this._solarSourcesByStatistic = new Map();
+      this._log("error", "Failed to load energy preferences", {
+        error: error instanceof Error ? error.message : error,
+      });
+    }
+  }
+
+  private async _ensureSolarForecasts(force = false): Promise<void> {
+    if (!this.hass) {
+      return;
+    }
+    const now = Date.now();
+    if (
+      !force &&
+      this._solarForecasts &&
+      this._lastSolarForecastFetch &&
+      now - this._lastSolarForecastFetch < SOLAR_FORECAST_REFRESH_INTERVAL_MS
+    ) {
+      return;
+    }
+    try {
+      this._solarForecasts = await fetchEnergySolarForecasts(this.hass);
+      this._lastSolarForecastFetch = now;
+    } catch (error) {
+      this._solarForecasts = undefined;
+      this._lastSolarForecastFetch = undefined;
+      this._log("error", "Failed to load solar forecasts", {
+        error: error instanceof Error ? error.message : error,
+      });
+    }
+  }
+
+  private _resolveForecastIds(series: EnergyCustomGraphSeriesConfig): string[] {
+    if (!this._solarSourcesByStatistic.size) {
+      return [];
+    }
+
+    const target = series.pv_production_entity?.trim();
+    if (target && target.length) {
+      const match = this._solarSourcesByStatistic.get(target);
+      if (!match) {
+        this._log("warn", "PV production entity not found for forecast series", {
+          entity: target,
+        });
+        return [];
+      }
+      const ids = match.config_entry_solar_forecast ?? [];
+      if (!ids.length) {
+        this._log("warn", "PV production entity has no solar forecast assigned", {
+          entity: target,
+        });
+      }
+      return ids.filter((id): id is string => typeof id === "string" && id.trim().length > 0);
+    }
+
+    const combinedIds = new Set<string>();
+    this._solarSourcesByStatistic.forEach((source) => {
+      source.config_entry_solar_forecast?.forEach((id) => {
+        if (typeof id === "string" && id.trim().length > 0) {
+          combinedIds.add(id);
+        }
+      });
+    });
+    if (!combinedIds.size) {
+      this._log("warn", "No solar forecasts configured in the energy dashboard", {});
+    }
+    return Array.from(combinedIds);
+  }
+
+  private _alignForecastBucketStart(timestamp: number, period: StatisticsPeriod): number {
+    return this._alignBucketStart(timestamp, period).getTime();
+  }
+
+  private _buildForecastStatistics(
+    ids: string[],
+    rangeStart: number,
+    rangeEnd: number | null,
+    aggregation: StatisticsPeriod | "raw" | "disabled" | undefined
+  ): StatisticValue[] {
+    if (!this._solarForecasts || !ids.length) {
+      return [];
+    }
+
+    const combined = new Map<number, number>();
+    ids.forEach((id) => {
+      const entry = this._solarForecasts?.[id];
+      if (!entry?.wh_hours) {
+        return;
+      }
+      Object.entries(entry.wh_hours).forEach(([iso, value]) => {
+        const timestamp = new Date(iso).getTime();
+        if (!Number.isFinite(timestamp)) {
+          return;
+        }
+        if (timestamp < rangeStart) {
+          return;
+        }
+        if (rangeEnd !== null && timestamp > rangeEnd) {
+          return;
+        }
+        const valueKwh = value / 1000;
+        combined.set(timestamp, (combined.get(timestamp) ?? 0) + valueKwh);
+      });
+    });
+
+    if (!combined.size) {
+      return [];
+    }
+
+    const sortedEntries = Array.from(combined.entries()).sort((a, b) => a[0] - b[0]);
+
+    if (!aggregation || aggregation === "raw" || aggregation === "disabled") {
+      return sortedEntries.map(([timestamp, value]) => ({
+        start: timestamp,
+        end: timestamp + HOUR_MS,
+        change: value,
+        sum: value,
+        mean: value,
+        min: value,
+        max: value,
+        state: value,
+      }));
+    }
+
+    const bucketSums = new Map<number, number>();
+    sortedEntries.forEach(([timestamp, value]) => {
+      const bucketStart = this._alignForecastBucketStart(timestamp, aggregation);
+      bucketSums.set(bucketStart, (bucketSums.get(bucketStart) ?? 0) + value);
+    });
+
+    const buckets = Array.from(bucketSums.entries()).sort((a, b) => a[0] - b[0]);
+    return buckets.map(([bucketStart, value]) => {
+      const bucketEnd = this._advanceBucket(new Date(bucketStart), aggregation).getTime();
+      return {
+        start: bucketStart,
+        end: bucketEnd,
+        change: value,
+        sum: value,
+        mean: value,
+        min: value,
+        max: value,
+        state: value,
+      };
+    });
+  }
+
+  private async _refreshForecastData(): Promise<void> {
+    if (!this._config || !this.hass || !this._periodStart) {
+      this._clearForecastData();
+      return;
+    }
+
+    const forecastSeries = this._config.series
+      .map((series, index) => ({ series, index }))
+      .filter(({ series }) => this._seriesUsesForecast(series));
+
+    if (!forecastSeries.length) {
+      this._clearForecastData();
+      return;
+    }
+
+    await this._ensureEnergyPreferences();
+    if (!this._solarSourcesByStatistic.size) {
+      this._clearForecastData();
+      return;
+    }
+
+    await this._ensureSolarForecasts();
+    if (!this._solarForecasts) {
+      this._clearForecastData();
+      return;
+    }
+
+    const rangeStart = this._statisticsRange?.start ?? this._periodStart.getTime();
+    const rangeEnd = this._periodEnd?.getTime() ?? this._statisticsRange?.end ?? null;
+    const aggregation = this._statisticsPeriod;
+
+    const data = new Map<string, StatisticValue[]>();
+    const units = new Map<string, string | null | undefined>();
+
+    forecastSeries.forEach(({ series, index }) => {
+      const ids = this._resolveForecastIds(series);
+      if (!ids.length) {
+        return;
+      }
+      const values = this._buildForecastStatistics(ids, rangeStart, rangeEnd, aggregation);
+      if (!values.length) {
+        return;
+      }
+      const key = this._getForecastKey(index);
+      data.set(key, values);
+      units.set(key, "kWh");
+    });
+
+    this._forecastSeriesData = data;
+    this._forecastSeriesUnits = units;
+    this._forecastSeriesDataCompare = new Map();
+    this._forecastSeriesUnitsCompare = new Map();
   }
 
   private _hasActiveRawStream(target: "main" | "compare"): boolean {
@@ -3041,9 +3336,27 @@ export class EnergyCustomGraphCard extends LitElement {
       changedProps.has("_metadataCompare") ||
       changedProps.has("_comparePeriodStart") ||
       changedProps.has("_comparePeriodEnd") ||
-      changedProps.has("_config")
+      changedProps.has("_config") ||
+      changedProps.has("_forecastSeriesData") ||
+      changedProps.has("_forecastSeriesDataCompare")
     ) {
       this._generateChart();
+    }
+
+    const oldConfig = changedProps.get("_config") as EnergyCustomGraphCardConfig | undefined;
+    const hasForecastNow = this._hasForecastSeries();
+    const hadForecastBefore = this._hasForecastSeries(oldConfig);
+    if (!hadForecastBefore && hasForecastNow) {
+      void this._refreshForecastData();
+    } else if (
+      hasForecastNow &&
+      this._forecastSeriesData.size === 0 &&
+      (changedProps.has("_periodStart") ||
+        changedProps.has("_periodEnd") ||
+        changedProps.has("_statistics") ||
+        changedProps.has("_config"))
+    ) {
+      void this._refreshForecastData();
     }
   }
 
@@ -3222,6 +3535,8 @@ export class EnergyCustomGraphCard extends LitElement {
       computedStyle,
       calculatedData: this._calculatedSeriesData,
       calculatedUnits: this._calculatedSeriesUnits,
+      forecastData: this._forecastSeriesData,
+      forecastUnits: this._forecastSeriesUnits,
     });
 
     const combinedSeriesById = new Map(seriesById);
@@ -3326,6 +3641,8 @@ export class EnergyCustomGraphCard extends LitElement {
         computedStyle,
         calculatedData: this._calculatedSeriesDataCompare,
         calculatedUnits: this._calculatedSeriesUnitsCompare,
+        forecastData: this._forecastSeriesDataCompare,
+        forecastUnits: this._forecastSeriesUnitsCompare,
       });
 
       const transformTimestamp = this._createCompareTransform();
@@ -3620,8 +3937,29 @@ export class EnergyCustomGraphCard extends LitElement {
       return;
     }
 
+    const isForecastSeries = (serieId?: string): boolean => {
+      if (!serieId) {
+        return false;
+      }
+      const config = this._seriesConfigById.get(serieId);
+      if (config) {
+        return this._seriesUsesForecast(config);
+      }
+      if (serieId.endsWith("--compare")) {
+        const baseId = serieId.replace(/--compare$/, "");
+        const baseConfig = this._seriesConfigById.get(baseId);
+        return baseConfig ? this._seriesUsesForecast(baseConfig) : false;
+      }
+      return false;
+    };
+
     series.forEach((serie, serieIndex) => {
       if (serie.type !== "line" || !Array.isArray(serie.data)) {
+        return;
+      }
+
+      const serieId = typeof serie.id === "string" ? serie.id : undefined;
+      if (isForecastSeries(serieId)) {
         return;
       }
 

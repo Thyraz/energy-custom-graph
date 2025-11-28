@@ -21,6 +21,8 @@ interface SeriesBuildParams {
   computedStyle: CSSStyleDeclaration;
   calculatedData?: Map<string, StatisticValue[]>;
   calculatedUnits?: Map<string, string | null | undefined>;
+  forecastData?: Map<string, StatisticValue[]>;
+  forecastUnits?: Map<string, string | null | undefined>;
 }
 
 export interface BuiltSeriesResult {
@@ -56,6 +58,7 @@ const DEFAULT_LINE_OPACITY = 0.85;
 const DEFAULT_BAR_BORDER_OPACITY = 1.0;
 
 const getCalculationKey = (index: number) => `calculation_${index}`;
+const getForecastKey = (index: number) => `forecast_${index}`;
 
 const clampAlpha = (value: number) =>
   Math.max(0, Math.min(1, Number.isFinite(value) ? value : 1));
@@ -146,6 +149,8 @@ export const buildSeries = ({
   computedStyle,
   calculatedData,
   calculatedUnits,
+  forecastData,
+  forecastUnits,
 }: SeriesBuildParams): BuiltSeriesResult => {
   const palette = colorPalette.length ? colorPalette : DEFAULT_COLORS;
 
@@ -180,14 +185,17 @@ export const buildSeries = ({
   };
 
   configSeries.forEach((seriesConfig, index) => {
-    const statisticId = seriesConfig.statistic_id?.trim();
-    const calculationKey = seriesConfig.calculation
-      ? getCalculationKey(index)
-      : undefined;
+    const source: "statistic" | "calculation" | "forecast" =
+      seriesConfig.source ?? (seriesConfig.calculation ? "calculation" : "statistic");
+
+    const statisticId =
+      source === "statistic" ? seriesConfig.statistic_id?.trim() : undefined;
+    const calculationKey = source === "calculation" ? getCalculationKey(index) : undefined;
+    const forecastKey = source === "forecast" ? getForecastKey(index) : undefined;
     let raw: StatisticValue[] | undefined;
     let calcUnit: string | null | undefined;
 
-    if (calculationKey) {
+    if (source === "calculation" && calculationKey) {
       raw = calculatedData?.get(calculationKey);
       calcUnit = calculatedUnits?.get(calculationKey);
       if (!raw?.length) {
@@ -197,7 +205,24 @@ export const buildSeries = ({
         );
         return;
       }
-    } else if (statisticId) {
+    } else if (source === "forecast" && forecastKey) {
+      if (!forecastData?.has(forecastKey)) {
+        warnOnce(
+          `forecast-missing-${index}`,
+          `No forecast data available for series "${seriesConfig.name ?? forecastKey}".`
+        );
+        return;
+      }
+      raw = forecastData.get(forecastKey);
+      calcUnit = forecastUnits?.get(forecastKey);
+      if (!raw?.length) {
+        warnOnce(
+          `forecast-empty-${index}`,
+          `Forecast series "${seriesConfig.name ?? forecastKey}" produced no data for the selected range.`
+        );
+        return;
+      }
+    } else if (source === "statistic" && statisticId) {
       raw = statistics?.[statisticId];
       if (!raw?.length) {
         warnOnce(
@@ -209,7 +234,7 @@ export const buildSeries = ({
     } else {
       warnOnce(
         `series-misconfigured-${index}`,
-        `Series at index ${index} is missing both statistic_id and calculation.`
+        `Series at index ${index} is missing a valid data source.`
       );
       return;
     }
@@ -234,9 +259,9 @@ export const buildSeries = ({
       seriesConfig.name ??
       meta?.name ??
       (statisticId
-        ? hass.states[statisticId]?.attributes.friendly_name ??
-          statisticId
-        : `Series ${index + 1}`);
+        ? hass.states[statisticId]?.attributes.friendly_name ?? statisticId
+        : seriesConfig.pv_production_entity ??
+          (source === "forecast" ? `Forecast ${index + 1}` : `Series ${index + 1}`));
 
     const colorToken =
       seriesConfig.color ??

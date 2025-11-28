@@ -34,7 +34,10 @@ export interface EnergyCustomGraphCalculationConfig {
   unit?: string | null;
 }
 
+export type EnergyCustomGraphSeriesSource = "statistic" | "calculation" | "forecast";
+
 export interface EnergyCustomGraphSeriesConfig {
+  source?: EnergyCustomGraphSeriesSource;
   statistic_id?: string;
   name?: string;
   stat_type?: EnergyCustomGraphStatisticType;
@@ -58,6 +61,7 @@ export interface EnergyCustomGraphSeriesConfig {
   calculation?: EnergyCustomGraphCalculationConfig;
   clip_min?: number;
   clip_max?: number;
+  pv_production_entity?: string;
 }
 
 export interface EnergyCustomGraphRawOptions {

@@ -17,6 +17,7 @@ import type {
   EnergyCustomGraphRawOptions,
 } from "./types";
 import { DEFAULT_COLORS } from "./chart/series-builder";
+import { fetchEnergyPreferences } from "./data/energy";
 
 const ENERGY_COLOR_PRESETS: Array<{ label: string; value: string }> = [
   { label: "Grid Import • Blue", value: "--energy-grid-consumption-color" },
@@ -72,11 +73,15 @@ export class EnergyCustomGraphCardEditor
   @state() private _colorModeSelections: Map<number, string> = new Map();
   @state() private _compareCustomColorDrafts: Map<number, string> = new Map();
   @state() private _compareColorModeSelections: Map<number, string> = new Map();
+  @state() private _solarProductionOptions: Array<{ value: string; label: string; hasForecast: boolean }> = [];
+  @state() private _solarOptionsLoading = false;
+  @state() private _solarOptionsError?: string;
 
   async connectedCallback() {
     super.connectedCallback();
     // Preload ha-entity-picker by loading entities card editor
     this._preloadEntityPicker();
+    void this._loadSolarProductionOptions();
   }
 
   private async _preloadEntityPicker() {
@@ -90,6 +95,59 @@ export class EnergyCustomGraphCardEditor
       // Preloading failed, but that's okay - we'll fall back gracefully
       console.debug("Energy Custom Graph: Could not preload ha-entity-picker", e);
     }
+  }
+
+  private async _loadSolarProductionOptions() {
+    if (!this.hass) {
+      return;
+    }
+    this._solarOptionsLoading = true;
+    try {
+      const prefs = await fetchEnergyPreferences(this.hass);
+      const options: Array<{ value: string; label: string; hasForecast: boolean }> = [];
+      prefs.energy_sources?.forEach((source: any) => {
+        if (source?.type !== "solar" || typeof source.stat_energy_from !== "string") {
+          return;
+        }
+        const value = source.stat_energy_from;
+        if (!value) {
+          return;
+        }
+        const label = this._formatPvProductionLabel(value);
+        const hasForecast = Array.isArray(source.config_entry_solar_forecast)
+          ? source.config_entry_solar_forecast.length > 0
+          : false;
+        options.push({ value, label, hasForecast });
+      });
+      this._solarProductionOptions = options;
+      this._solarOptionsError = undefined;
+    } catch (error) {
+      this._solarOptionsError = error instanceof Error ? error.message : String(error);
+      this._solarProductionOptions = [];
+    } finally {
+      this._solarOptionsLoading = false;
+    }
+  }
+
+  private _formatPvProductionLabel(statisticId: string): string {
+    if (!statisticId) {
+      return "";
+    }
+    const friendlyName = this.hass?.states?.[statisticId]?.attributes?.friendly_name;
+    if (friendlyName && friendlyName.trim().length) {
+      return `${friendlyName} (${statisticId})`;
+    }
+    return statisticId;
+  }
+
+  private _resolveSeriesSource(series: EnergyCustomGraphSeriesConfig): "statistic" | "calculation" | "forecast" {
+    if (series.source) {
+      return series.source;
+    }
+    if (series.calculation) {
+      return "calculation";
+    }
+    return "statistic";
   }
 
   public setConfig(config: EnergyCustomGraphCardConfig): void {
@@ -911,7 +969,7 @@ ${this._renderTimespanSection(cfg)}
   }
 
   private _renderSeriesSourceGroup(series: EnergyCustomGraphSeriesConfig, index: number) {
-    const source = series.calculation ? "calculation" : "statistic";
+    const source = this._resolveSeriesSource(series);
     return html`
       <div class="group-card">
         <div class="group-header">
@@ -919,7 +977,7 @@ ${this._renderTimespanSection(cfg)}
         </div>
         <div class="group-body series-source-body">
           <div class="segment-group" role="group" aria-label="Data source">
-            ${(["statistic", "calculation"] as const).map(
+            ${(["statistic", "calculation", "forecast"] as const).map(
               (mode) => html`
                 <button
                   type="button"
@@ -929,14 +987,20 @@ ${this._renderTimespanSection(cfg)}
                   })}
                   @click=${() => this._setSeriesSource(index, mode)}
                 >
-                  ${mode === "statistic" ? "Statistic" : "Calculation"}
+                  ${mode === "statistic"
+                    ? "Statistic"
+                    : mode === "calculation"
+                      ? "Calculation"
+                      : "Forecast"}
                 </button>
               `
             )}
           </div>
           ${source === "calculation"
             ? this._renderSeriesCalculationContent(series, index)
-            : this._renderSeriesStatisticContent(series, index)}
+            : source === "forecast"
+              ? this._renderSeriesForecastContent(series, index)
+              : this._renderSeriesStatisticContent(series, index)}
         </div>
       </div>
     `;
@@ -977,6 +1041,46 @@ ${this._renderTimespanSection(cfg)}
           </select>`;
         })()}
       </div>
+    `;
+  }
+
+  private _renderSeriesForecastContent(series: EnergyCustomGraphSeriesConfig, index: number) {
+    const options = this._solarProductionOptions;
+    const current = series.pv_production_entity ?? "";
+    return html`
+      <p class="hint">
+        Select the PV production sensor you configured in the Energy dashboard. Leave this field empty
+        to use the sum of all available solar forecasts.
+      </p>
+      <div class="field">
+        <label>PV production sensor</label>
+        <select
+          @change=${(ev: Event) =>
+            this._updateSeries(
+              index,
+              "pv_production_entity",
+              (ev.target as HTMLSelectElement).value || undefined
+            )}
+        >
+          <option value="" ?selected=${current === ""}>All forecasts</option>
+          ${options.map(
+            (option) => html`<option value=${option.value} ?selected=${current === option.value}>
+              ${option.label}${option.hasForecast ? "" : " (no forecast)"}
+            </option>`
+          )}
+        </select>
+      </div>
+      ${this._solarOptionsLoading
+        ? html`<p class="hint">Loading solar sources…</p>`
+        : options.length === 0
+          ? html`<p class="hint">
+              No PV production sources with forecasts were found in the Energy dashboard. Configure a
+              solar forecast integration there to enable this option.
+            </p>`
+          : nothing}
+      ${this._solarOptionsError
+        ? html`<p class="error">${this._solarOptionsError}</p>`
+        : nothing}
     `;
   }
 
@@ -1631,22 +1735,43 @@ ${this._renderTimespanSection(cfg)}
     this._updateSeries(index, "line_style", style);
   }
 
-  private _setSeriesSource(index: number, mode: "statistic" | "calculation") {
+  private _setSeriesSource(index: number, mode: "statistic" | "calculation" | "forecast") {
     const series = this._config!.series ?? [];
     const current = series[index];
     if (!current) {
       return;
     }
-    const isCalculation = !!current.calculation;
-    if (mode === "calculation") {
-      if (!isCalculation) {
-        this._convertSeriesToCalculation(index);
-      }
+    const currentSource = this._resolveSeriesSource(current);
+    if (currentSource === mode) {
       return;
     }
-    if (isCalculation) {
+    if (mode === "calculation") {
+      if (!current.calculation) {
+        this._convertSeriesToCalculation(index);
+      }
+      this._updateSeries(index, "source", "calculation");
+      this._updateSeries(index, "pv_production_entity", undefined);
+      return;
+    }
+    if (mode === "forecast") {
+      if (current.calculation) {
+        this._convertSeriesToStatistic(index);
+      }
+      const updatedSeries = [...(this._config!.series ?? [])];
+      const target = { ...updatedSeries[index] };
+      target.source = "forecast";
+      target.statistic_id = undefined;
+      target.calculation = undefined;
+      updatedSeries[index] = target;
+      this._updateConfig("series", updatedSeries);
+      this._expandedSeries = new Set(this._expandedSeries).add(index);
+      return;
+    }
+    if (current.calculation) {
       this._convertSeriesToStatistic(index);
     }
+    this._updateSeries(index, "source", undefined);
+    this._updateSeries(index, "pv_production_entity", undefined);
   }
 
   private _addSeries() {
@@ -2899,6 +3024,12 @@ ${this._renderTimespanSection(cfg)}
     .hint {
       margin: 0;
       color: var(--secondary-text-color);
+      font-size: 13px;
+    }
+
+    .error {
+      margin: 0;
+      color: var(--error-color, #db4437);
       font-size: 13px;
     }
 
