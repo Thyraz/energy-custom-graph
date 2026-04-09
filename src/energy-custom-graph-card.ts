@@ -469,9 +469,12 @@ export class EnergyCustomGraphCard extends LitElement {
       this._collectionPollHandle = undefined;
     }
 
+    const defaultKey = this.hass.config.version < "2026.4" ?
+      "_energy" :
+      ("_energy_" + this.hass.panelUrl);
     const key = this._config.collection_key
       ? `_${this._config.collection_key}`
-      : "_energy";
+      : defaultKey;
     const connection = this.hass.connection as unknown;
     const candidate =
       typeof connection === "object" && connection !== null
