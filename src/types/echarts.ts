@@ -27,8 +27,10 @@ export interface BarSeriesOption extends BaseSeriesOption {
 
 export type SeriesOption = LineSeriesOption | BarSeriesOption;
 
+export type TooltipFormatterResult = string | HTMLElement | null;
+
 export interface TooltipOption {
-  formatter?: (params: unknown) => string;
+  formatter?: (params: unknown) => TooltipFormatterResult;
   trigger?: string;
   appendTo?: HTMLElement | Document | string;
   [key: string]: unknown;

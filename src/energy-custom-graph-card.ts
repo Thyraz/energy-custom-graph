@@ -5136,9 +5136,9 @@ export class EnergyCustomGraphCard extends LitElement {
     return { yAxis, axisUnitByIndex };
   }
 
-  private _renderTooltip(params: unknown): string {
+  private _renderTooltip(params: unknown): HTMLElement | null {
     if (!Array.isArray(params) || !params.length) {
-      return "";
+      return null;
     }
 
     const items = params as Array<Record<string, any>>;
@@ -5210,9 +5210,14 @@ export class EnergyCustomGraphCard extends LitElement {
 
     const firstTuple = extractTuple(items[0]);
     const headerDate = firstTuple ? toDate(firstTuple.display) : undefined;
-    const header = headerDate ? `<strong>${this._formatDateTime(headerDate)}</strong>` : "";
+    const header = headerDate ? this._formatDateTime(headerDate) : undefined;
 
     const rendered = new Set<string>();
+
+    type TooltipLine = {
+      color?: string;
+      text: string;
+    };
 
     type StackAccumulator = {
       name: string;
@@ -5224,12 +5229,14 @@ export class EnergyCustomGraphCard extends LitElement {
     };
 
     const stackTotals = new Map<string, StackAccumulator>();
-    const groupData = {
-      main: { header: undefined as string | undefined, lines: [] as string[], totals: [] as string[] },
+    const groupData: Record<
+      "main" | "compare",
+      { header?: string; lines: TooltipLine[]; totals: string[] }
+    > = {
+      main: { lines: [], totals: [] },
       compare: {
-        header: undefined as string | undefined,
-        lines: [] as string[],
-        totals: [] as string[],
+        lines: [],
+        totals: [],
       },
     };
 
@@ -5263,7 +5270,7 @@ export class EnergyCustomGraphCard extends LitElement {
       }
 
       const isCompare = seriesKey.endsWith("--compare");
-      const groupKey = isCompare ? "compare" : "main";
+      const groupKey: "main" | "compare" = isCompare ? "compare" : "main";
 
       if (isCompare) {
         if (firstCompareDisplay === undefined) {
@@ -5282,19 +5289,16 @@ export class EnergyCustomGraphCard extends LitElement {
         maximumFractionDigits: precision,
       });
       const unitLabel = unit ? ` ${unit}` : "";
-      const marker =
-        typeof item.marker === "string"
-          ? item.marker
-          : item.color
-            ? `<span style="display:inline-block;margin-right:4px;border-radius:50%;width:8px;height:8px;background:${item.color}"></span>`
-            : "";
-      groupData[groupKey as "main" | "compare"].lines.push(
-        `${marker} ${item.seriesName ?? ""}: ${formattedValue}${unitLabel}`
-      );
+      const seriesName =
+        typeof item.seriesName === "string" ? item.seriesName : "";
+      groupData[groupKey].lines.push({
+        color: typeof item.color === "string" ? item.color : undefined,
+        text: `${seriesName}: ${formattedValue}${unitLabel}`,
+      });
       if (isCompare && original !== undefined && !groupData.compare.header) {
         const compareDate = toDate(original);
         if (compareDate) {
-          groupData.compare.header = `<strong>${this._formatDateTime(compareDate)}</strong>`;
+          groupData.compare.header = this._formatDateTime(compareDate);
         }
       }
 
@@ -5340,12 +5344,12 @@ export class EnergyCustomGraphCard extends LitElement {
         const targetGroup = accumulator.isCompare ? "compare" : "main";
         if (accumulator.positive > 0) {
           groupData[targetGroup].totals.push(
-            `<strong>Total ${accumulator.name}${prefix} (pos): ${format(accumulator.positive)}${unitLabel}</strong>`
+            `Total ${accumulator.name}${prefix} (pos): ${format(accumulator.positive)}${unitLabel}`
           );
         }
         if (accumulator.negative < 0) {
           groupData[targetGroup].totals.push(
-            `<strong>Total ${accumulator.name}${prefix} (neg): ${format(accumulator.negative)}${unitLabel}</strong>`
+            `Total ${accumulator.name}${prefix} (neg): ${format(accumulator.negative)}${unitLabel}`
           );
         }
       });
@@ -5361,47 +5365,101 @@ export class EnergyCustomGraphCard extends LitElement {
       if (candidateOriginal !== undefined) {
         const compareDate = toDate(candidateOriginal);
         if (compareDate) {
-          groupData.compare.header = `<strong>${this._formatDateTime(compareDate)}</strong>`;
+          groupData.compare.header = this._formatDateTime(compareDate);
         }
       }
     }
 
-    const buildSection = (group: "main" | "compare"): string | undefined => {
-      const parts: string[] = [];
-      if (groupData[group].header) {
-        parts.push(groupData[group].header!);
-      }
-      if (groupData[group].lines.length) {
-        parts.push(groupData[group].lines.join("<br>"));
-      }
-      if (groupData[group].totals.length) {
-        parts.push(groupData[group].totals.join("<br>"));
-      }
-      if (!parts.length) {
-        return undefined;
-      }
-      return parts.join("<br>");
+    const root = document.createElement("div");
+    root.style.display = "contents";
+
+    const appendText = (text: string): void => {
+      root.appendChild(document.createTextNode(text));
     };
 
-    const bodySegments: string[] = [];
-    const mainSection = buildSection("main");
-    const compareSection = buildSection("compare");
-    if (mainSection) {
-      bodySegments.push(mainSection);
-    }
-    if (compareSection) {
-      bodySegments.push(compareSection);
+    const appendBreak = (): void => {
+      root.appendChild(document.createElement("br"));
+    };
+
+    const appendStrong = (text: string): void => {
+      const strong = document.createElement("strong");
+      strong.textContent = text;
+      root.appendChild(strong);
+    };
+
+    const appendLine = (line: TooltipLine): void => {
+      if (line.color) {
+        const marker = document.createElement("span");
+        marker.style.display = "inline-block";
+        marker.style.marginRight = "4px";
+        marker.style.borderRadius = "50%";
+        marker.style.width = "8px";
+        marker.style.height = "8px";
+        marker.style.background = line.color;
+        root.appendChild(marker);
+      }
+      appendText(line.text);
+    };
+
+    const hasSection = (group: "main" | "compare"): boolean =>
+      Boolean(
+        groupData[group].header ||
+          groupData[group].lines.length ||
+          groupData[group].totals.length
+      );
+
+    const appendSection = (group: "main" | "compare"): void => {
+      const groupContent = groupData[group];
+      let hasGroupContent = false;
+
+      const appendGroupBreak = (): void => {
+        if (hasGroupContent) {
+          appendBreak();
+        }
+      };
+
+      if (groupContent.header) {
+        appendStrong(groupContent.header);
+        hasGroupContent = true;
+      }
+
+      groupContent.lines.forEach((line) => {
+        appendGroupBreak();
+        appendLine(line);
+        hasGroupContent = true;
+      });
+
+      groupContent.totals.forEach((total) => {
+        appendGroupBreak();
+        appendStrong(total);
+        hasGroupContent = true;
+      });
+    };
+
+    let hasContent = false;
+    let hasBody = false;
+
+    if (header) {
+      appendStrong(header);
+      hasContent = true;
     }
 
-    if (!bodySegments.length) {
-      return header || "";
-    }
+    (["main", "compare"] as const).forEach((group) => {
+      if (!hasSection(group)) {
+        return;
+      }
+      if (hasContent) {
+        appendBreak();
+        if (hasBody) {
+          appendBreak();
+        }
+      }
+      appendSection(group);
+      hasContent = true;
+      hasBody = true;
+    });
 
-    const body = bodySegments.join("<br><br>");
-    if (!header) {
-      return body;
-    }
-    return `${header}<br>${body}`;
+    return hasContent ? root : null;
   }
 
   private _computeCompareOriginalTimestamp(display: number): number | undefined {
