@@ -55,6 +55,18 @@ const COLOR_SELECT_DEFAULT = "__default__";
 const COLOR_SELECT_CUSTOM = "__custom__";
 const COLOR_SELECT_INHERIT = "__inherit__";
 
+interface EditorTextInputConfig {
+  label: string;
+  value: string;
+  helper?: string;
+  type?: string;
+  step?: string;
+  min?: string;
+  max?: string;
+  disabled?: boolean;
+  onInput: (value: string, ev: Event) => void;
+}
+
 @customElement("energy-custom-graph-card-editor")
 export class EnergyCustomGraphCardEditor
   extends LitElement
@@ -79,21 +91,26 @@ export class EnergyCustomGraphCardEditor
 
   async connectedCallback() {
     super.connectedCallback();
-    // Preload ha-entity-picker by loading entities card editor
-    this._preloadEntityPicker();
+    void this._preloadEditorElements();
     void this._loadSolarProductionOptions();
   }
 
-  private async _preloadEntityPicker() {
+  private async _preloadEditorElements() {
+    const needsEntityPicker = !customElements.get("ha-entity-picker");
+    const needsTextInput =
+      !customElements.get("ha-input") && !customElements.get("ha-textfield");
+    if (!needsEntityPicker && !needsTextInput) {
+      return;
+    }
+
     try {
-      if (!customElements.get("ha-entity-picker")) {
-        const helpers = await (window as any).loadCardHelpers();
-        const card = await helpers.createCardElement({ type: "entities", entities: [] });
-        await card.constructor.getConfigElement();
-      }
+      const helpers = await (window as any).loadCardHelpers();
+      const card = await helpers.createCardElement({ type: "entities", entities: [] });
+      await card.constructor.getConfigElement();
+      this.requestUpdate();
     } catch (e) {
       // Preloading failed, but that's okay - we'll fall back gracefully
-      console.debug("Energy Custom Graph: Could not preload ha-entity-picker", e);
+      console.debug("Energy Custom Graph: Could not preload editor elements", e);
     }
   }
 
@@ -148,6 +165,70 @@ export class EnergyCustomGraphCardEditor
       return "calculation";
     }
     return "statistic";
+  }
+
+  private _renderTextInput({
+    label,
+    value,
+    helper,
+    type = "text",
+    step,
+    min,
+    max,
+    disabled = false,
+    onInput,
+  }: EditorTextInputConfig) {
+    const handleInput = (ev: Event) => {
+      onInput((ev.target as HTMLInputElement).value ?? "", ev);
+    };
+
+    if (customElements.get("ha-input")) {
+      return html`
+        <ha-input
+          .label=${label}
+          .value=${value}
+          .hint=${helper ?? ""}
+          .type=${type}
+          .step=${step}
+          .min=${min}
+          .max=${max}
+          .disabled=${disabled}
+          @input=${handleInput}
+        ></ha-input>
+      `;
+    }
+
+    if (customElements.get("ha-textfield")) {
+      return html`
+        <ha-textfield
+          .label=${label}
+          .value=${value}
+          .helper=${helper ?? ""}
+          .type=${type}
+          .step=${step}
+          .min=${min}
+          .max=${max}
+          .disabled=${disabled}
+          @input=${handleInput}
+        ></ha-textfield>
+      `;
+    }
+
+    return html`
+      <div class="field native-text-input">
+        <label>${label}</label>
+        <input
+          .type=${type}
+          .value=${value}
+          .step=${step ?? ""}
+          .min=${min ?? ""}
+          .max=${max ?? ""}
+          ?disabled=${disabled}
+          @input=${handleInput}
+        />
+        ${helper ? html`<span class="hint">${helper}</span>` : nothing}
+      </div>
+    `;
   }
 
   public setConfig(config: EnergyCustomGraphCardConfig): void {
@@ -308,29 +389,26 @@ export class EnergyCustomGraphCardEditor
     return html`
       <div class="axis-config">
         <span class="subtitle axis-title">${axisLabel}</span>
-        <ha-textfield
-          label="Min value"
-          type="number"
-          .disabled=${centerZeroActive}
-          .value=${axisConfig?.min !== undefined ? String(axisConfig.min) : ""}
-          @input=${(ev: Event) =>
-            this._updateAxisConfig(axisId, "min", (ev.target as HTMLInputElement).value)}
-          helper=${centerZeroActive ? "Disabled when center zero is active" : ""}
-        ></ha-textfield>
-        <ha-textfield
-          label="Max value"
-          type="number"
-          .value=${axisConfig?.max !== undefined ? String(axisConfig.max) : ""}
-          @input=${(ev: Event) =>
-            this._updateAxisConfig(axisId, "max", (ev.target as HTMLInputElement).value)}
-          helper=${centerZeroActive ? "Used for both +max and -max" : ""}
-        ></ha-textfield>
-        <ha-textfield
-          label="Unit"
-          .value=${axisConfig?.unit ?? ""}
-          @input=${(ev: Event) =>
-            this._updateAxisConfig(axisId, "unit", (ev.target as HTMLInputElement).value)}
-        ></ha-textfield>
+        ${this._renderTextInput({
+          label: "Min value",
+          type: "number",
+          disabled: centerZeroActive,
+          value: axisConfig?.min !== undefined ? String(axisConfig.min) : "",
+          helper: centerZeroActive ? "Disabled when center zero is active" : undefined,
+          onInput: (value) => this._updateAxisConfig(axisId, "min", value),
+        })}
+        ${this._renderTextInput({
+          label: "Max value",
+          type: "number",
+          value: axisConfig?.max !== undefined ? String(axisConfig.max) : "",
+          helper: centerZeroActive ? "Used for both +max and -max" : undefined,
+          onInput: (value) => this._updateAxisConfig(axisId, "max", value),
+        })}
+        ${this._renderTextInput({
+          label: "Unit",
+          value: axisConfig?.unit ?? "",
+          onInput: (value) => this._updateAxisConfig(axisId, "unit", value),
+        })}
         <div class="row">
           <ha-switch
             .checked=${axisConfig?.fit_y_data === true}
@@ -386,16 +464,13 @@ export class EnergyCustomGraphCardEditor
             ></ha-switch>
             <span>Show units</span>
           </div>
-          <ha-textfield
-            label="Tooltip precision"
-            type="number"
-            .value=${cfg.tooltip_precision !== undefined ? String(cfg.tooltip_precision) : ""}
-            @input=${(ev: Event) =>
-              this._updateNumericConfig(
-                "tooltip_precision",
-                (ev.target as HTMLInputElement).value
-              )}
-          ></ha-textfield>
+          ${this._renderTextInput({
+            label: "Tooltip precision",
+            type: "number",
+            value: cfg.tooltip_precision !== undefined ? String(cfg.tooltip_precision) : "",
+            onInput: (value) =>
+              this._updateNumericConfig("tooltip_precision", value),
+          })}
           <div class="row">
             <ha-switch
               .checked=${cfg.show_stack_sums === true}
@@ -632,19 +707,18 @@ export class EnergyCustomGraphCardEditor
     const aggregationSummary = this._formatAggregationSummary(aggregationConfig, isEnergyMode);
     return html`
       <div class="section">
-        <ha-textfield
-          .label=${this.hass.localize("ui.panel.lovelace.editor.card.generic.title")}
-          .value=${cfg.title ?? ""}
-          @input=${(ev: Event) =>
-            this._updateConfig("title", (ev.target as HTMLInputElement).value)}
-        ></ha-textfield>
-        <ha-textfield
-          label="Chart height"
-          helper="CSS height (e.g. 320px, 20rem). Ignored when used in a section layout."
-          .value=${cfg.chart_height ?? ""}
-          @input=${(ev: Event) =>
-            this._updateConfig("chart_height", (ev.target as HTMLInputElement).value || undefined)}
-        ></ha-textfield>
+        ${this._renderTextInput({
+          label: this.hass.localize("ui.panel.lovelace.editor.card.generic.title"),
+          value: cfg.title ?? "",
+          onInput: (value) => this._updateConfig("title", value),
+        })}
+        ${this._renderTextInput({
+          label: "Chart height",
+          helper: "CSS height (e.g. 320px, 20rem). Ignored when used in a section layout.",
+          value: cfg.chart_height ?? "",
+          onInput: (value) =>
+            this._updateConfig("chart_height", value || undefined),
+        })}
 ${this._renderTimespanSection(cfg)}
       </div>
       ${this._renderLegendSection(cfg)}
@@ -819,13 +893,13 @@ ${this._renderTimespanSection(cfg)}
 
         ${mode === "energy"
           ? html`
-              <ha-textfield
-                label="Collection key"
-                helper="Optional key when multiple energy pickers are present"
-                .value=${cfg.collection_key ?? ""}
-                @input=${(ev: Event) =>
-                  this._updateConfig("collection_key", (ev.target as HTMLInputElement).value || undefined)}
-              ></ha-textfield>
+              ${this._renderTextInput({
+                label: "Collection key",
+                helper: "Optional key when multiple energy pickers are present",
+                value: cfg.collection_key ?? "",
+                onInput: (value) =>
+                  this._updateConfig("collection_key", value || undefined),
+              })}
               <div class="row">
                 <ha-switch
                   .checked=${cfg.allow_compare !== false}
@@ -871,32 +945,32 @@ ${this._renderTimespanSection(cfg)}
                   )}
                 </select>
               </div>
-              <ha-textfield
-                label="Offset"
-                type="number"
-                .value=${timespan.mode === "relative" ? String(timespan.offset ?? 0) : "0"}
-                @input=${(ev: Event) =>
-                  this._updateTimespanRelativeOffset(Number((ev.target as HTMLInputElement).value))}
-              ></ha-textfield>
+              ${this._renderTextInput({
+                label: "Offset",
+                type: "number",
+                value: timespan.mode === "relative" ? String(timespan.offset ?? 0) : "0",
+                onInput: (value) =>
+                  this._updateTimespanRelativeOffset(Number(value)),
+              })}
             `
           : nothing}
 
         ${mode === "fixed"
           ? html`
-              <ha-textfield
-                label="Start"
-                helper="ISO 8601 format (e.g. 2024-01-01T00:00:00)"
-                .value=${timespan.mode === "fixed" ? (timespan.start ?? "") : ""}
-                @input=${(ev: Event) =>
-                  this._updateTimespanFixedStart((ev.target as HTMLInputElement).value || undefined)}
-              ></ha-textfield>
-              <ha-textfield
-                label="End"
-                helper="ISO 8601 format (e.g. 2024-01-31T23:59:59)"
-                .value=${timespan.mode === "fixed" ? (timespan.end ?? "") : ""}
-                @input=${(ev: Event) =>
-                  this._updateTimespanFixedEnd((ev.target as HTMLInputElement).value || undefined)}
-              ></ha-textfield>
+              ${this._renderTextInput({
+                label: "Start",
+                helper: "ISO 8601 format (e.g. 2024-01-01T00:00:00)",
+                value: timespan.mode === "fixed" ? (timespan.start ?? "") : "",
+                onInput: (value) =>
+                  this._updateTimespanFixedStart(value || undefined),
+              })}
+              ${this._renderTextInput({
+                label: "End",
+                helper: "ISO 8601 format (e.g. 2024-01-31T23:59:59)",
+                value: timespan.mode === "fixed" ? (timespan.end ?? "") : "",
+                onInput: (value) =>
+                  this._updateTimespanFixedEnd(value || undefined),
+              })}
             `
           : nothing}
       </div>
@@ -916,12 +990,12 @@ ${this._renderTimespanSection(cfg)}
           <span class="group-title">Basics</span>
         </div>
         <div class="group-body">
-          <ha-textfield
-            label="Series name"
-            .value=${series.name ?? ""}
-            @input=${(ev: Event) =>
-              this._updateSeries(index, "name", (ev.target as HTMLInputElement).value || undefined)}
-          ></ha-textfield>
+          ${this._renderTextInput({
+            label: "Series name",
+            value: series.name ?? "",
+            onInput: (value) =>
+              this._updateSeries(index, "name", value || undefined),
+          })}
           <div class="field">
             <label>Chart type</label>
             <div class="segment-group" role="group" aria-label="Chart type">
@@ -1089,29 +1163,27 @@ ${this._renderTimespanSection(cfg)}
       terms: [],
     };
     return html`
-      <ha-textfield
-        label="Calculation unit"
-        .value=${calculation.unit ?? ""}
-        @input=${(ev: Event) =>
+      ${this._renderTextInput({
+        label: "Calculation unit",
+        value: calculation.unit ?? "",
+        onInput: (value) =>
           this._updateCalculation(index, {
             ...calculation,
-            unit: (ev.target as HTMLInputElement).value || undefined,
-          })}
-      ></ha-textfield>
-      <ha-textfield
-        label="Initial value"
-        type="number"
-        .value=${calculation.initial_value !== undefined
+            unit: value || undefined,
+          }),
+      })}
+      ${this._renderTextInput({
+        label: "Initial value",
+        type: "number",
+        value: calculation.initial_value !== undefined
           ? String(calculation.initial_value)
-          : "0"}
-        @input=${(ev: Event) =>
+          : "0",
+        onInput: (value) =>
           this._updateCalculation(index, {
             ...calculation,
-            initial_value: (ev.target as HTMLInputElement).value
-              ? Number((ev.target as HTMLInputElement).value)
-              : 0,
-          })}
-      ></ha-textfield>
+            initial_value: value ? Number(value) : 0,
+          }),
+      })}
       <div class="terms-list">
         ${calculation.terms?.length
           ? calculation.terms.map((term, termIndex) =>
@@ -1271,19 +1343,19 @@ ${this._renderTimespanSection(cfg)}
             </div>
           `
         : html`
-            <ha-textfield
-              label="Constant"
-              helper="Fixed value added every step"
-              type="number"
-              .value=${term.constant !== undefined ? String(term.constant) : ""}
-              @input=${(ev: Event) =>
+            ${this._renderTextInput({
+              label: "Constant",
+              helper: "Fixed value added every step",
+              type: "number",
+              value: term.constant !== undefined ? String(term.constant) : "",
+              onInput: (value) =>
                 this._updateTermNumber(
                   seriesIndex,
                   termIndex,
                   "constant",
-                  (ev.target as HTMLInputElement).value
-                )}
-            ></ha-textfield>
+                  value
+                ),
+            })}
           `}
     `;
   }
@@ -1298,49 +1370,49 @@ ${this._renderTimespanSection(cfg)}
     }
     return html`
       <span class="subtitle term-transform-title">Transform</span>
-      <ha-textfield
-        label="Multiply"
-        type="number"
-        .value=${term.multiply !== undefined ? String(term.multiply) : ""}
-        @input=${(ev: Event) =>
+      ${this._renderTextInput({
+        label: "Multiply",
+        type: "number",
+        value: term.multiply !== undefined ? String(term.multiply) : "",
+        onInput: (value) =>
           this._updateTermNumber(
             seriesIndex,
             termIndex,
             "multiply",
-            (ev.target as HTMLInputElement).value
-          )}
-      ></ha-textfield>
-      <ha-textfield
-        label="Add"
-        type="number"
-        .value=${term.add !== undefined ? String(term.add) : ""}
-        @input=${(ev: Event) =>
-          this._updateTermNumber(seriesIndex, termIndex, "add", (ev.target as HTMLInputElement).value)}
-      ></ha-textfield>
-      <ha-textfield
-        label="Clip min"
-        type="number"
-        .value=${term.clip_min !== undefined ? String(term.clip_min) : ""}
-        @input=${(ev: Event) =>
+            value
+          ),
+      })}
+      ${this._renderTextInput({
+        label: "Add",
+        type: "number",
+        value: term.add !== undefined ? String(term.add) : "",
+        onInput: (value) =>
+          this._updateTermNumber(seriesIndex, termIndex, "add", value),
+      })}
+      ${this._renderTextInput({
+        label: "Clip min",
+        type: "number",
+        value: term.clip_min !== undefined ? String(term.clip_min) : "",
+        onInput: (value) =>
           this._updateTermNumber(
             seriesIndex,
             termIndex,
             "clip_min",
-            (ev.target as HTMLInputElement).value
-          )}
-      ></ha-textfield>
-      <ha-textfield
-        label="Clip max"
-        type="number"
-        .value=${term.clip_max !== undefined ? String(term.clip_max) : ""}
-        @input=${(ev: Event) =>
+            value
+          ),
+      })}
+      ${this._renderTextInput({
+        label: "Clip max",
+        type: "number",
+        value: term.clip_max !== undefined ? String(term.clip_max) : "",
+        onInput: (value) =>
           this._updateTermNumber(
             seriesIndex,
             termIndex,
             "clip_max",
-            (ev.target as HTMLInputElement).value
-          )}
-      ></ha-textfield>
+            value
+          ),
+      })}
     `;
   }
 
@@ -1471,14 +1543,12 @@ ${this._renderTimespanSection(cfg)}
           ${colorMode === COLOR_SELECT_CUSTOM
             ? html`
                 <div class="color-row">
-                  <ha-textfield
-                    label="Custom color"
-                    .value=${customInputValue ?? ""}
-                    @input=${(ev: Event) => {
-                      const target = ev.target as HTMLInputElement;
-                      this._handleCustomColorInput(index, target.value);
-                    }}
-                  ></ha-textfield>
+                  ${this._renderTextInput({
+                    label: "Custom color",
+                    value: customInputValue ?? "",
+                    onInput: (value) =>
+                      this._handleCustomColorInput(index, value),
+                  })}
                 </div>
               `
             : nothing}
@@ -1526,14 +1596,12 @@ ${this._renderTimespanSection(cfg)}
           ${compareMode === COLOR_SELECT_CUSTOM
             ? html`
                 <div class="color-row">
-                  <ha-textfield
-                    label="Custom compare color"
-                    .value=${compareCustomText ?? ""}
-                    @input=${(ev: Event) => {
-                      const target = ev.target as HTMLInputElement;
-                      this._handleCompareCustomColorInput(index, target.value);
-                    }}
-                  ></ha-textfield>
+                  ${this._renderTextInput({
+                    label: "Custom compare color",
+                    value: compareCustomText ?? "",
+                    onInput: (value) =>
+                      this._handleCompareCustomColorInput(index, value),
+                  })}
                 </div>
               `
             : nothing}
@@ -1573,63 +1641,63 @@ ${this._renderTimespanSection(cfg)}
                 </div>
               `
             : nothing}
-          <ha-textfield
-            label="Fill opacity"
-            type="number"
-            step="0.01"
-            min="0"
-            max="1"
-            helper="Default 0.15 (lines) / 0.5 (bars)"
-            .value=${series.fill_opacity !== undefined ? String(series.fill_opacity) : ""}
-            @input=${(ev: Event) =>
+          ${this._renderTextInput({
+            label: "Fill opacity",
+            type: "number",
+            step: "0.01",
+            min: "0",
+            max: "1",
+            helper: "Default 0.15 (lines) / 0.5 (bars)",
+            value: series.fill_opacity !== undefined ? String(series.fill_opacity) : "",
+            onInput: (value) =>
               this._updateSeriesNumber(
                 index,
                 "fill_opacity",
-                (ev.target as HTMLInputElement).value
-              )}
-          ></ha-textfield>
+                value
+              ),
+          })}
           ${fillActive
             ? html`
-                <ha-textfield
-                  label="Fill to series"
-                  helper="Name of the line series to fill towards"
-                  .value=${series.fill_to_series ?? ""}
-                  @input=${(ev: Event) =>
+                ${this._renderTextInput({
+                  label: "Fill to series",
+                  helper: "Name of the line series to fill towards",
+                  value: series.fill_to_series ?? "",
+                  onInput: (value) =>
                     this._updateSeries(
                       index,
                       "fill_to_series",
-                      (ev.target as HTMLInputElement).value || undefined
-                    )}
-                ></ha-textfield>
+                      value || undefined
+                    ),
+                })}
               `
             : nothing}
-          <ha-textfield
-            label="Line opacity"
-            type="number"
-            step="0.01"
-            min="0"
-            max="1"
-            helper="Default 0.85 for lines, 1.0 for bars"
-            .value=${series.line_opacity !== undefined ? String(series.line_opacity) : ""}
-            @input=${(ev: Event) =>
-              this._updateSeriesNumber(index, "line_opacity", (ev.target as HTMLInputElement).value)}
-          ></ha-textfield>
+          ${this._renderTextInput({
+            label: "Line opacity",
+            type: "number",
+            step: "0.01",
+            min: "0",
+            max: "1",
+            helper: "Default 0.85 for lines, 1.0 for bars",
+            value: series.line_opacity !== undefined ? String(series.line_opacity) : "",
+            onInput: (value) =>
+              this._updateSeriesNumber(index, "line_opacity", value),
+          })}
           ${isLineLike
             ? html`
-                <ha-textfield
-                  label="Line width"
-                  type="number"
-                  step="0.5"
-                  min="0.5"
-                  helper="Default 1.5"
-                  .value=${series.line_width !== undefined ? String(series.line_width) : ""}
-                  @input=${(ev: Event) =>
+                ${this._renderTextInput({
+                  label: "Line width",
+                  type: "number",
+                  step: "0.5",
+                  min: "0.5",
+                  helper: "Default 1.5",
+                  value: series.line_width !== undefined ? String(series.line_width) : "",
+                  onInput: (value) =>
                     this._updateSeriesNumber(
                       index,
                       "line_width",
-                      (ev.target as HTMLInputElement).value
-                    )}
-                ></ha-textfield>
+                      value
+                    ),
+                })}
                 <div class="field">
                   <label>Line style</label>
                   <div class="segment-group" role="group" aria-label="Line style">
@@ -1651,13 +1719,13 @@ ${this._renderTimespanSection(cfg)}
                 </div>
               `
             : nothing}
-          <ha-textfield
-            label="Stack group"
-            helper="Series using the same name will stack together"
-            .value=${series.stack ?? ""}
-            @input=${(ev: Event) =>
-              this._updateSeries(index, "stack", (ev.target as HTMLInputElement).value || undefined)}
-          ></ha-textfield>
+          ${this._renderTextInput({
+            label: "Stack group",
+            helper: "Series using the same name will stack together",
+            value: series.stack ?? "",
+            onInput: (value) =>
+              this._updateSeries(index, "stack", value || undefined),
+          })}
         </div>
       </div>
     `;
@@ -1672,45 +1740,45 @@ ${this._renderTimespanSection(cfg)}
           <span class="group-title">Transform</span>
         </div>
         <div class="group-body">
-          <ha-textfield
-            label="Multiply"
-            type="number"
-            .value=${series.multiply !== undefined ? String(series.multiply) : ""}
-            @input=${(ev: Event) =>
-              this._updateSeriesNumber(index, "multiply", (ev.target as HTMLInputElement).value)}
-          ></ha-textfield>
-          <ha-textfield
-            label="Add"
-            type="number"
-            .value=${series.add !== undefined ? String(series.add) : ""}
-            @input=${(ev: Event) =>
-              this._updateSeriesNumber(index, "add", (ev.target as HTMLInputElement).value)}
-          ></ha-textfield>
+          ${this._renderTextInput({
+            label: "Multiply",
+            type: "number",
+            value: series.multiply !== undefined ? String(series.multiply) : "",
+            onInput: (value) =>
+              this._updateSeriesNumber(index, "multiply", value),
+          })}
+          ${this._renderTextInput({
+            label: "Add",
+            type: "number",
+            value: series.add !== undefined ? String(series.add) : "",
+            onInput: (value) =>
+              this._updateSeriesNumber(index, "add", value),
+          })}
           ${showSmooth
             ? html`
-                <ha-textfield
-                  label="Smooth"
-                  helper="Boolean or number (0-1). Leave empty for default."
-                  .value=${series.smooth !== undefined ? String(series.smooth) : ""}
-                  @input=${(ev: Event) =>
-                    this._updateSeriesSmooth(index, (ev.target as HTMLInputElement).value)}
-                ></ha-textfield>
+                ${this._renderTextInput({
+                  label: "Smooth",
+                  helper: "Boolean or number (0-1). Leave empty for default.",
+                  value: series.smooth !== undefined ? String(series.smooth) : "",
+                  onInput: (value) =>
+                    this._updateSeriesSmooth(index, value),
+                })}
               `
             : nothing}
-          <ha-textfield
-            label="Clip min"
-            type="number"
-            .value=${series.clip_min !== undefined ? String(series.clip_min) : ""}
-            @input=${(ev: Event) =>
-              this._updateSeriesNumber(index, "clip_min", (ev.target as HTMLInputElement).value)}
-          ></ha-textfield>
-          <ha-textfield
-            label="Clip max"
-            type="number"
-            .value=${series.clip_max !== undefined ? String(series.clip_max) : ""}
-            @input=${(ev: Event) =>
-              this._updateSeriesNumber(index, "clip_max", (ev.target as HTMLInputElement).value)}
-          ></ha-textfield>
+          ${this._renderTextInput({
+            label: "Clip min",
+            type: "number",
+            value: series.clip_min !== undefined ? String(series.clip_min) : "",
+            onInput: (value) =>
+              this._updateSeriesNumber(index, "clip_min", value),
+          })}
+          ${this._renderTextInput({
+            label: "Clip max",
+            type: "number",
+            value: series.clip_max !== undefined ? String(series.clip_max) : "",
+            onInput: (value) =>
+              this._updateSeriesNumber(index, "clip_max", value),
+          })}
         </div>
       </div>
     `;
@@ -2751,6 +2819,17 @@ ${this._renderTimespanSection(cfg)}
   static styles = css`
     ha-entity-picker {
       display: block;
+      width: 100%;
+    }
+
+    ha-input,
+    ha-textfield {
+      display: block;
+      width: 100%;
+    }
+
+    .native-text-input input {
+      box-sizing: border-box;
       width: 100%;
     }
 
