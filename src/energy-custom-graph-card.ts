@@ -4882,6 +4882,7 @@ export class EnergyCustomGraphCard extends LitElement {
       id: string;
       name: string;
       color?: string;
+      indicatorColor?: string;
       fillColor?: string;
       borderColor?: string;
       borderWidth?: number;
@@ -4907,10 +4908,10 @@ export class EnergyCustomGraphCard extends LitElement {
       name: entry.name,
       secondaryIds: secondaryIds.get(entry.id) ?? [],
       itemStyle:
-        entry.fillColor || entry.color || entry.borderColor
+        entry.indicatorColor || entry.color || entry.fillColor || entry.borderColor
           ? {
-              color: entry.fillColor ?? entry.color,
-              borderColor: entry.borderColor ?? entry.color,
+              color: entry.indicatorColor ?? entry.color ?? entry.fillColor,
+              borderColor: entry.borderColor ?? entry.indicatorColor ?? entry.color,
               borderWidth: entry.borderWidth ?? (entry.borderColor ? 2 : 1),
             }
           : undefined,

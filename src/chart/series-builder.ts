@@ -31,6 +31,7 @@ export interface BuiltSeriesResult {
     id: string;
     name: string;
     color?: string;
+    indicatorColor?: string;
     fillColor?: string;
     borderColor?: string;
     borderWidth?: number;
@@ -135,6 +136,22 @@ const applyAlpha = (color: string, alpha: number): string => {
     const rgb = rgbStringToRgb(trimmed);
     if (rgb) {
       return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${normalizedAlpha})`;
+    }
+  }
+  return trimmed;
+};
+
+const stripAlpha = (color: string): string => {
+  const trimmed = color.trim();
+  if (trimmed.startsWith("#")) {
+    const rgb = hexToRgb(trimmed);
+    if (rgb) {
+      return `rgb(${rgb.r}, ${rgb.g}, ${rgb.b})`;
+    }
+  } else if (trimmed.startsWith("rgb")) {
+    const rgb = rgbStringToRgb(trimmed);
+    if (rgb) {
+      return `rgb(${rgb.r}, ${rgb.g}, ${rgb.b})`;
     }
   }
   return trimmed;
@@ -284,6 +301,7 @@ export const buildSeries = ({
       }
     }
     colorValue = colorValue.trim();
+    const indicatorColor = stripAlpha(colorValue);
 
     const lineOpacityOverride =
       typeof seriesConfig.line_opacity === "number"
@@ -481,6 +499,7 @@ export const buildSeries = ({
         id,
         name,
         color: legendFill,
+        indicatorColor,
         fillColor: legendFill,
         borderColor: legendBorder,
         borderWidth: isLineLike ? 2 : 1,

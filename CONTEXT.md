@@ -16,6 +16,10 @@ _Avoid_: Plot
 A configured data stream drawn in the chart and represented in the legend and tooltip.
 _Avoid_: Dataset
 
+**Series color**:
+The configured or resolved color that identifies a series.
+_Avoid_: Signal color, base color
+
 **Statistic series**:
 A series backed by one Home Assistant statistic ID.
 _Avoid_: Long-term series
@@ -55,6 +59,10 @@ _Avoid_: Live value, near real-time value
 **Tooltip**:
 The hover or click detail panel that shows chart values at a selected point in time.
 _Avoid_: Popup, hover label
+
+**Legend indicator**:
+The colored symbol beside a legend entry.
+_Avoid_: Legend marker, legend bullet
 
 **Y axis**:
 The vertical value axis a series is assigned to; the card supports left and right Y axes.
