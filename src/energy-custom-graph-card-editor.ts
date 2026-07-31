@@ -97,9 +97,7 @@ export class EnergyCustomGraphCardEditor
 
   private async _preloadEditorElements() {
     const needsEntityPicker = !customElements.get("ha-entity-picker");
-    const needsTextInput =
-      !customElements.get("ha-input") && !customElements.get("ha-textfield");
-    if (!needsEntityPicker && !needsTextInput) {
+    if (!needsEntityPicker) {
       return;
     }
 
@@ -181,38 +179,6 @@ export class EnergyCustomGraphCardEditor
     const handleInput = (ev: Event) => {
       onInput((ev.target as HTMLInputElement).value ?? "", ev);
     };
-
-    if (customElements.get("ha-input")) {
-      return html`
-        <ha-input
-          .label=${label}
-          .value=${value}
-          .hint=${helper ?? ""}
-          .type=${type}
-          .step=${step}
-          .min=${min}
-          .max=${max}
-          .disabled=${disabled}
-          @input=${handleInput}
-        ></ha-input>
-      `;
-    }
-
-    if (customElements.get("ha-textfield")) {
-      return html`
-        <ha-textfield
-          .label=${label}
-          .value=${value}
-          .helper=${helper ?? ""}
-          .type=${type}
-          .step=${step}
-          .min=${min}
-          .max=${max}
-          .disabled=${disabled}
-          @input=${handleInput}
-        ></ha-textfield>
-      `;
-    }
 
     return html`
       <div class="field native-text-input">
@@ -2818,12 +2784,6 @@ ${this._renderTimespanSection(cfg)}
 
   static styles = css`
     ha-entity-picker {
-      display: block;
-      width: 100%;
-    }
-
-    ha-input,
-    ha-textfield {
       display: block;
       width: 100%;
     }
