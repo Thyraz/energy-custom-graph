@@ -115,6 +115,7 @@ const RAW_DELTA_OVERLAP_MS = 60_000;
 const DEFAULT_CHART_HEIGHT = "300px";
 const SOLAR_FORECAST_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
+const HA_RECORDER_WEEK_OPTIONS = { weekStartsOn: 1 as const };
 
 class TimeoutError extends Error {
   constructor(message: string) {
@@ -855,8 +856,8 @@ export class EnergyCustomGraphCard extends LitElement {
         return this._defaultEnergyRange();
       case "week":
         return {
-          start: startOfWeek(now),
-          end: endOfWeek(now),
+          start: startOfWeek(now, HA_RECORDER_WEEK_OPTIONS),
+          end: endOfWeek(now, HA_RECORDER_WEEK_OPTIONS),
         };
       case "month":
         return {
@@ -4868,7 +4869,7 @@ export class EnergyCustomGraphCard extends LitElement {
       case "day":
         return startOfDay(date);
       case "week":
-        return startOfWeek(date);
+        return startOfWeek(date, HA_RECORDER_WEEK_OPTIONS);
       case "month":
         return startOfMonth(date);
       default:
