@@ -199,7 +199,16 @@ export class EnergyCustomGraphCardEditor
 
   public setConfig(config: EnergyCustomGraphCardConfig): void {
     const hadConfig = this._config !== undefined;
-    const normalizedSeries = config.series?.map((item) => ({ ...item })) ?? [];
+    const normalizedSeries = config.series?.map((item) => {
+      const normalized = { ...item };
+      if (item.calculation) {
+        normalized.calculation = {
+          ...item.calculation,
+          terms: (item.calculation.terms ?? []).map((term) => ({ ...term })),
+        };
+      }
+      return normalized;
+    }) ?? [];
     const nextConfig: EnergyCustomGraphCardConfig = {
       ...config,
       series: normalizedSeries,
@@ -1922,8 +1931,10 @@ ${this._renderTimespanSection(cfg)}
   private _addCalculationTerm(index: number) {
     const series = [...(this._config!.series ?? [])];
     const target = { ...series[index] };
-    const calculation: EnergyCustomGraphCalculationConfig = target.calculation ?? { terms: [] };
-    calculation.terms = [...(calculation.terms ?? []), { operation: "add" }];
+    const calculation: EnergyCustomGraphCalculationConfig = {
+      ...(target.calculation ?? { terms: [] }),
+      terms: [...(target.calculation?.terms ?? []), { operation: "add" }],
+    };
     target.calculation = calculation;
     series[index] = target;
     this._updateConfig("series", series);
