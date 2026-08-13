@@ -107,3 +107,7 @@ _Avoid_: Fill stack
 **Stack**:
 A user-configured group where series values are visually accumulated.
 _Avoid_: Fill stack
+
+**Draw order**:
+The visual layering order for overlapping series in the chart; it does not change series values or stack calculation.
+_Avoid_: Stack, z-index

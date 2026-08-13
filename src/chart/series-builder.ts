@@ -61,6 +61,35 @@ const DEFAULT_BAR_BORDER_OPACITY = 1.0;
 const getCalculationKey = (index: number) => `calculation_${index}`;
 const getForecastKey = (index: number) => `forecast_${index}`;
 
+const buildStackedLineZByIndex = (
+  configSeries: EnergyCustomGraphSeriesConfig[]
+): Map<number, number> => {
+  const stackGroups = new Map<string, number[]>();
+
+  configSeries.forEach((seriesConfig, index) => {
+    const chartType = seriesConfig.chart_type ?? "bar";
+    const stack = seriesConfig.stack?.trim();
+    if ((chartType !== "line" && chartType !== "step") || !stack) {
+      return;
+    }
+
+    const yAxis = seriesConfig.y_axis === "right" ? "right" : "left";
+    const stackKey = `${yAxis}:${stack}`;
+    const indexes = stackGroups.get(stackKey) ?? [];
+    indexes.push(index);
+    stackGroups.set(stackKey, indexes);
+  });
+
+  const zByIndex = new Map<number, number>();
+  stackGroups.forEach((indexes) => {
+    indexes.forEach((seriesIndex, position) => {
+      zByIndex.set(seriesIndex, indexes[indexes.length - position - 1]);
+    });
+  });
+
+  return zByIndex;
+};
+
 const clampAlpha = (value: number) =>
   Math.max(0, Math.min(1, Number.isFinite(value) ? value : 1));
 
@@ -192,6 +221,7 @@ export const buildSeries = ({
     sourceName: string;
     targetName: string;
   }> = [];
+  const stackedLineZByIndex = buildStackedLineZByIndex(configSeries);
   const warned = new Set<string>();
   const warnOnce = (key: string, message: string) => {
     if (warned.has(key)) {
@@ -373,7 +403,7 @@ export const buildSeries = ({
         data: dataPoints,
         stack: seriesConfig.stack,
         yAxisIndex: seriesConfig.y_axis === "right" ? 1 : 0,
-        z: index,
+        z: stackedLineZByIndex.get(index) ?? index,
         emphasis: {
           focus: "series",
           itemStyle: {
