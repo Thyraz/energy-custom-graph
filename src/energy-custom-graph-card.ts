@@ -149,6 +149,7 @@ export class EnergyCustomGraphCard extends LitElement {
   private _energyCompareStart?: Date;
   private _energyCompareEnd?: Date;
   private _unitsBySeries: Map<string, string | null | undefined> = new Map();
+  private _indicatorColorBySeries: Map<string, string> = new Map();
   private _collectionUnsub?: () => void;
   private _collectionPollHandle?: number;
   private _autoRefreshTimeout?: number;
@@ -1867,6 +1868,7 @@ export class EnergyCustomGraphCard extends LitElement {
         this._chartData = [];
         this._chartOptions = undefined;
         this._unitsBySeries = new Map();
+        this._indicatorColorBySeries = new Map();
         this._disabledMessage = this._getDisabledMessage();
         if (this._autoRefreshTimeout) {
           clearTimeout(this._autoRefreshTimeout);
@@ -2099,6 +2101,7 @@ export class EnergyCustomGraphCard extends LitElement {
             this._chartData = [];
             this._chartOptions = undefined;
             this._unitsBySeries = new Map();
+            this._indicatorColorBySeries = new Map();
             this._disabledMessage = this._getDisabledMessage();
             if (this._autoRefreshTimeout) {
               clearTimeout(this._autoRefreshTimeout);
@@ -3500,6 +3503,7 @@ export class EnergyCustomGraphCard extends LitElement {
       this._chartData = [];
       this._chartOptions = undefined;
       this._unitsBySeries = new Map();
+      this._indicatorColorBySeries = new Map();
       this._seriesConfigById = new Map();
       return;
     }
@@ -3508,6 +3512,7 @@ export class EnergyCustomGraphCard extends LitElement {
       this._chartData = [];
       this._chartOptions = undefined;
       this._unitsBySeries = new Map();
+      this._indicatorColorBySeries = new Map();
       this._seriesConfigById = new Map();
       return;
     }
@@ -3530,6 +3535,7 @@ export class EnergyCustomGraphCard extends LitElement {
       legend,
       unitBySeries,
       seriesById,
+      indicatorColorBySeries,
     } = buildSeries({
       hass: this.hass,
       statistics: this._statistics,
@@ -3546,6 +3552,10 @@ export class EnergyCustomGraphCard extends LitElement {
     const combinedSeriesById = new Map(seriesById);
     const combinedUnits = new Map<string, string | null | undefined>();
     unitBySeries.forEach((value, key) => combinedUnits.set(key, value));
+    const combinedIndicatorColors = new Map<string, string>();
+    indicatorColorBySeries.forEach((value, key) =>
+      combinedIndicatorColors.set(key, value)
+    );
     const legendSecondaryIds = new Map<string, string[]>();
 
     const barStackBaseById = new Map<string, string>();
@@ -3751,6 +3761,11 @@ export class EnergyCustomGraphCard extends LitElement {
           compareSeriesTemp.push(cloned);
         }
         combinedUnits.set(compareId, compareResult.unitBySeries.get(baseId));
+        const compareIndicatorColor =
+          compareColor ?? compareResult.indicatorColorBySeries.get(baseId);
+        if (compareIndicatorColor) {
+          combinedIndicatorColors.set(compareId, compareIndicatorColor);
+        }
 
         if (baseConfig) {
           combinedSeriesById.set(compareId, baseConfig);
@@ -3806,6 +3821,7 @@ export class EnergyCustomGraphCard extends LitElement {
       this._chartData = [];
       this._chartOptions = undefined;
       this._unitsBySeries = new Map();
+      this._indicatorColorBySeries = new Map();
       return;
     }
 
@@ -3815,6 +3831,7 @@ export class EnergyCustomGraphCard extends LitElement {
     );
 
     this._unitsBySeries = new Map();
+    this._indicatorColorBySeries = new Map(combinedIndicatorColors);
     combinedSeries.forEach((item) => {
       const axisIndex = item.yAxisIndex ?? 0;
       const axisUnit =
@@ -5293,8 +5310,11 @@ export class EnergyCustomGraphCard extends LitElement {
       const unitLabel = unit ? ` ${unit}` : "";
       const seriesName =
         typeof item.seriesName === "string" ? item.seriesName : "";
+      const markerColor =
+        this._indicatorColorBySeries.get(seriesKey) ??
+        (typeof item.color === "string" ? item.color : undefined);
       groupData[groupKey].lines.push({
-        color: typeof item.color === "string" ? item.color : undefined,
+        color: markerColor,
         text: `${seriesName}: ${formattedValue}${unitLabel}`,
       });
       if (isCompare && original !== undefined && !groupData.compare.header) {

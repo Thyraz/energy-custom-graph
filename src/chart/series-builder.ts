@@ -39,6 +39,7 @@ export interface BuiltSeriesResult {
   }[];
   unitBySeries: Map<string, string | null | undefined>;
   seriesById: Map<string, EnergyCustomGraphSeriesConfig>;
+  indicatorColorBySeries: Map<string, string>;
 }
 
 export const DEFAULT_COLORS = [
@@ -203,6 +204,7 @@ export const buildSeries = ({
   const legend: BuiltSeriesResult["legend"] = [];
   const unitBySeries = new Map<string, string | null | undefined>();
   const seriesById = new Map<string, EnergyCustomGraphSeriesConfig>();
+  const indicatorColorBySeries = new Map<string, string>();
   const output: (LineSeriesOption | BarSeriesOption)[] = [];
 
   type LineSeriesMeta = {
@@ -357,6 +359,7 @@ export const buildSeries = ({
       calcUnit ?? meta?.statistics_unit_of_measurement
     );
     seriesById.set(id, seriesConfig);
+    indicatorColorBySeries.set(id, indicatorColor);
 
     const dataPoints: [number, number | null][] = raw.map(
       (entry: StatisticValue) => {
@@ -734,5 +737,6 @@ export const buildSeries = ({
     legend,
     unitBySeries,
     seriesById,
+    indicatorColorBySeries,
   };
 };
