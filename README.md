@@ -180,6 +180,7 @@ Display a fixed time range. Dates use ISO 8601 format. If omitted, `start` defau
 | `source` | `"statistic"`, `"calculation"`, `"forecast"` | inferred | Data source type. When omitted the card can auto-detect the source based on the other fields for `statistic` and `calculation` signals. Use `forecast` to plot solar forecasts configured in the Energy dashboard. |
 | `statistic_id` | string | – | Entity with long term statistics (e.g. `sensor.entity_id`). Required unless series uses a `calculation` instead. |
 | `stat_type` | `"change"`, `"sum"`, `"mean"`, `"min"`, `"max"`, `"state"` | `"change"` | Statistic type to display for this entity. Not used when `calculation` is provided, as each subseries has it's own setting there. |
+| `time_offset` | object | – | Fetch this statistic series from a shifted source timespan and display it in the visible timespan. See below. |
 | `calculation` | object | – | Build a computed series from multiple statistics / terms (see below). |
 | `chart_type` | `"bar"`, `"line"`, `"step"` | `"bar"` | Chart type. |
 | `stack` | string | – | Stack key for combining series. Series with identical keys will get stacked on top of each other. |
@@ -201,6 +202,25 @@ Display a fixed time range. Dates use ISO 8601 format. If omitted, `start` defau
 | `clip_min` | number | – | Values will be set to this value if they are smaller. |
 | `clip_max` | number | – | Values will be set to this value if they are larger. |
 | `pv_production_entity` | string | – | (Forecast only) Sensor entity you configured as PV production in the Energy dashboard. Leave unset to sum all configured forecasts. |
+
+#### Series time offset
+
+`time_offset` shifts the source timespan for a statistic series. The card loads data from that shifted range and then projects the timestamps back into the visible chart range.
+
+```yaml
+series:
+  - statistic_id: sensor.pv_generation
+    name: This year
+  - statistic_id: sensor.pv_generation
+    name: Previous year
+    time_offset:
+      value: -1
+      unit: year
+```
+
+Supported units are `hour`, `day`, `week`, `month`, and `year`. `value` must be a whole number; `0` is treated like no offset.
+
+Currently `time_offset` applies to statistic series with recorder statistics aggregation. Raw history, calculation series, forecast series, and additional compare copies of shifted series are not shifted yet.
 
 #### Calculated series
 

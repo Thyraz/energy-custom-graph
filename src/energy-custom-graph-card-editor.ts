@@ -17,6 +17,7 @@ import type {
   EnergyCustomGraphRawOptions,
   EnergyCustomGraphRelativeCalendarPeriod,
   EnergyCustomGraphRelativePeriod,
+  EnergyCustomGraphTimeOffsetUnit,
 } from "./types";
 import { DEFAULT_COLORS } from "./chart/series-builder";
 import { fetchEnergyPreferences } from "./data/energy";
@@ -51,6 +52,21 @@ const AGGREGATION_OPTIONS: Array<{ value: EnergyCustomGraphAggregationTarget; la
   { value: "disabled", label: "Disable fetching" },
   { value: "raw", label: "RAW (history)" },
 ];
+
+const TIME_OFFSET_UNIT_OPTIONS: Array<{ value: EnergyCustomGraphTimeOffsetUnit; label: string }> = [
+  { value: "hour", label: "Hour" },
+  { value: "day", label: "Day" },
+  { value: "week", label: "Week" },
+  { value: "month", label: "Month" },
+  { value: "year", label: "Year" },
+];
+
+const TIME_OFFSET_UNITS = new Set<EnergyCustomGraphTimeOffsetUnit>(
+  TIME_OFFSET_UNIT_OPTIONS.map((option) => option.value)
+);
+
+const isTimeOffsetUnit = (unit: unknown): unit is EnergyCustomGraphTimeOffsetUnit =>
+  typeof unit === "string" && TIME_OFFSET_UNITS.has(unit as EnergyCustomGraphTimeOffsetUnit);
 
 type AggregationPickerKey = "hour" | "day" | "week" | "month" | "year";
 const RELATIVE_CALENDAR_PERIODS = new Set<EnergyCustomGraphRelativeCalendarPeriod>([
@@ -216,6 +232,9 @@ export class EnergyCustomGraphCardEditor
     const hadConfig = this._config !== undefined;
     const normalizedSeries = config.series?.map((item) => {
       const normalized = { ...item };
+      if (item.time_offset) {
+        normalized.time_offset = { ...item.time_offset };
+      }
       if (item.calculation) {
         normalized.calculation = {
           ...item.calculation,
@@ -1090,6 +1109,14 @@ ${this._renderTimespanSection(cfg)}
     if (!this.hass) {
       return html`<p>Loading...</p>`;
     }
+    const timeOffsetUnit = isTimeOffsetUnit(series.time_offset?.unit)
+      ? series.time_offset.unit
+      : "";
+    const timeOffsetValue =
+      typeof series.time_offset?.value === "number" &&
+      Number.isFinite(series.time_offset.value)
+        ? String(series.time_offset.value)
+        : "";
 
     return html`
       <ha-entity-picker
@@ -1121,6 +1148,34 @@ ${this._renderTimespanSection(cfg)}
           </select>`;
         })()}
       </div>
+      <div class="field">
+        <label>Time offset unit</label>
+        <select
+          @change=${(ev: Event) =>
+            this._updateSeriesTimeOffsetUnit(
+              index,
+              (ev.target as HTMLSelectElement).value
+            )}
+        >
+          <option value="" ?selected=${timeOffsetUnit === ""}>None</option>
+          ${TIME_OFFSET_UNIT_OPTIONS.map(
+            (option) =>
+              html`<option value=${option.value} ?selected=${timeOffsetUnit === option.value}
+                >${option.label}</option
+              >`
+          )}
+        </select>
+      </div>
+      ${timeOffsetUnit
+        ? this._renderTextInput({
+            label: "Time offset value",
+            helper: "Negative values load past source data.",
+            type: "number",
+            step: "1",
+            value: timeOffsetValue,
+            onInput: (value) => this._updateSeriesTimeOffsetValue(index, value),
+          })
+        : nothing}
     `;
   }
 
@@ -1825,6 +1880,7 @@ ${this._renderTimespanSection(cfg)}
       }
       this._updateSeries(index, "source", "calculation");
       this._updateSeries(index, "pv_production_entity", undefined);
+      this._updateSeries(index, "time_offset", undefined);
       return;
     }
     if (mode === "forecast") {
@@ -1836,6 +1892,7 @@ ${this._renderTimespanSection(cfg)}
       target.source = "forecast";
       target.statistic_id = undefined;
       target.calculation = undefined;
+      target.time_offset = undefined;
       updatedSeries[index] = target;
       this._updateConfig("series", updatedSeries);
       this._expandedSeries = new Set(this._expandedSeries).add(index);
@@ -1941,6 +1998,7 @@ ${this._renderTimespanSection(cfg)}
     const seriesList = [...(this._config!.series ?? [])];
     const target = { ...seriesList[index] };
     delete target.statistic_id;
+    delete target.time_offset;
     target.calculation = target.calculation ?? { terms: [] };
     seriesList[index] = target;
     this._updateConfig("series", seriesList);
@@ -2071,6 +2129,52 @@ ${this._renderTimespanSection(cfg)}
   ) {
     const value = raw === "" ? undefined : Number(raw);
     this._updateSeries(index, key, value);
+  }
+
+  private _updateSeriesTimeOffsetUnit(index: number, rawUnit: string) {
+    if (!isTimeOffsetUnit(rawUnit)) {
+      this._updateSeries(index, "time_offset", undefined);
+      return;
+    }
+
+    const current = this._config?.series?.[index]?.time_offset;
+    const value =
+      typeof current?.value === "number" &&
+      Number.isFinite(current.value) &&
+      Number.isInteger(current.value) &&
+      current.value !== 0
+        ? current.value
+        : -1;
+    this._updateSeries(index, "time_offset", {
+      value,
+      unit: rawUnit,
+    });
+  }
+
+  private _updateSeriesTimeOffsetValue(index: number, raw: string) {
+    const current = this._config?.series?.[index]?.time_offset;
+    const unit = isTimeOffsetUnit(current?.unit) ? current.unit : undefined;
+    if (!unit) {
+      return;
+    }
+    if (raw === "") {
+      this._updateSeries(index, "time_offset", undefined);
+      return;
+    }
+
+    const value = Number(raw);
+    if (!Number.isFinite(value) || !Number.isInteger(value)) {
+      return;
+    }
+    if (value === 0) {
+      this._updateSeries(index, "time_offset", undefined);
+      return;
+    }
+
+    this._updateSeries(index, "time_offset", {
+      value,
+      unit,
+    });
   }
 
   private _updateSeriesSmooth(index: number, raw: string) {

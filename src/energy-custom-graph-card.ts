@@ -61,6 +61,8 @@ import type {
   EnergyCustomGraphAggregationTarget,
   EnergyCustomGraphRawOptions,
   EnergyCustomGraphRelativeCalendarPeriod,
+  EnergyCustomGraphTimeOffsetConfig,
+  EnergyCustomGraphTimeOffsetUnit,
 } from "./types";
 import { buildSeries } from "./chart/series-builder";
 import type {
@@ -94,6 +96,26 @@ interface FetchState {
   inFlight: boolean;
   queued: boolean;
   timeout?: number;
+}
+
+interface NormalizedSeriesTimeOffset {
+  value: number;
+  unit: EnergyCustomGraphTimeOffsetUnit;
+}
+
+interface ShiftedStatisticSeriesRequest {
+  index: number;
+  statisticId: string;
+  statType: EnergyCustomGraphStatisticType;
+  offset: NormalizedSeriesTimeOffset;
+}
+
+interface ShiftedStatisticFetchGroup {
+  key: string;
+  sourceStart: Date;
+  sourceEnd?: Date;
+  offset: NormalizedSeriesTimeOffset;
+  series: ShiftedStatisticSeriesRequest[];
 }
 
 interface LovelaceGridOptions {
@@ -199,6 +221,8 @@ export class EnergyCustomGraphCard extends LitElement {
   @state() private _forecastSeriesUnits: Map<string, string | null | undefined> = new Map();
   @state() private _forecastSeriesDataCompare: Map<string, StatisticValue[]> = new Map();
   @state() private _forecastSeriesUnitsCompare: Map<string, string | null | undefined> = new Map();
+  private _shiftedSeriesData: Map<number, StatisticValue[]> = new Map();
+  private _shiftedSeriesMetadata: Map<number, StatisticsMetaData | undefined> = new Map();
 
   private _fetchStates: Map<FetchKey, FetchState> = new Map();
   private _activeFetchCounters: Record<FetchKey, number> = {
@@ -399,6 +423,7 @@ export class EnergyCustomGraphCard extends LitElement {
 
     if (periodChanged || seriesChanged) {
       void this._teardownRawStream("main");
+      this._clearShiftedSeriesData();
     }
     if (compareChanged || seriesChanged) {
       void this._teardownRawStream("compare");
@@ -434,6 +459,87 @@ export class EnergyCustomGraphCard extends LitElement {
       return "statistic";
     }
     return "statistic";
+  }
+
+  private _normalizeSeriesTimeOffset(
+    offset?: EnergyCustomGraphTimeOffsetConfig
+  ): NormalizedSeriesTimeOffset | undefined {
+    if (!offset) {
+      return undefined;
+    }
+    if (
+      typeof offset.value !== "number" ||
+      !Number.isFinite(offset.value) ||
+      !Number.isInteger(offset.value) ||
+      offset.value === 0
+    ) {
+      return undefined;
+    }
+    if (!["hour", "day", "week", "month", "year"].includes(offset.unit)) {
+      return undefined;
+    }
+    return {
+      value: offset.value,
+      unit: offset.unit,
+    };
+  }
+
+  private _getStatisticSeriesTimeOffset(
+    series: EnergyCustomGraphSeriesConfig
+  ): NormalizedSeriesTimeOffset | undefined {
+    if (this._getSeriesSource(series) !== "statistic") {
+      return undefined;
+    }
+    if (!series.statistic_id?.trim()) {
+      return undefined;
+    }
+    return this._normalizeSeriesTimeOffset(series.time_offset);
+  }
+
+  private _shiftDateByTimeOffset(
+    date: Date,
+    offset: NormalizedSeriesTimeOffset,
+    direction: 1 | -1
+  ): Date {
+    const amount = offset.value * direction;
+    switch (offset.unit) {
+      case "hour":
+        return addHours(date, amount);
+      case "day":
+        return addDays(date, amount);
+      case "week":
+        return addWeeks(date, amount);
+      case "month":
+        return addMonths(date, amount);
+      case "year":
+        return addYears(date, amount);
+      default:
+        return date;
+    }
+  }
+
+  private _shiftTimestampByTimeOffset(
+    timestamp: number | undefined,
+    offset: NormalizedSeriesTimeOffset,
+    direction: 1 | -1
+  ): number | undefined {
+    if (timestamp === undefined) {
+      return undefined;
+    }
+    return this._shiftDateByTimeOffset(
+      new Date(timestamp),
+      offset,
+      direction
+    ).getTime();
+  }
+
+  private _getShiftedStatisticId(index: number, statisticId: string): string {
+    return `__time_offset_${index}__${statisticId}`;
+  }
+
+  private _clearShiftedSeriesData(): void {
+    this._shiftedSeriesData = new Map();
+    this._shiftedSeriesMetadata = new Map();
   }
 
   private _seriesUsesForecast(series?: EnergyCustomGraphSeriesConfig): boolean {
@@ -1815,7 +1921,8 @@ export class EnergyCustomGraphCard extends LitElement {
       if (
         this._getSeriesSource(series) === "statistic" &&
         series.statistic_id &&
-        series.statistic_id.trim()
+        series.statistic_id.trim() &&
+        (isCompare || !this._getStatisticSeriesTimeOffset(series))
       ) {
         const id = series.statistic_id.trim();
         statisticIdSet.add(id);
@@ -1907,6 +2014,7 @@ export class EnergyCustomGraphCard extends LitElement {
         this._chartOptions = undefined;
         this._unitsBySeries = new Map();
         this._indicatorColorBySeries = new Map();
+        this._clearShiftedSeriesData();
         this._disabledMessage = this._getDisabledMessage();
         if (this._autoRefreshTimeout) {
           clearTimeout(this._autoRefreshTimeout);
@@ -2147,6 +2255,7 @@ export class EnergyCustomGraphCard extends LitElement {
             }
             this._lastRawEndMain = undefined;
             this._clearForecastData();
+            this._clearShiftedSeriesData();
           } else {
             this._disabledMessage = undefined;
             if (resolvedAggregation === "raw") {
@@ -2172,7 +2281,21 @@ export class EnergyCustomGraphCard extends LitElement {
               void this._teardownRawStream("main");
             }
 
+            await this._loadShiftedStatisticSeries(
+              periodStart,
+              periodEnd,
+              requestDetails,
+              key,
+              fetchId
+            );
+            if (fetchId !== this._activeFetchCounters[key]) {
+              return;
+            }
             await this._refreshForecastData();
+            if (fetchId !== this._activeFetchCounters[key]) {
+              return;
+            }
+            this._generateChart();
 
             // Schedule auto-refresh for rolling windows and future fixed timespans
             this._scheduleAutoRefresh();
@@ -2206,6 +2329,7 @@ export class EnergyCustomGraphCard extends LitElement {
           this._statisticsPeriod = undefined;
           this._calculatedSeriesData = new Map();
           this._calculatedSeriesUnits = new Map();
+          this._clearShiftedSeriesData();
           this._clearForecastData();
         }
       }
@@ -2231,6 +2355,301 @@ export class EnergyCustomGraphCard extends LitElement {
         });
       }
     }
+  }
+
+  private _buildShiftedStatisticFetchGroups(
+    displayStart: Date,
+    displayEnd?: Date
+  ): ShiftedStatisticFetchGroup[] {
+    if (!this._config) {
+      return [];
+    }
+
+    const groups = new Map<string, ShiftedStatisticFetchGroup>();
+
+    this._config.series.forEach((series, index) => {
+      const offset = this._getStatisticSeriesTimeOffset(series);
+      const statisticId = series.statistic_id?.trim();
+      if (!offset || !statisticId) {
+        return;
+      }
+
+      const sourceStart = this._shiftDateByTimeOffset(displayStart, offset, 1);
+      const sourceEnd = displayEnd
+        ? this._shiftDateByTimeOffset(displayEnd, offset, 1)
+        : undefined;
+      const key = [
+        offset.value,
+        offset.unit,
+        sourceStart.getTime(),
+        sourceEnd?.getTime() ?? "open",
+      ].join(":");
+      let group = groups.get(key);
+      if (!group) {
+        group = {
+          key,
+          sourceStart,
+          sourceEnd,
+          offset,
+          series: [],
+        };
+        groups.set(key, group);
+      }
+      group.series.push({
+        index,
+        statisticId,
+        statType: series.stat_type ?? EnergyCustomGraphCard.DEFAULT_STAT_TYPE,
+        offset,
+      });
+    });
+
+    return Array.from(groups.values());
+  }
+
+  private _transformShiftedStatisticValues(
+    values: StatisticValue[],
+    offset: NormalizedSeriesTimeOffset
+  ): StatisticValue[] {
+    return values.map((entry) => ({
+      ...entry,
+      start: this._shiftTimestampByTimeOffset(entry.start, offset, -1),
+      end: this._shiftTimestampByTimeOffset(entry.end, offset, -1),
+    }));
+  }
+
+  private async _loadShiftedStatisticSeries(
+    displayStart: Date,
+    displayEnd: Date | undefined,
+    parentDetails: Record<string, unknown>,
+    fetchKey: FetchKey,
+    fetchId: number
+  ): Promise<void> {
+    const isCurrentFetch = () => fetchId === this._activeFetchCounters[fetchKey];
+    if (!this.hass) {
+      if (isCurrentFetch()) {
+        this._clearShiftedSeriesData();
+      }
+      return;
+    }
+
+    const groups = this._buildShiftedStatisticFetchGroups(
+      displayStart,
+      displayEnd
+    );
+    if (!groups.length) {
+      if (isCurrentFetch()) {
+        this._clearShiftedSeriesData();
+      }
+      return;
+    }
+
+    const shiftedData = new Map<number, StatisticValue[]>();
+    const shiftedMetadata = new Map<number, StatisticsMetaData | undefined>();
+    const metadata: Record<string, StatisticsMetaData> = {
+      ...(this._metadata ?? {}),
+    };
+    const allStatisticIds = Array.from(
+      new Set(
+        groups.flatMap((group) =>
+          group.series.map((series) => series.statisticId)
+        )
+      )
+    );
+
+    try {
+      const missingMetadataIds = allStatisticIds.filter((id) => !metadata[id]);
+      if (missingMetadataIds.length) {
+        const metadataArray = await this._withTimeout(
+          getStatisticMetadata(this.hass, missingMetadataIds),
+          FETCH_TIMEOUT_MS,
+          "getStatisticMetadata:timeOffset",
+          {
+            ...parentDetails,
+            shiftedGroups: groups.length,
+            stats: missingMetadataIds.length,
+          }
+        );
+        metadataArray.forEach((item) => {
+          metadata[item.statistic_id] = item;
+        });
+      }
+    } catch (error) {
+      if (!isCurrentFetch()) {
+        return;
+      }
+      this._log("warn", "Failed to load shifted statistics metadata", {
+        ...parentDetails,
+        shiftedGroups: groups.length,
+        error: error instanceof Error ? error.message : error,
+      });
+    }
+    if (!isCurrentFetch()) {
+      return;
+    }
+
+    for (const group of groups) {
+      const statisticIds = Array.from(
+        new Set(group.series.map((series) => series.statisticId))
+      );
+      const statTypes = Array.from(
+        new Set(group.series.map((series) => series.statType))
+      );
+      const aggregationPlan = this._resolveAggregationPlan(
+        group.sourceStart,
+        group.sourceEnd
+      );
+      let resolvedAggregation: EnergyCustomGraphAggregationTarget | undefined;
+      let statistics: Statistics | undefined;
+
+      for (let idx = 0; idx < aggregationPlan.length; idx++) {
+        const aggregation = aggregationPlan[idx];
+        if (aggregation === "disabled") {
+          resolvedAggregation = aggregation;
+          break;
+        }
+        if (aggregation === "raw") {
+          this._log("warn", "Series time offset does not support raw aggregation yet", {
+            ...parentDetails,
+            shiftedGroup: group.key,
+            aggregation,
+          });
+          continue;
+        }
+
+        try {
+          const fetched = await this._withTimeout(
+            fetchStatistics(
+              this.hass,
+              group.sourceStart,
+              group.sourceEnd,
+              statisticIds,
+              aggregation,
+              undefined,
+              statTypes
+            ),
+            FETCH_TIMEOUT_MS,
+            `fetchStatistics:timeOffset:${aggregation}`,
+            {
+              ...parentDetails,
+              shiftedGroup: group.key,
+              sourceStart: group.sourceStart.toISOString(),
+              sourceEnd: group.sourceEnd?.toISOString() ?? null,
+              aggregation,
+              stats: statisticIds.length,
+            }
+          );
+          if (!isCurrentFetch()) {
+            return;
+          }
+          if (this._statisticsHaveData(fetched, statisticIds)) {
+            statistics = fetched;
+            resolvedAggregation = aggregation;
+            if (idx > 0) {
+              this._log(
+                "warn",
+                `Shifted aggregation "${aggregationPlan[0]}" returned no data. Using fallback "${aggregation}".`,
+                {
+                  ...parentDetails,
+                  shiftedGroup: group.key,
+                  aggregation,
+                }
+              );
+            }
+            break;
+          }
+          if (idx < aggregationPlan.length - 1) {
+            this._log(
+              "warn",
+              `Shifted aggregation "${aggregation}" returned no data. Trying fallback "${aggregationPlan[idx + 1]}".`,
+              {
+                ...parentDetails,
+                shiftedGroup: group.key,
+                aggregation,
+              }
+            );
+          }
+        } catch (error) {
+          if (!isCurrentFetch()) {
+            return;
+          }
+          this._log("error", `Failed to load shifted statistics for aggregation "${aggregation}"`, {
+            ...parentDetails,
+            shiftedGroup: group.key,
+            aggregation,
+            error: error instanceof Error ? error.message : error,
+          });
+        }
+      }
+
+      if (!statistics || resolvedAggregation === "disabled") {
+        continue;
+      }
+
+      group.series.forEach((series) => {
+        const values = statistics?.[series.statisticId];
+        if (!values?.length) {
+          return;
+        }
+        shiftedData.set(
+          series.index,
+          this._transformShiftedStatisticValues(values, series.offset)
+        );
+        shiftedMetadata.set(series.index, metadata[series.statisticId]);
+      });
+    }
+
+    if (!isCurrentFetch()) {
+      return;
+    }
+    this._shiftedSeriesData = shiftedData;
+    this._shiftedSeriesMetadata = shiftedMetadata;
+  }
+
+  private _buildMainSeriesInputs(): {
+    statistics: Statistics;
+    metadata: Record<string, StatisticsMetaData>;
+    configSeries: EnergyCustomGraphSeriesConfig[];
+  } {
+    const statistics: Statistics = { ...(this._statistics ?? {}) };
+    const metadata: Record<string, StatisticsMetaData> = {
+      ...(this._metadata ?? {}),
+    };
+    const configSeries = (this._config?.series ?? []).map((series, index) => {
+      const offset = this._getStatisticSeriesTimeOffset(series);
+      const statisticId = series.statistic_id?.trim();
+      if (!offset || !statisticId) {
+        return series;
+      }
+
+      const shiftedStatisticId = this._getShiftedStatisticId(index, statisticId);
+      statistics[shiftedStatisticId] = this._shiftedSeriesData.get(index) ?? [];
+
+      const shiftedMetadata =
+        this._shiftedSeriesMetadata.get(index) ?? this._metadata?.[statisticId];
+      if (shiftedMetadata) {
+        metadata[shiftedStatisticId] = {
+          ...shiftedMetadata,
+          statistic_id: shiftedStatisticId,
+        };
+      }
+      const name =
+        series.name ??
+        shiftedMetadata?.name ??
+        this.hass?.states[statisticId]?.attributes.friendly_name ??
+        statisticId;
+
+      return {
+        ...series,
+        statistic_id: shiftedStatisticId,
+        name,
+      };
+    });
+
+    return {
+      statistics,
+      metadata,
+      configSeries,
+    };
   }
 
   private async _fetchRawStatistics(
@@ -3576,6 +3995,7 @@ export class EnergyCustomGraphCard extends LitElement {
     const computedStyle = this.isConnected
       ? getComputedStyle(this)
       : getComputedStyle(document.documentElement);
+    const mainSeriesInputs = this._buildMainSeriesInputs();
 
     const {
       series: mainSeries,
@@ -3585,9 +4005,9 @@ export class EnergyCustomGraphCard extends LitElement {
       indicatorColorBySeries,
     } = buildSeries({
       hass: this.hass,
-      statistics: this._statistics,
-      metadata: this._metadata,
-      configSeries: this._config.series,
+      statistics: mainSeriesInputs.statistics,
+      metadata: mainSeriesInputs.metadata,
+      configSeries: mainSeriesInputs.configSeries,
       colorPalette: this._config.color_cycle ?? [],
       computedStyle,
       calculatedData: this._calculatedSeriesData,
@@ -3698,7 +4118,7 @@ export class EnergyCustomGraphCard extends LitElement {
         hass: this.hass,
         statistics: this._statisticsCompare!,
         metadata: this._metadataCompare,
-        configSeries: this._config.series,
+        configSeries: mainSeriesInputs.configSeries,
         colorPalette: this._config.color_cycle ?? [],
         computedStyle,
         calculatedData: this._calculatedSeriesDataCompare,

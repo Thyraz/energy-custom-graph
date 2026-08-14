@@ -36,6 +36,18 @@ export interface EnergyCustomGraphCalculationConfig {
 
 export type EnergyCustomGraphSeriesSource = "statistic" | "calculation" | "forecast";
 
+export type EnergyCustomGraphTimeOffsetUnit =
+  | "hour"
+  | "day"
+  | "week"
+  | "month"
+  | "year";
+
+export interface EnergyCustomGraphTimeOffsetConfig {
+  value: number;
+  unit: EnergyCustomGraphTimeOffsetUnit;
+}
+
 export interface EnergyCustomGraphSeriesConfig {
   source?: EnergyCustomGraphSeriesSource;
   statistic_id?: string;
@@ -61,6 +73,7 @@ export interface EnergyCustomGraphSeriesConfig {
   calculation?: EnergyCustomGraphCalculationConfig;
   clip_min?: number;
   clip_max?: number;
+  time_offset?: EnergyCustomGraphTimeOffsetConfig;
   pv_production_entity?: string;
 }
 

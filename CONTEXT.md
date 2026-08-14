@@ -16,6 +16,10 @@ _Avoid_: Plot
 A configured data stream drawn in the chart and represented in the legend and tooltip.
 _Avoid_: Dataset
 
+**Series time offset**:
+A per-series shift of the source timespan; the resulting data is displayed in the chart timespan.
+_Avoid_: Render offset
+
 **Series color**:
 The configured or resolved color that identifies a series.
 _Avoid_: Signal color, base color
@@ -79,6 +83,10 @@ _Avoid_: Series unit
 **Timespan**:
 The visible date/time range that the card displays.
 _Avoid_: Period, time range
+
+**Source timespan**:
+The date/time range a series uses as its data source.
+_Avoid_: Display timespan
 
 **Timespan mode**:
 The way the card chooses the timespan: energy, relative, or fixed.
