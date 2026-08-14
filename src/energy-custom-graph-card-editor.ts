@@ -459,6 +459,10 @@ export class EnergyCustomGraphCardEditor
   }
 
   private _renderTooltipSection(cfg: EnergyCustomGraphCardConfig) {
+    const showTooltip = cfg.show_tooltip !== false;
+    const showXAxisPointer = cfg.show_x_axis_pointer !== false;
+    const showYAxisPointer = cfg.show_y_axis_pointer === true;
+
     return html`
       <div class="group-card">
         <div class="group-header">
@@ -467,30 +471,70 @@ export class EnergyCustomGraphCardEditor
         <div class="group-body">
           <div class="row">
             <ha-switch
-              .checked=${cfg.show_unit !== false}
-              @change=${(ev: Event) =>
-                this._updateConfig("show_unit", (ev.target as HTMLInputElement).checked)}
-            ></ha-switch>
-            <span>Show units</span>
-          </div>
-          ${this._renderTextInput({
-            label: "Tooltip precision",
-            type: "number",
-            value: cfg.tooltip_precision !== undefined ? String(cfg.tooltip_precision) : "",
-            onInput: (value) =>
-              this._updateNumericConfig("tooltip_precision", value),
-          })}
-          <div class="row">
-            <ha-switch
-              .checked=${cfg.show_stack_sums === true}
+              .checked=${showTooltip}
               @change=${(ev: Event) =>
                 this._updateConfig(
-                  "show_stack_sums",
+                  "show_tooltip",
                   (ev.target as HTMLInputElement).checked
                 )}
             ></ha-switch>
-            <span>Show stack sums</span>
+            <span>Show tooltip</span>
           </div>
+          <div class="row">
+            <ha-switch
+              .checked=${showXAxisPointer}
+              @change=${(ev: Event) =>
+                this._updateConfig(
+                  "show_x_axis_pointer",
+                  (ev.target as HTMLInputElement).checked
+                )}
+            ></ha-switch>
+            <span>Show X axis pointer</span>
+          </div>
+          <div class="row">
+            <ha-switch
+              .checked=${showYAxisPointer}
+              @change=${(ev: Event) =>
+                this._updateConfig(
+                  "show_y_axis_pointer",
+                  (ev.target as HTMLInputElement).checked
+                )}
+            ></ha-switch>
+            <span>Show Y axis pointer</span>
+          </div>
+          ${showTooltip
+            ? html`
+                <div class="row">
+                  <ha-switch
+                    .checked=${cfg.show_unit !== false}
+                    @change=${(ev: Event) =>
+                      this._updateConfig(
+                        "show_unit",
+                        (ev.target as HTMLInputElement).checked
+                      )}
+                  ></ha-switch>
+                  <span>Show units</span>
+                </div>
+                ${this._renderTextInput({
+                  label: "Tooltip precision",
+                  type: "number",
+                  value: cfg.tooltip_precision !== undefined ? String(cfg.tooltip_precision) : "",
+                  onInput: (value) =>
+                    this._updateNumericConfig("tooltip_precision", value),
+                })}
+                <div class="row">
+                  <ha-switch
+                    .checked=${cfg.show_stack_sums === true}
+                    @change=${(ev: Event) =>
+                      this._updateConfig(
+                        "show_stack_sums",
+                        (ev.target as HTMLInputElement).checked
+                      )}
+                  ></ha-switch>
+                  <span>Show stack sums</span>
+                </div>
+              `
+            : nothing}
         </div>
       </div>
     `;

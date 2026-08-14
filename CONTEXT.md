@@ -64,6 +64,10 @@ _Avoid_: Live value, near real-time value
 The hover or click detail panel that shows chart values at a selected point in time.
 _Avoid_: Popup, hover label
 
+**Axis pointer**:
+The hover guide line on the chart that marks the selected X axis position, Y axis value, or both.
+_Avoid_: Crosshair
+
 **Legend indicator**:
 The colored symbol beside a legend entry.
 _Avoid_: Legend marker, legend bullet

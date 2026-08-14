@@ -4505,7 +4505,10 @@ export class EnergyCustomGraphCard extends LitElement {
       },
     ];
 
-    const tooltipFormatter = (params: unknown) => this._renderTooltip(params);
+    const showTooltip = this._config?.show_tooltip !== false;
+    const showXAxisPointer = this._config?.show_x_axis_pointer !== false;
+    const showYAxisPointer = this._config?.show_y_axis_pointer === true;
+    const showAnyAxisPointer = showXAxisPointer || showYAxisPointer;
 
     const options: ECOption = {
       xAxis,
@@ -4517,15 +4520,49 @@ export class EnergyCustomGraphCard extends LitElement {
         bottom: 0,
         containLabel: true,
       },
-      tooltip: {
-        trigger: "axis",
-        appendTo: document.body,
-        formatter: tooltipFormatter,
-        axisPointer: {
-          type: "cross",
-        },
-      },
     };
+
+    if (showTooltip || showAnyAxisPointer) {
+      options.tooltip = {
+        trigger: "axis",
+        showContent: showTooltip,
+        appendTo: document.body,
+        formatter: showTooltip
+          ? (params: unknown) => this._renderTooltip(params)
+          : undefined,
+        axisPointer: {
+          type: showXAxisPointer && showYAxisPointer
+            ? "cross"
+            : showXAxisPointer || showYAxisPointer
+              ? "line"
+              : "none",
+          axis: showXAxisPointer && showYAxisPointer
+            ? "auto"
+            : showXAxisPointer
+              ? "x"
+              : showYAxisPointer
+                ? "y"
+                : "auto",
+        },
+      };
+
+      xAxis[0] = {
+        ...xAxis[0],
+        axisPointer: {
+          ...((xAxis[0] as Record<string, any>).axisPointer ?? {}),
+          show: showXAxisPointer,
+        },
+      };
+      yAxis.forEach((axis, index) => {
+        yAxis[index] = {
+          ...axis,
+          axisPointer: {
+            ...((axis as Record<string, any>).axisPointer ?? {}),
+            show: showYAxisPointer,
+          },
+        };
+      });
+    }
 
     if (legendOption) {
       options.legend = legendOption;

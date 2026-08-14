@@ -125,6 +125,9 @@ By default the card mirrors the core energy cards and automatically selects the 
 | `hide_legend` | boolean | `false` | Hide the legend entirely. |
 | `legend_sort` | `"asc"`, `"desc"`, `"none"` | `"none"` | Sort order for the legend entries. |
 | `expand_legend` | boolean | `false` | Expand the legend by default. |
+| `show_tooltip` | boolean | `true` | Show the tooltip detail panel on hover or click. Axis pointers can still be shown when this is `false`. |
+| `show_x_axis_pointer` | boolean | `true` | Show the vertical hover guide line for the selected X axis position. |
+| `show_y_axis_pointer` | boolean | `false` | Show the horizontal hover guide line for the selected Y axis value. |
 | `tooltip_precision` | number | – | Override numeric precision in the tooltip. |
 | `show_unit` | boolean | `true` | Show corresponding units from the recorder database when available in tooltips and axes. |
 | `show_stack_sums` | boolean | `false` | When `true`, adds positive/negative totals for each visible stack to the tooltip. |
