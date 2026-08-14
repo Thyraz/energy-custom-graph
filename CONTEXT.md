@@ -120,6 +120,10 @@ _Avoid_: Aggregate
 The shaded area between a source line series and a target line series.
 _Avoid_: Fill stack
 
+**Gradient fill**:
+A normal line or step series fill whose opacity fades towards the zero line.
+_Avoid_: Gradient band
+
 **Stack**:
 A user-configured group where series values are visually accumulated.
 _Avoid_: Fill stack

@@ -69,6 +69,7 @@ export interface EnergyCustomGraphSeriesConfig {
   line_width?: number;
   line_style?: "solid" | "dashed" | "dotted";
   fill_opacity?: number;
+  gradient_fill?: boolean;
   fill_to_series?: string;
   calculation?: EnergyCustomGraphCalculationConfig;
   clip_min?: number;

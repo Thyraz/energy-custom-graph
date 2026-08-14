@@ -57,6 +57,7 @@ export const DEFAULT_COLORS = [
 export const BAR_MAX_WIDTH = 50;
 const BAR_FILL_ALPHA = 0.5;
 const LINE_AREA_ALPHA = 0.15;
+const LINE_GRADIENT_STRONG_ALPHA = 0.75;
 const DEFAULT_LINE_OPACITY = 0.85;
 const DEFAULT_BAR_BORDER_OPACITY = 1.0;
 
@@ -186,6 +187,71 @@ const stripAlpha = (color: string): string => {
     }
   }
   return trimmed;
+};
+
+interface LinearGradientColor {
+  type: "linear";
+  x: number;
+  y: number;
+  x2: number;
+  y2: number;
+  colorStops: Array<{ offset: number; color: string }>;
+  global: false;
+}
+
+const buildZeroAwareGradientFill = (
+  color: string,
+  strongAlpha: number,
+  dataPoints: [number, number | null][]
+): LinearGradientColor => {
+  let min = 0;
+  let max = 0;
+
+  dataPoints.forEach(([, value]) => {
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      return;
+    }
+    min = Math.min(min, value);
+    max = Math.max(max, value);
+  });
+
+  const strongColor = applyAlpha(color, strongAlpha);
+  const weakColor = applyAlpha(color, strongAlpha / 3);
+  let colorStops: LinearGradientColor["colorStops"];
+
+  if (max === 0 && min === 0) {
+    colorStops = [
+      { offset: 0, color: weakColor },
+      { offset: 1, color: weakColor },
+    ];
+  } else if (min >= 0) {
+    colorStops = [
+      { offset: 0, color: strongColor },
+      { offset: 1, color: weakColor },
+    ];
+  } else if (max <= 0) {
+    colorStops = [
+      { offset: 0, color: weakColor },
+      { offset: 1, color: strongColor },
+    ];
+  } else {
+    const zeroOffset = clampAlpha(max / (max - min));
+    colorStops = [
+      { offset: 0, color: strongColor },
+      { offset: zeroOffset, color: weakColor },
+      { offset: 1, color: strongColor },
+    ];
+  }
+
+  return {
+    type: "linear",
+    x: 0,
+    y: 0,
+    x2: 0,
+    y2: 1,
+    colorStops,
+    global: false,
+  };
 };
 
 export const buildSeries = ({
@@ -393,6 +459,16 @@ export const buildSeries = ({
           ? clampAlpha(seriesConfig.fill_opacity)
           : defaultLineFillOpacity;
       const fillColor = applyAlpha(colorValue, fillOpacity);
+      const gradientFill =
+        seriesConfig.gradient_fill === true
+          ? buildZeroAwareGradientFill(
+              colorValue,
+              typeof seriesConfig.fill_opacity === "number"
+                ? fillOpacity
+                : LINE_GRADIENT_STRONG_ALPHA,
+              dataPoints
+            )
+          : undefined;
 
       const lineWidth = seriesConfig.line_width ?? 1.5;
       const lineStyleType = seriesConfig.line_style ?? "solid";
@@ -439,7 +515,7 @@ export const buildSeries = ({
       if (shouldFill) {
         lineSeries.areaStyle = {
           ...(lineSeries.areaStyle ?? {}),
-          color: fillColor,
+          color: gradientFill ?? fillColor,
         };
       }
       output.push(lineSeries);

@@ -195,6 +195,7 @@ Display a fixed time range. Dates use ISO 8601 format. If omitted, `start` defau
 | `line_style` | `"solid"`, `"dashed"`, `"dotted"` | `"solid"` | Line pattern style (line charts only). |
 | `fill` | boolean | `false` | Fill the area underneath the line. |
 | `fill_opacity` | number | style default | Override fill opacity (0–1). Defaults to 0.15 for line charts and 0.5 for bars. |
+| `gradient_fill` | boolean | `false` | For filled line/step charts: fade the fill towards the zero line. Without `fill_opacity`, the gradient uses 0.75 at the stronger side and 0.25 at the zero line. With `fill_opacity`, that value is used for the stronger side and the zero-line alpha is one third of it. |
 | `fill_to_series` | string | – | For line charts only: name of another line series to fill towards. Both series must not be stacked. |
 | `smooth` | boolean or number | `true` | Line smoothing. Use `false` to disable and true for the default HA behavior. Or provide a value between 0 and 1 for finer control. |
 | `multiply` | number | `1` | Apply a multiplier to each series value. |
@@ -282,6 +283,7 @@ Set `fill_to_series` on a line series to fill the area between this and the targ
 - The referenced `name` has to be unique within the card configuration.
 - When the upper series drops below the lower one, the card sets the fill to zero and logs a warning.
 - The fill_opacity used is the one configured on the upper series (or the default if unspecified).
+- `gradient_fill` only applies to normal line/step area fills, not to `fill_to_series`.
 
 ### `y_axes` options
 

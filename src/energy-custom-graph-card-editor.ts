@@ -1518,6 +1518,12 @@ ${this._renderTimespanSection(cfg)}
     const isLineLike = chartType === "line" || chartType === "step";
     const fillEnabled = isLineLike;
     const fillActive = fillEnabled && series.fill === true;
+    const gradientFillActive = fillActive && series.gradient_fill === true;
+    const fillOpacityHelper = isLineLike
+      ? gradientFillActive
+        ? "Default 0.75 (zero line 0.25)"
+        : "Default 0.15 for line fill"
+      : "Default 0.5 for bars";
     const rawColor =
       typeof series.color === "string" ? series.color.trim() : undefined;
     const presetToken = this._extractPresetToken(rawColor);
@@ -1710,13 +1716,29 @@ ${this._renderTimespanSection(cfg)}
                 </div>
               `
             : nothing}
+          ${fillActive
+            ? html`
+                <div class="row">
+                  <ha-switch
+                    .checked=${series.gradient_fill === true}
+                    @change=${(ev: Event) =>
+                      this._updateSeries(
+                        index,
+                        "gradient_fill",
+                        (ev.target as HTMLInputElement).checked
+                      )}
+                  ></ha-switch>
+                  <span>Gradient fill</span>
+                </div>
+              `
+            : nothing}
           ${this._renderTextInput({
             label: "Fill opacity",
             type: "number",
             step: "0.01",
             min: "0",
             max: "1",
-            helper: "Default 0.15 (lines) / 0.5 (bars)",
+            helper: fillOpacityHelper,
             value: series.fill_opacity !== undefined ? String(series.fill_opacity) : "",
             onInput: (value) =>
               this._updateSeriesNumber(

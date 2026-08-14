@@ -5347,6 +5347,10 @@ export class EnergyCustomGraphCard extends LitElement {
           };
           const existingAreaColor = areaStyle.color;
           const resolvedAreaColor =
+            EnergyCustomGraphCard._gradientWithColor(
+              color,
+              existingAreaColor
+            ) ??
             EnergyCustomGraphCard._colorWithAlpha(
               color,
               EnergyCustomGraphCard._extractAlpha(existingAreaColor)
@@ -5467,6 +5471,36 @@ export class EnergyCustomGraphCard extends LitElement {
       return color;
     }
     return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${alpha})`;
+  }
+
+  private static _gradientWithColor(
+    color: string,
+    gradient: unknown
+  ): Record<string, unknown> | undefined {
+    if (!gradient || typeof gradient !== "object" || Array.isArray(gradient)) {
+      return undefined;
+    }
+    const source = gradient as Record<string, unknown>;
+    if (source.type !== "linear" || !Array.isArray(source.colorStops)) {
+      return undefined;
+    }
+    return {
+      ...source,
+      colorStops: source.colorStops.map((stop) => {
+        if (!stop || typeof stop !== "object" || Array.isArray(stop)) {
+          return stop;
+        }
+        const colorStop = stop as Record<string, unknown>;
+        return {
+          ...colorStop,
+          color:
+            EnergyCustomGraphCard._colorWithAlpha(
+              color,
+              EnergyCustomGraphCard._extractAlpha(colorStop.color)
+            ) ?? color,
+        };
+      }),
+    };
   }
 
   private static _parseColor(
