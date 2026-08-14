@@ -15,6 +15,8 @@ import type {
   EnergyCustomGraphTimespanConfig,
   EnergyCustomGraphAggregationTarget,
   EnergyCustomGraphRawOptions,
+  EnergyCustomGraphRelativeCalendarPeriod,
+  EnergyCustomGraphRelativePeriod,
 } from "./types";
 import { DEFAULT_COLORS } from "./chart/series-builder";
 import { fetchEnergyPreferences } from "./data/energy";
@@ -45,11 +47,24 @@ const AGGREGATION_OPTIONS: Array<{ value: EnergyCustomGraphAggregationTarget; la
   { value: "day", label: "Day" },
   { value: "week", label: "Week" },
   { value: "month", label: "Month" },
+  { value: "year", label: "Year" },
   { value: "disabled", label: "Disable fetching" },
   { value: "raw", label: "RAW (history)" },
 ];
 
 type AggregationPickerKey = "hour" | "day" | "week" | "month" | "year";
+const RELATIVE_CALENDAR_PERIODS = new Set<EnergyCustomGraphRelativeCalendarPeriod>([
+  "hour",
+  "day",
+  "week",
+  "month",
+  "year",
+]);
+
+const isRelativeCalendarPeriod = (
+  period: EnergyCustomGraphRelativePeriod
+): period is EnergyCustomGraphRelativeCalendarPeriod =>
+  RELATIVE_CALENDAR_PERIODS.has(period as EnergyCustomGraphRelativeCalendarPeriod);
 
 const COLOR_SELECT_DEFAULT = "__default__";
 const COLOR_SELECT_CUSTOM = "__custom__";
@@ -839,6 +854,8 @@ ${this._renderTimespanSection(cfg)}
   private _renderTimespanSection(cfg: EnergyCustomGraphCardConfig) {
     const timespan = cfg.timespan ?? { mode: "energy" };
     const mode = timespan.mode;
+    const showCount =
+      timespan.mode === "relative" && isRelativeCalendarPeriod(timespan.period);
 
     return html`
       <div class="section">
@@ -895,7 +912,7 @@ ${this._renderTimespanSection(cfg)}
                 <label>Period</label>
                 <select
                   @change=${(ev: Event) =>
-                    this._updateTimespanRelativePeriod((ev.target as HTMLSelectElement).value as "hour" | "day" | "week" | "month" | "year" | "last_60_minutes" | "last_24_hours" | "last_7_days" | "last_30_days" | "last_12_months")}
+                    this._updateTimespanRelativePeriod((ev.target as HTMLSelectElement).value as EnergyCustomGraphRelativePeriod)}
                 >
                   ${[
                     { value: "hour", label: "Hour" },
@@ -920,6 +937,20 @@ ${this._renderTimespanSection(cfg)}
                   )}
                 </select>
               </div>
+              ${showCount
+                ? this._renderTextInput({
+                    label: "Count",
+                    type: "number",
+                    min: "1",
+                    step: "1",
+                    value:
+                      timespan.mode === "relative"
+                        ? String(timespan.count ?? 1)
+                        : "1",
+                    onInput: (value) =>
+                      this._updateTimespanRelativeCount(value),
+                  })
+                : nothing}
               ${this._renderTextInput({
                 label: "Offset",
                 type: "number",
@@ -2397,9 +2428,15 @@ ${this._renderTimespanSection(cfg)}
     this._updateConfig("timespan", timespan);
   }
 
-  private _updateTimespanRelativePeriod(period: "hour" | "day" | "week" | "month" | "year" | "last_60_minutes" | "last_24_hours" | "last_7_days" | "last_30_days" | "last_12_months") {
+  private _updateTimespanRelativePeriod(period: EnergyCustomGraphRelativePeriod) {
     const current = this._config?.timespan;
     if (!current || current.mode !== "relative") return;
+
+    if (!isRelativeCalendarPeriod(period)) {
+      const { count: _count, ...withoutCount } = current;
+      this._updateConfig("timespan", { ...withoutCount, period });
+      return;
+    }
 
     this._updateConfig("timespan", { ...current, period });
   }
@@ -2409,6 +2446,29 @@ ${this._renderTimespanSection(cfg)}
     if (!current || current.mode !== "relative") return;
 
     this._updateConfig("timespan", { ...current, offset });
+  }
+
+  private _updateTimespanRelativeCount(value: string) {
+    const current = this._config?.timespan;
+    if (
+      !current ||
+      current.mode !== "relative" ||
+      !isRelativeCalendarPeriod(current.period)
+    ) {
+      return;
+    }
+
+    const parsed = Number(value);
+    const count =
+      Number.isFinite(parsed) && Number.isInteger(parsed) && parsed >= 1
+        ? parsed
+        : 1;
+    if (count === 1) {
+      const { count: _count, ...withoutCount } = current;
+      this._updateConfig("timespan", withoutCount);
+      return;
+    }
+    this._updateConfig("timespan", { ...current, count });
   }
 
   private _updateTimespanFixedStart(start: string | undefined) {

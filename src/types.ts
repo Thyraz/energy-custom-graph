@@ -83,12 +83,31 @@ export interface EnergyCustomGraphAggregationConfig {
   compute_current_hour?: boolean;
 }
 
+export type EnergyCustomGraphRelativeCalendarPeriod =
+  | "hour"
+  | "day"
+  | "week"
+  | "month"
+  | "year";
+
+export type EnergyCustomGraphRelativeRollingPeriod =
+  | "last_60_minutes"
+  | "last_24_hours"
+  | "last_7_days"
+  | "last_30_days"
+  | "last_12_months";
+
+export type EnergyCustomGraphRelativePeriod =
+  | EnergyCustomGraphRelativeCalendarPeriod
+  | EnergyCustomGraphRelativeRollingPeriod;
+
 export type EnergyCustomGraphTimespanConfig =
   | { mode: "energy" }
   | {
       mode: "relative";
-      period: "hour" | "day" | "week" | "month" | "year" | "last_60_minutes" | "last_24_hours" | "last_7_days" | "last_30_days" | "last_12_months";
+      period: EnergyCustomGraphRelativePeriod;
       offset?: number;
+      count?: number;
     }
   | {
       mode: "fixed";

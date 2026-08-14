@@ -23,6 +23,7 @@ interface SeriesBuildParams {
   calculatedUnits?: Map<string, string | null | undefined>;
   forecastData?: Map<string, StatisticValue[]>;
   forecastUnits?: Map<string, string | null | undefined>;
+  skipForecastSeries?: boolean;
 }
 
 export interface BuiltSeriesResult {
@@ -198,6 +199,7 @@ export const buildSeries = ({
   calculatedUnits,
   forecastData,
   forecastUnits,
+  skipForecastSeries,
 }: SeriesBuildParams): BuiltSeriesResult => {
   const palette = colorPalette.length ? colorPalette : DEFAULT_COLORS;
 
@@ -236,6 +238,9 @@ export const buildSeries = ({
   configSeries.forEach((seriesConfig, index) => {
     const source: "statistic" | "calculation" | "forecast" =
       seriesConfig.source ?? (seriesConfig.calculation ? "calculation" : "statistic");
+    if (source === "forecast" && skipForecastSeries) {
+      return;
+    }
 
     const statisticId =
       source === "statistic" ? seriesConfig.statistic_id?.trim() : undefined;

@@ -1,6 +1,6 @@
 import type { HomeAssistant } from "custom-card-helpers";
 
-export type StatisticsPeriod = "5minute" | "hour" | "day" | "week" | "month";
+export type StatisticsPeriod = "5minute" | "hour" | "day" | "week" | "month" | "year";
 
 export interface StatisticValue {
   start: number;
@@ -95,4 +95,3 @@ export const getStatisticLabel = (
     entity?.attributes?.friendly_name ?? statisticsMetaData?.name;
   return friendlyName || statisticsId;
 };
-

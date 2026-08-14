@@ -64,6 +64,10 @@ _Avoid_: Popup, hover label
 The colored symbol beside a legend entry.
 _Avoid_: Legend marker, legend bullet
 
+**X axis**:
+The horizontal date/time axis of the chart.
+_Avoid_: Time scale
+
 **Y axis**:
 The vertical value axis a series is assigned to; the card supports left and right Y axes.
 _Avoid_: Scale
@@ -79,6 +83,10 @@ _Avoid_: Period, time range
 **Timespan mode**:
 The way the card chooses the timespan: energy, relative, or fixed.
 _Avoid_: Range mode
+
+**Timespan count**:
+The number of calendar units included by a relative timespan. It applies only when the relative timespan period is hour, day, week, month, or year.
+_Avoid_: Multiplier, duration multiplier
 
 **Energy date picker**:
 Home Assistant's dashboard date selector that Energy Custom Graph follows in energy timespan mode.

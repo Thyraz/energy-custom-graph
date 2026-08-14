@@ -60,6 +60,7 @@ import type {
   EnergyCustomGraphChartType,
   EnergyCustomGraphAggregationTarget,
   EnergyCustomGraphRawOptions,
+  EnergyCustomGraphRelativeCalendarPeriod,
 } from "./types";
 import { buildSeries } from "./chart/series-builder";
 import type {
@@ -115,7 +116,22 @@ const RAW_DELTA_OVERLAP_MS = 60_000;
 const DEFAULT_CHART_HEIGHT = "300px";
 const SOLAR_FORECAST_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
+const MONTH_AXIS_MIN_INTERVAL_MS = 28 * DAY_MS;
+const YEAR_AXIS_MIN_INTERVAL_MS = 365 * DAY_MS;
 const HA_RECORDER_WEEK_OPTIONS = { weekStartsOn: 1 as const };
+const RELATIVE_CALENDAR_PERIODS = new Set<EnergyCustomGraphRelativeCalendarPeriod>([
+  "hour",
+  "day",
+  "week",
+  "month",
+  "year",
+]);
+
+const isRelativeCalendarPeriod = (
+  period: string
+): period is EnergyCustomGraphRelativeCalendarPeriod =>
+  RELATIVE_CALENDAR_PERIODS.has(period as EnergyCustomGraphRelativeCalendarPeriod);
 
 class TimeoutError extends Error {
   constructor(message: string) {
@@ -178,6 +194,7 @@ export class EnergyCustomGraphCard extends LitElement {
   private _solarSourcesByStatistic: Map<string, SolarSourceTypeEnergyPreference> = new Map();
   private _solarForecasts?: EnergySolarForecasts;
   private _lastSolarForecastFetch?: number;
+  private _warnedForecastYearAggregation = false;
   @state() private _forecastSeriesData: Map<string, StatisticValue[]> = new Map();
   @state() private _forecastSeriesUnits: Map<string, string | null | undefined> = new Map();
   @state() private _forecastSeriesDataCompare: Map<string, StatisticValue[]> = new Map();
@@ -661,37 +678,44 @@ export class EnergyCustomGraphCard extends LitElement {
       }
       case "relative": {
         const offset = timespanConfig.offset ?? 0;
+        const count = isRelativeCalendarPeriod(timespanConfig.period)
+          ? this._normalizeTimespanCount(timespanConfig.count)
+          : 1;
         switch (timespanConfig.period) {
           case "hour": {
             const base = this._defaultRelativeBase("hour");
-            const start = addHours(base.start, offset);
+            const endStart = addHours(base.start, offset);
+            const start = addHours(endStart, -(count - 1));
             const end = base.end
               ? addHours(base.end, offset)
-              : endOfHour(addHours(base.start, offset));
+              : endOfHour(endStart);
             return { start, end };
           }
           case "day": {
             const base = this._defaultRelativeBase("day");
-            const start = addDays(base.start, offset);
+            const endStart = addDays(base.start, offset);
+            const start = addDays(endStart, -(count - 1));
             const end = base.end
               ? addDays(base.end, offset)
-              : endOfDay(addDays(base.start, offset));
+              : endOfDay(endStart);
             return { start, end };
           }
           case "week": {
             const base = this._defaultRelativeBase("week");
-            const start = addWeeks(base.start, offset);
+            const endStart = addWeeks(base.start, offset);
+            const start = addWeeks(endStart, -(count - 1));
             const end = base.end
               ? addWeeks(base.end, offset)
-              : endOfWeek(addWeeks(base.start, offset));
+              : endOfWeek(endStart, HA_RECORDER_WEEK_OPTIONS);
             return { start, end };
           }
           case "month": {
             const base = this._defaultRelativeBase("month");
-            const start = addMonths(base.start, offset);
+            const endStart = addMonths(base.start, offset);
+            const start = addMonths(endStart, -(count - 1));
             const end = base.end
               ? addMonths(base.end, offset)
-              : endOfMonth(addMonths(base.start, offset));
+              : endOfMonth(endStart);
             return { start, end };
           }
           case "last_7_days": {
@@ -736,10 +760,11 @@ export class EnergyCustomGraphCard extends LitElement {
           case "year":
           default: {
             const base = this._defaultRelativeBase("year");
-            const start = addYears(base.start, offset);
+            const endStart = addYears(base.start, offset);
+            const start = addYears(endStart, -(count - 1));
             const end = base.end
               ? addYears(base.end, offset)
-              : endOfYear(addYears(base.start, offset));
+              : endOfYear(endStart);
             return { start, end };
           }
         }
@@ -807,6 +832,18 @@ export class EnergyCustomGraphCard extends LitElement {
       start: startOfDay(new Date()),
       end: endOfDay(new Date()),
     };
+  }
+
+  private _normalizeTimespanCount(count: number | undefined): number {
+    if (
+      typeof count !== "number" ||
+      !Number.isFinite(count) ||
+      !Number.isInteger(count) ||
+      count < 1
+    ) {
+      return 1;
+    }
+    return count;
   }
 
   private _getRoundedNow(period: string): Date {
@@ -1524,6 +1561,7 @@ export class EnergyCustomGraphCard extends LitElement {
           delayMs: 30 * 60 * 1000          // +30 min buffer (refreshes at 00:30)
         };
       case "week":
+      case "year":
       case "month":
         return {
           intervalMs: 7 * 24 * 60 * 60 * 1000, // Weekly
@@ -1583,8 +1621,8 @@ export class EnergyCustomGraphCard extends LitElement {
         break;
       }
       case "week":
+      case "year":
       case "month": {
-        // Next week at same time + 1 hour
         nextRefresh = new Date(now.getTime() + timing.intervalMs + timing.delayMs);
         break;
       }
@@ -2457,6 +2495,16 @@ export class EnergyCustomGraphCard extends LitElement {
       return;
     }
 
+    const aggregation = this._statisticsPeriod;
+    if (aggregation === "year") {
+      this._clearForecastData();
+      if (!this._warnedForecastYearAggregation) {
+        this._log("warn", "Forecast series are not shown for yearly aggregation", {});
+        this._warnedForecastYearAggregation = true;
+      }
+      return;
+    }
+
     await this._ensureEnergyPreferences();
     if (!this._solarSourcesByStatistic.size) {
       this._clearForecastData();
@@ -2471,7 +2519,6 @@ export class EnergyCustomGraphCard extends LitElement {
 
     const rangeStart = this._statisticsRange?.start ?? this._periodStart.getTime();
     const rangeEnd = this._periodEnd?.getTime() ?? this._statisticsRange?.end ?? null;
-    const aggregation = this._statisticsPeriod;
 
     const data = new Map<string, StatisticValue[]>();
     const units = new Map<string, string | null | undefined>();
@@ -3547,6 +3594,7 @@ export class EnergyCustomGraphCard extends LitElement {
       calculatedUnits: this._calculatedSeriesUnits,
       forecastData: this._forecastSeriesData,
       forecastUnits: this._forecastSeriesUnits,
+      skipForecastSeries: this._statisticsPeriod === "year",
     });
 
     const combinedSeriesById = new Map(seriesById);
@@ -3657,6 +3705,7 @@ export class EnergyCustomGraphCard extends LitElement {
         calculatedUnits: this._calculatedSeriesUnitsCompare,
         forecastData: this._forecastSeriesDataCompare,
         forecastUnits: this._forecastSeriesUnitsCompare,
+        skipForecastSeries: this._statisticsPeriodCompare === "year",
       });
 
       const transformTimestamp = this._createCompareTransform();
@@ -3844,9 +3893,13 @@ export class EnergyCustomGraphCard extends LitElement {
 
     const legendOption = this._buildLegendOption(legend, legendSecondaryIds);
 
-    const axisMax = this._periodEnd
-      ? this._computeSuggestedXAxisMax(this._periodStart, this._periodEnd)
-      : (this._statisticsRange.end ?? this._periodStart.getTime());
+    const axisMax = this._computeXAxisMax(
+      this._periodStart,
+      this._periodEnd,
+      this._statisticsPeriod,
+      bucketSequence,
+      this._statisticsRange.end
+    );
 
     const xAxis: XAxisOption[] = [
       {
@@ -3854,6 +3907,7 @@ export class EnergyCustomGraphCard extends LitElement {
         type: "time",
         min: this._periodStart,
         max: axisMax,
+        ...this._buildAggregationXAxisOptions(this._statisticsPeriod),
       },
       {
         id: "secondary",
@@ -3926,6 +3980,51 @@ export class EnergyCustomGraphCard extends LitElement {
 
     this._chartData = combinedSeries;
     this._lastRenderedRange = { start: currentStart, end: currentEnd };
+  }
+
+  private _buildAggregationXAxisOptions(
+    aggregation: StatisticsPeriod | "raw" | "disabled" | undefined
+  ): Partial<XAxisOption> {
+    if (aggregation === "month") {
+      return {
+        minInterval: MONTH_AXIS_MIN_INTERVAL_MS,
+        axisLabel: {
+          formatter: (value: number) => this._formatXAxisMonthLabel(value),
+        },
+      };
+    }
+    if (aggregation === "year") {
+      return {
+        minInterval: YEAR_AXIS_MIN_INTERVAL_MS,
+        axisLabel: {
+          formatter: (value: number) => this._formatXAxisYearLabel(value),
+        },
+      };
+    }
+    return {};
+  }
+
+  private _computeXAxisMax(
+    start: Date,
+    end: Date | undefined,
+    aggregation: StatisticsPeriod | "raw" | "disabled" | undefined,
+    buckets: number[] | undefined,
+    fallbackEnd: number | null
+  ): number {
+    if (
+      (aggregation === "month" || aggregation === "year") &&
+      buckets &&
+      buckets.length > 1
+    ) {
+      const lastBucket = buckets[buckets.length - 1];
+      if (lastBucket > start.getTime()) {
+        return lastBucket;
+      }
+    }
+
+    return end
+      ? this._computeSuggestedXAxisMax(start, end)
+      : (fallbackEnd ?? start.getTime());
   }
 
   private _computeSuggestedXAxisMax(start: Date, end: Date): number {
@@ -4864,6 +4963,8 @@ export class EnergyCustomGraphCard extends LitElement {
         return addWeeks(date, 1);
       case "month":
         return addMonths(date, 1);
+      case "year":
+        return addYears(date, 1);
       default:
         return addHours(date, 1);
     }
@@ -4889,6 +4990,8 @@ export class EnergyCustomGraphCard extends LitElement {
         return startOfWeek(date, HA_RECORDER_WEEK_OPTIONS);
       case "month":
         return startOfMonth(date);
+      case "year":
+        return startOfYear(date);
       default:
         date.setMinutes(0, 0, 0);
         return date;
@@ -5532,7 +5635,10 @@ export class EnergyCustomGraphCard extends LitElement {
     return numberFormat.format(value);
   }
 
-  private _formatDateTime(date: Date): string {
+  private _getDateTimeFormatterContext(): {
+    locale: string;
+    timeZone?: string;
+  } {
     const locale = this.hass?.locale?.language ?? "en-US";
     const localeInfo = this.hass?.locale as any;
     let timeZone: string | undefined = localeInfo?.time_zone;
@@ -5543,6 +5649,46 @@ export class EnergyCustomGraphCard extends LitElement {
     if (!timeZone || timeZone === "local" || timeZone === "system") {
       timeZone = undefined;
     }
+
+    return { locale, timeZone };
+  }
+
+  private _formatDatePart(
+    date: Date,
+    options: Intl.DateTimeFormatOptions
+  ): string {
+    const { locale, timeZone } = this._getDateTimeFormatterContext();
+
+    try {
+      return new Intl.DateTimeFormat(locale, {
+        ...options,
+        timeZone,
+      }).format(date);
+    } catch (
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      _error
+    ) {
+      return date.toLocaleDateString();
+    }
+  }
+
+  private _formatXAxisMonthLabel(value: number): string {
+    const date = new Date(value);
+    const label = this._formatDatePart(
+      date,
+      date.getMonth() === 0
+        ? { month: "long", year: "numeric" }
+        : { month: "long" }
+    );
+    return date.getMonth() === 0 ? `{bold|${label}}` : label;
+  }
+
+  private _formatXAxisYearLabel(value: number): string {
+    return this._formatDatePart(new Date(value), { year: "numeric" });
+  }
+
+  private _formatDateTime(date: Date): string {
+    const { locale, timeZone } = this._getDateTimeFormatterContext();
 
     try {
       return new Intl.DateTimeFormat(locale, {

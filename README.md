@@ -148,16 +148,19 @@ Use a energy date picker on the same dashboard. The card automatically follows t
 timespan:
   mode: relative
   period: day        # hour, day, week, month, year, last_60_minutes, last_24_hours, last_7_days, last_30_days, or last_12_months
+  count: 1           # Optional number of calendar units for hour/day/week/month/year
   offset: -1         # Optional offset (e.g., -1 for yesterday/previous period)
 ```
 Displays a relative time period. The card supports two types, inspired by the options in the energy date picker:
 
 ***Calendar-based periods*** (`hour`, `day`, `week`, `month`, `year`):
 - "day" would e.g. mean today from 00:00 to 23:59 as base date
+- `count` includes multiple complete calendar units, ending at the unit selected by `offset`.
 - `offset` shifts by the complete period (hours for `hour`, days for `day`, ... )
 
 ***Rolling window periods*** (`last_60_minutes`, `last_24_hours`, `last_7_days`, `last_30_days`, `last_12_months`):
 - End date is "now"
+- `count` does not apply.
 - `offset` shifts by hours for `last_60_minutes`, days for `last_24_hours`/`last_7_days`/`last_30_days`, months for `last_12_months`.
 
 **Mode: `fixed`**
@@ -288,7 +291,8 @@ aggregation:
 - `manual` applies when the timespan mode is `relative` or `fixed` (energy date picker not used).
 - `energy_picker` sets the aggregation used when the energy date picker selects `hour`, `day`, `week`, `month`, or `year` ranges. Any range not listed keeps the default value.
 - `fallback` Optional. Is used if the preferred interval returns no data.
-- Valid intervals: `"5minute"`, `"hour"`, `"day"`, `"week"`, `"month"`, `"raw"`, `"disabled"`.
+- Valid intervals: `"5minute"`, `"hour"`, `"day"`, `"week"`, `"month"`, `"year"`, `"raw"`, `"disabled"`.
+- The X axis follows monthly or yearly labels and grid lines when the resolved aggregation interval is `"month"` or `"year"`.
 - Use `"raw"` to fetch recorder history states without aggregation. Use `"disabled"` to skip the request entirely and show a “choose a shorter period” message instead.
 - `compute_current_hour` (boolean) creates a live estimate for the ongoing hour by combining the most recent 5 minute statistics until Home Assistant publishes the official hourly aggregate.
 
