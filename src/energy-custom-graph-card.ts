@@ -110,12 +110,26 @@ interface ShiftedStatisticSeriesRequest {
   offset: NormalizedSeriesTimeOffset;
 }
 
-interface ShiftedStatisticFetchGroup {
+interface ShiftedCalculationSeriesRequest {
+  index: number;
+  series: EnergyCustomGraphSeriesConfig;
+  calculation: EnergyCustomGraphCalculationConfig;
+  offset: NormalizedSeriesTimeOffset;
+}
+
+interface ShiftedSeriesFetchGroup {
   key: string;
   sourceStart: Date;
   sourceEnd?: Date;
   offset: NormalizedSeriesTimeOffset;
-  series: ShiftedStatisticSeriesRequest[];
+  statisticSeries: ShiftedStatisticSeriesRequest[];
+  calculationSeries: ShiftedCalculationSeriesRequest[];
+}
+
+interface CalculationTimeContext {
+  start?: Date;
+  end?: Date;
+  period?: EnergyCustomGraphAggregationTarget;
 }
 
 interface LovelaceGridOptions {
@@ -223,6 +237,8 @@ export class EnergyCustomGraphCard extends LitElement {
   @state() private _forecastSeriesUnitsCompare: Map<string, string | null | undefined> = new Map();
   private _shiftedSeriesData: Map<number, StatisticValue[]> = new Map();
   private _shiftedSeriesMetadata: Map<number, StatisticsMetaData | undefined> = new Map();
+  private _shiftedCalculatedSeriesData = new Map<string, StatisticValue[]>();
+  private _shiftedCalculatedSeriesUnits = new Map<string, string | null | undefined>();
 
   private _fetchStates: Map<FetchKey, FetchState> = new Map();
   private _activeFetchCounters: Record<FetchKey, number> = {
@@ -484,6 +500,20 @@ export class EnergyCustomGraphCard extends LitElement {
     };
   }
 
+  private _getSeriesTimeOffset(
+    series: EnergyCustomGraphSeriesConfig
+  ): NormalizedSeriesTimeOffset | undefined {
+    return this._normalizeSeriesTimeOffset(series.time_offset);
+  }
+
+  private _hasSeriesTimeOffset(
+    config: EnergyCustomGraphCardConfig | undefined = this._config
+  ): boolean {
+    return Boolean(
+      config?.series?.some((series) => this._getSeriesTimeOffset(series))
+    );
+  }
+
   private _getStatisticSeriesTimeOffset(
     series: EnergyCustomGraphSeriesConfig
   ): NormalizedSeriesTimeOffset | undefined {
@@ -493,7 +523,19 @@ export class EnergyCustomGraphCard extends LitElement {
     if (!series.statistic_id?.trim()) {
       return undefined;
     }
-    return this._normalizeSeriesTimeOffset(series.time_offset);
+    return this._getSeriesTimeOffset(series);
+  }
+
+  private _getCalculationSeriesTimeOffset(
+    series: EnergyCustomGraphSeriesConfig
+  ): NormalizedSeriesTimeOffset | undefined {
+    if (this._getSeriesSource(series) !== "calculation") {
+      return undefined;
+    }
+    if (!series.calculation?.terms?.length) {
+      return undefined;
+    }
+    return this._getSeriesTimeOffset(series);
   }
 
   private _shiftDateByTimeOffset(
@@ -540,6 +582,8 @@ export class EnergyCustomGraphCard extends LitElement {
   private _clearShiftedSeriesData(): void {
     this._shiftedSeriesData = new Map();
     this._shiftedSeriesMetadata = new Map();
+    this._shiftedCalculatedSeriesData = new Map();
+    this._shiftedCalculatedSeriesUnits = new Map();
   }
 
   private _seriesUsesForecast(series?: EnergyCustomGraphSeriesConfig): boolean {
@@ -564,6 +608,9 @@ export class EnergyCustomGraphCard extends LitElement {
       return false;
     }
     if (this._config.timespan?.mode !== "energy") {
+      return false;
+    }
+    if (this._hasSeriesTimeOffset()) {
       return false;
     }
     return this._config.allow_compare !== false;
@@ -1928,7 +1975,10 @@ export class EnergyCustomGraphCard extends LitElement {
         statisticIdSet.add(id);
         statTypeSet.add(defaultStatType);
       }
-      if (this._getSeriesSource(series) === "calculation") {
+      if (
+        this._getSeriesSource(series) === "calculation" &&
+        (isCompare || !this._getCalculationSeriesTimeOffset(series))
+      ) {
         series.calculation?.terms?.forEach((term) => {
           const termStatType =
             term.stat_type ?? defaultStatType ?? EnergyCustomGraphCard.DEFAULT_STAT_TYPE;
@@ -2357,50 +2407,100 @@ export class EnergyCustomGraphCard extends LitElement {
     }
   }
 
-  private _buildShiftedStatisticFetchGroups(
+  private _getShiftedFetchGroup(
+    groups: Map<string, ShiftedSeriesFetchGroup>,
+    displayStart: Date,
+    displayEnd: Date | undefined,
+    offset: NormalizedSeriesTimeOffset
+  ): ShiftedSeriesFetchGroup {
+    const sourceStart = this._shiftDateByTimeOffset(displayStart, offset, 1);
+    const sourceEnd = displayEnd
+      ? this._shiftDateByTimeOffset(displayEnd, offset, 1)
+      : undefined;
+    const key = [
+      offset.value,
+      offset.unit,
+      sourceStart.getTime(),
+      sourceEnd?.getTime() ?? "open",
+    ].join(":");
+    let group = groups.get(key);
+    if (!group) {
+      group = {
+        key,
+        sourceStart,
+        sourceEnd,
+        offset,
+        statisticSeries: [],
+        calculationSeries: [],
+      };
+      groups.set(key, group);
+    }
+    return group;
+  }
+
+  private _getCalculationTermStatisticRequests(
+    series: EnergyCustomGraphSeriesConfig,
+    calculation: EnergyCustomGraphCalculationConfig
+  ): Array<{
+    statisticId: string;
+    statType: EnergyCustomGraphStatisticType;
+  }> {
+    const defaultStatType =
+      series.stat_type ?? EnergyCustomGraphCard.DEFAULT_STAT_TYPE;
+    return (calculation.terms ?? [])
+      .map((term) => ({
+        statisticId: term.statistic_id?.trim() ?? "",
+        statType:
+          term.stat_type ??
+          defaultStatType ??
+          EnergyCustomGraphCard.DEFAULT_STAT_TYPE,
+      }))
+      .filter((item) => item.statisticId !== "");
+  }
+
+  private _buildShiftedSeriesFetchGroups(
     displayStart: Date,
     displayEnd?: Date
-  ): ShiftedStatisticFetchGroup[] {
+  ): ShiftedSeriesFetchGroup[] {
     if (!this._config) {
       return [];
     }
 
-    const groups = new Map<string, ShiftedStatisticFetchGroup>();
+    const groups = new Map<string, ShiftedSeriesFetchGroup>();
 
     this._config.series.forEach((series, index) => {
-      const offset = this._getStatisticSeriesTimeOffset(series);
       const statisticId = series.statistic_id?.trim();
-      if (!offset || !statisticId) {
-        return;
+      const statisticOffset = this._getStatisticSeriesTimeOffset(series);
+      if (statisticOffset && statisticId) {
+        const group = this._getShiftedFetchGroup(
+          groups,
+          displayStart,
+          displayEnd,
+          statisticOffset
+        );
+        group.statisticSeries.push({
+          index,
+          statisticId,
+          statType: series.stat_type ?? EnergyCustomGraphCard.DEFAULT_STAT_TYPE,
+          offset: statisticOffset,
+        });
       }
 
-      const sourceStart = this._shiftDateByTimeOffset(displayStart, offset, 1);
-      const sourceEnd = displayEnd
-        ? this._shiftDateByTimeOffset(displayEnd, offset, 1)
-        : undefined;
-      const key = [
-        offset.value,
-        offset.unit,
-        sourceStart.getTime(),
-        sourceEnd?.getTime() ?? "open",
-      ].join(":");
-      let group = groups.get(key);
-      if (!group) {
-        group = {
-          key,
-          sourceStart,
-          sourceEnd,
-          offset,
-          series: [],
-        };
-        groups.set(key, group);
+      const calculationOffset = this._getCalculationSeriesTimeOffset(series);
+      if (calculationOffset && series.calculation) {
+        const group = this._getShiftedFetchGroup(
+          groups,
+          displayStart,
+          displayEnd,
+          calculationOffset
+        );
+        group.calculationSeries.push({
+          index,
+          series,
+          calculation: series.calculation,
+          offset: calculationOffset,
+        });
       }
-      group.series.push({
-        index,
-        statisticId,
-        statType: series.stat_type ?? EnergyCustomGraphCard.DEFAULT_STAT_TYPE,
-        offset,
-      });
     });
 
     return Array.from(groups.values());
@@ -2432,7 +2532,7 @@ export class EnergyCustomGraphCard extends LitElement {
       return;
     }
 
-    const groups = this._buildShiftedStatisticFetchGroups(
+    const groups = this._buildShiftedSeriesFetchGroups(
       displayStart,
       displayEnd
     );
@@ -2445,14 +2545,22 @@ export class EnergyCustomGraphCard extends LitElement {
 
     const shiftedData = new Map<number, StatisticValue[]>();
     const shiftedMetadata = new Map<number, StatisticsMetaData | undefined>();
+    const shiftedCalculatedData = new Map<string, StatisticValue[]>();
+    const shiftedCalculatedUnits = new Map<string, string | null | undefined>();
     const metadata: Record<string, StatisticsMetaData> = {
       ...(this._metadata ?? {}),
     };
     const allStatisticIds = Array.from(
       new Set(
-        groups.flatMap((group) =>
-          group.series.map((series) => series.statisticId)
-        )
+        groups.flatMap((group) => [
+          ...group.statisticSeries.map((series) => series.statisticId),
+          ...group.calculationSeries.flatMap((request) =>
+            this._getCalculationTermStatisticRequests(
+              request.series,
+              request.calculation
+            ).map((term) => term.statisticId)
+          ),
+        ])
       )
     );
 
@@ -2489,10 +2597,26 @@ export class EnergyCustomGraphCard extends LitElement {
 
     for (const group of groups) {
       const statisticIds = Array.from(
-        new Set(group.series.map((series) => series.statisticId))
+        new Set([
+          ...group.statisticSeries.map((series) => series.statisticId),
+          ...group.calculationSeries.flatMap((request) =>
+            this._getCalculationTermStatisticRequests(
+              request.series,
+              request.calculation
+            ).map((term) => term.statisticId)
+          ),
+        ])
       );
       const statTypes = Array.from(
-        new Set(group.series.map((series) => series.statType))
+        new Set([
+          ...group.statisticSeries.map((series) => series.statType),
+          ...group.calculationSeries.flatMap((request) =>
+            this._getCalculationTermStatisticRequests(
+              request.series,
+              request.calculation
+            ).map((term) => term.statType)
+          ),
+        ])
       );
       const aggregationPlan = this._resolveAggregationPlan(
         group.sourceStart,
@@ -2514,6 +2638,12 @@ export class EnergyCustomGraphCard extends LitElement {
             aggregation,
           });
           continue;
+        }
+
+        if (!statisticIds.length) {
+          statistics = {};
+          resolvedAggregation = aggregation;
+          break;
         }
 
         try {
@@ -2585,7 +2715,7 @@ export class EnergyCustomGraphCard extends LitElement {
         continue;
       }
 
-      group.series.forEach((series) => {
+      group.statisticSeries.forEach((series) => {
         const values = statistics?.[series.statisticId];
         if (!values?.length) {
           return;
@@ -2596,6 +2726,31 @@ export class EnergyCustomGraphCard extends LitElement {
         );
         shiftedMetadata.set(series.index, metadata[series.statisticId]);
       });
+
+      group.calculationSeries.forEach((request) => {
+        const result = this._evaluateCalculationSeries(
+          request.series,
+          request.calculation,
+          statistics ?? {},
+          metadata,
+          request.index,
+          "main",
+          {
+            start: group.sourceStart,
+            end: group.sourceEnd,
+            period: resolvedAggregation,
+          }
+        );
+        if (!result?.values.length) {
+          return;
+        }
+        const key = this._getCalculationKey(request.index);
+        shiftedCalculatedData.set(
+          key,
+          this._transformShiftedStatisticValues(result.values, request.offset)
+        );
+        shiftedCalculatedUnits.set(key, result.unit);
+      });
     }
 
     if (!isCurrentFetch()) {
@@ -2603,17 +2758,29 @@ export class EnergyCustomGraphCard extends LitElement {
     }
     this._shiftedSeriesData = shiftedData;
     this._shiftedSeriesMetadata = shiftedMetadata;
+    this._shiftedCalculatedSeriesData = shiftedCalculatedData;
+    this._shiftedCalculatedSeriesUnits = shiftedCalculatedUnits;
   }
 
   private _buildMainSeriesInputs(): {
     statistics: Statistics;
     metadata: Record<string, StatisticsMetaData>;
     configSeries: EnergyCustomGraphSeriesConfig[];
+    calculatedData: Map<string, StatisticValue[]>;
+    calculatedUnits: Map<string, string | null | undefined>;
   } {
     const statistics: Statistics = { ...(this._statistics ?? {}) };
     const metadata: Record<string, StatisticsMetaData> = {
       ...(this._metadata ?? {}),
     };
+    const calculatedData = new Map(this._calculatedSeriesData);
+    this._shiftedCalculatedSeriesData.forEach((value, key) => {
+      calculatedData.set(key, value);
+    });
+    const calculatedUnits = new Map(this._calculatedSeriesUnits);
+    this._shiftedCalculatedSeriesUnits.forEach((value, key) => {
+      calculatedUnits.set(key, value);
+    });
     const configSeries = (this._config?.series ?? []).map((series, index) => {
       const offset = this._getStatisticSeriesTimeOffset(series);
       const statisticId = series.statistic_id?.trim();
@@ -2649,6 +2816,8 @@ export class EnergyCustomGraphCard extends LitElement {
       statistics,
       metadata,
       configSeries,
+      calculatedData,
+      calculatedUnits,
     };
   }
 
@@ -3187,6 +3356,9 @@ export class EnergyCustomGraphCard extends LitElement {
       if (!series.calculation) {
         return;
       }
+      if (target === "main" && this._getCalculationSeriesTimeOffset(series)) {
+        return;
+      }
       const result = this._evaluateCalculationSeries(
         series,
         series.calculation,
@@ -3227,7 +3399,8 @@ export class EnergyCustomGraphCard extends LitElement {
     statistics: Statistics,
     metadata: Record<string, StatisticsMetaData>,
     seriesIndex: number,
-    target: "main" | "compare"
+    target: "main" | "compare",
+    contextOverride?: CalculationTimeContext
   ): { values: StatisticValue[]; unit?: string | null } | undefined {
     if (!calculation.terms?.length) {
       return undefined;
@@ -3449,7 +3622,7 @@ export class EnergyCustomGraphCard extends LitElement {
     if (timestamps.length) {
       timestamps.forEach(processTimestamp);
     } else if (constantOnly) {
-      const context = this._getCalculationTimeContext(target);
+      const context = contextOverride ?? this._getCalculationTimeContext(target);
       if (context?.start) {
         const seen = new Set<number>();
         const addTimestamp = (ts: number | undefined | null) => {
@@ -3575,11 +3748,7 @@ export class EnergyCustomGraphCard extends LitElement {
 
   private _getCalculationTimeContext(
     target: "main" | "compare"
-  ): {
-    start?: Date;
-    end?: Date;
-    period?: StatisticsPeriod | "raw" | "disabled";
-  } {
+  ): CalculationTimeContext {
     if (target === "compare") {
       return {
         start: this._comparePeriodStart,
@@ -4010,8 +4179,8 @@ export class EnergyCustomGraphCard extends LitElement {
       configSeries: mainSeriesInputs.configSeries,
       colorPalette: this._config.color_cycle ?? [],
       computedStyle,
-      calculatedData: this._calculatedSeriesData,
-      calculatedUnits: this._calculatedSeriesUnits,
+      calculatedData: mainSeriesInputs.calculatedData,
+      calculatedUnits: mainSeriesInputs.calculatedUnits,
       forecastData: this._forecastSeriesData,
       forecastUnits: this._forecastSeriesUnits,
       skipForecastSeries: this._statisticsPeriod === "year",

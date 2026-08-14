@@ -22,11 +22,13 @@ For a shifted statistic series, the card:
 
 Example: with `time_offset: { value: -1, unit: year }`, a chart showing 2026 loads that series from 2025 and displays those points aligned onto 2026.
 
-The initial implementation supports statistic series in the main chart with recorder statistics aggregation. Raw history, calculation series, forecast series, and compare copies are later extensions.
+The implementation supports statistic series and whole calculation series in the main chart with recorder statistics aggregation. Raw history and forecast series are not supported. Date picker compare is ignored when any series configures a time offset.
 
 ## Consequences
 
 - Series names remain user-controlled; the card does not auto-label shifted dates.
 - Legend and tooltip behavior can keep using the existing series identity model.
 - Calendar units use calendar-aware date shifts, so month and year offsets stay aligned with calendar buckets.
-- Compare support must stack its own compare transform on top of the source timespan shift when implemented.
+- Calculation series use one offset for the whole calculation output; individual terms cannot have separate offsets.
+- Raw history cannot be used with series time offset because the offset fetch path is tied to aggregated recorder statistics.
+- Date picker compare is disabled for charts that configure a series time offset to avoid stacking two independent time transforms.

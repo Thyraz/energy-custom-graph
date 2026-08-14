@@ -121,7 +121,7 @@ By default the card mirrors the core energy cards and automatically selects the 
 | `chart_height` | string | – | CSS height (e.g. `300px`). Ignored when the card is used inside a section layout (the grid rows control the height). |
 | `timespan` | object | `{mode: "energy"}` | Controls the time range displayed (see below). |
 | `collection_key` | string | – | Custom key when multiple energy date pickers are present (only for `timespan.mode: "energy"`). <br>[More Info](https://www.home-assistant.io/dashboards/energy/#using-multiple-collections) |
-| `allow_compare` | boolean | `true` | For energy date picker mode: Respects the compare toggle when `true`. Set to `false` to disable this behavior. |
+| `allow_compare` | boolean | `true` | For energy date picker mode: Respects the compare toggle when `true`. Set to `false` to disable this behavior. Ignored when any series configures `time_offset`. |
 | `hide_legend` | boolean | `false` | Hide the legend entirely. |
 | `legend_sort` | `"asc"`, `"desc"`, `"none"` | `"none"` | Sort order for the legend entries. |
 | `expand_legend` | boolean | `false` | Expand the legend by default. |
@@ -180,7 +180,7 @@ Display a fixed time range. Dates use ISO 8601 format. If omitted, `start` defau
 | `source` | `"statistic"`, `"calculation"`, `"forecast"` | inferred | Data source type. When omitted the card can auto-detect the source based on the other fields for `statistic` and `calculation` signals. Use `forecast` to plot solar forecasts configured in the Energy dashboard. |
 | `statistic_id` | string | – | Entity with long term statistics (e.g. `sensor.entity_id`). Required unless series uses a `calculation` instead. |
 | `stat_type` | `"change"`, `"sum"`, `"mean"`, `"min"`, `"max"`, `"state"` | `"change"` | Statistic type to display for this entity. Not used when `calculation` is provided, as each subseries has it's own setting there. |
-| `time_offset` | object | – | Fetch this statistic series from a shifted source timespan and display it in the visible timespan. See below. |
+| `time_offset` | object | – | Fetch this statistic or calculation series from a shifted source timespan and display it in the visible timespan. See below. |
 | `calculation` | object | – | Build a computed series from multiple statistics / terms (see below). |
 | `chart_type` | `"bar"`, `"line"`, `"step"` | `"bar"` | Chart type. |
 | `stack` | string | – | Stack key for combining series. Series with identical keys will get stacked on top of each other. |
@@ -205,7 +205,7 @@ Display a fixed time range. Dates use ISO 8601 format. If omitted, `start` defau
 
 #### Series time offset
 
-`time_offset` shifts the source timespan for a statistic series. The card loads data from that shifted range and then projects the timestamps back into the visible chart range.
+`time_offset` shifts the source timespan for a statistic or calculation series. The card loads data from that shifted range and then projects the timestamps back into the visible chart range.
 
 ```yaml
 series:
@@ -220,7 +220,11 @@ series:
 
 Supported units are `hour`, `day`, `week`, `month`, and `year`. `value` must be a whole number; `0` is treated like no offset.
 
-Currently `time_offset` applies to statistic series with recorder statistics aggregation. Raw history, calculation series, forecast series, and additional compare copies of shifted series are not shifted yet.
+For calculation series, `time_offset` applies to the whole calculation output. Individual calculation terms cannot have separate offsets.
+
+Series time offset only works with aggregated recorder statistics. It cannot be used with RAW history data. Forecast series are not supported.
+
+The Home Assistant energy date picker's compare feature is not supported for charts that configure a time offset and will be ignored.
 
 #### Calculated series
 

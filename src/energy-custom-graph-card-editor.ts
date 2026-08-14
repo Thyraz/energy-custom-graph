@@ -1109,14 +1109,6 @@ ${this._renderTimespanSection(cfg)}
     if (!this.hass) {
       return html`<p>Loading...</p>`;
     }
-    const timeOffsetUnit = isTimeOffsetUnit(series.time_offset?.unit)
-      ? series.time_offset.unit
-      : "";
-    const timeOffsetValue =
-      typeof series.time_offset?.value === "number" &&
-      Number.isFinite(series.time_offset.value)
-        ? String(series.time_offset.value)
-        : "";
 
     return html`
       <ha-entity-picker
@@ -1148,6 +1140,21 @@ ${this._renderTimespanSection(cfg)}
           </select>`;
         })()}
       </div>
+      ${this._renderSeriesTimeOffsetFields(series, index)}
+    `;
+  }
+
+  private _renderSeriesTimeOffsetFields(series: EnergyCustomGraphSeriesConfig, index: number) {
+    const timeOffsetUnit = isTimeOffsetUnit(series.time_offset?.unit)
+      ? series.time_offset.unit
+      : "";
+    const timeOffsetValue =
+      typeof series.time_offset?.value === "number" &&
+      Number.isFinite(series.time_offset.value)
+        ? String(series.time_offset.value)
+        : "";
+
+    return html`
       <div class="field">
         <label>Time offset unit</label>
         <select
@@ -1245,6 +1252,7 @@ ${this._renderTimespanSection(cfg)}
             initial_value: value ? Number(value) : 0,
           }),
       })}
+      ${this._renderSeriesTimeOffsetFields(series, index)}
       <div class="terms-list">
         ${calculation.terms?.length
           ? calculation.terms.map((term, termIndex) =>
@@ -1880,7 +1888,6 @@ ${this._renderTimespanSection(cfg)}
       }
       this._updateSeries(index, "source", "calculation");
       this._updateSeries(index, "pv_production_entity", undefined);
-      this._updateSeries(index, "time_offset", undefined);
       return;
     }
     if (mode === "forecast") {
@@ -1998,7 +2005,6 @@ ${this._renderTimespanSection(cfg)}
     const seriesList = [...(this._config!.series ?? [])];
     const target = { ...seriesList[index] };
     delete target.statistic_id;
-    delete target.time_offset;
     target.calculation = target.calculation ?? { terms: [] };
     seriesList[index] = target;
     this._updateConfig("series", seriesList);
