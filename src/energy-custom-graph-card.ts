@@ -4453,7 +4453,9 @@ export class EnergyCustomGraphCard extends LitElement {
       extendCompareToNow
     );
 
-    this._applyBarStyling(combinedSeries, bucketSequence);
+    const valueLabelColor =
+      computedStyle.getPropertyValue("--primary-text-color").trim() || "#000";
+    this._applyBarStyling(combinedSeries, bucketSequence, valueLabelColor);
 
     if (!combinedSeries.length) {
       this._chartData = [];
@@ -5162,7 +5164,8 @@ export class EnergyCustomGraphCard extends LitElement {
 
   private _applyBarStyling(
     series: SeriesOption[],
-    predefinedBuckets?: number[]
+    predefinedBuckets?: number[],
+    valueLabelColor = "#000"
   ): void {
     const barSeries = series.filter(
       (item): item is BarSeriesOption => item.type === "bar"
@@ -5172,6 +5175,7 @@ export class EnergyCustomGraphCard extends LitElement {
       return;
     }
 
+    const warnedStackedValueLabels = new Set<string>();
     const bucketSet = new Set<number>();
     predefinedBuckets?.forEach((bucket) => bucketSet.add(bucket));
 
@@ -5225,6 +5229,7 @@ export class EnergyCustomGraphCard extends LitElement {
         dataMap.set(timestamp, {
           ...item,
           value: [timestamp, tuple[1]],
+          __energyCustomGraphRealValue: true,
           itemStyle: {
             ...baseItemStyle,
             ...(item.itemStyle ?? {}),
@@ -5303,10 +5308,76 @@ export class EnergyCustomGraphCard extends LitElement {
           }
         }
 
+        this._applyBarValueLabel(
+          serie,
+          dataItem,
+          tuple,
+          warnedStackedValueLabels,
+          valueLabelColor
+        );
         dataItem.itemStyle = itemStyle;
         (serie.data as any[])[bucketIndex] = dataItem;
       }
     });
+  }
+
+  private _applyBarValueLabel(
+    serie: BarSeriesOption,
+    dataItem: Record<string, any>,
+    tuple: any[],
+    warnedStackedValueLabels: Set<string>,
+    valueLabelColor: string
+  ): void {
+    const serieId = typeof serie.id === "string" ? serie.id : undefined;
+    if (!serieId || !dataItem.__energyCustomGraphRealValue) {
+      return;
+    }
+
+    const config = this._seriesConfigById.get(serieId);
+    if (config?.show_value_labels !== true) {
+      return;
+    }
+
+    const hasUserStack =
+      typeof config.stack === "string" && config.stack.trim() !== "";
+    if (hasUserStack) {
+      const warnKey = serieId.replace(/--compare$/, "");
+      if (!warnedStackedValueLabels.has(warnKey)) {
+        console.warn(
+          `[energy-custom-graph-card] Value labels are ignored for stacked bar series "${serie.name ?? serieId}".`
+        );
+        warnedStackedValueLabels.add(warnKey);
+      }
+      return;
+    }
+
+    const value = Number(tuple[1]);
+    if (!Number.isFinite(value) || value === 0) {
+      dataItem.label = { show: false };
+      return;
+    }
+
+    const precision =
+      typeof config.value_label_precision === "number" &&
+      Number.isFinite(config.value_label_precision)
+        ? Math.max(0, Math.min(20, Math.trunc(config.value_label_precision)))
+        : 0;
+
+    dataItem.label = {
+      show: true,
+      position: value > 0 ? "top" : "bottom",
+      formatter: this._formatNumber(value, {
+        minimumFractionDigits: precision,
+        maximumFractionDigits: precision,
+      }),
+      color: valueLabelColor,
+      fontSize: 11,
+      distance: 4,
+    };
+    serie.labelLayout = {
+      ...((serie as Record<string, any>).labelLayout ?? {}),
+      hideOverlap: true,
+    };
   }
 
   private _styleCompareSeries(

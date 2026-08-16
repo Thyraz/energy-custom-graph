@@ -1560,6 +1560,7 @@ ${this._renderTimespanSection(cfg)}
   private _renderSeriesDisplayGroup(series: EnergyCustomGraphSeriesConfig, index: number) {
     const chartType = series.chart_type ?? "bar";
     const isLineLike = chartType === "line" || chartType === "step";
+    const isBar = chartType === "bar";
     const fillEnabled = isLineLike;
     const fillActive = fillEnabled && series.fill === true;
     const gradientFillActive = fillActive && series.gradient_fill === true;
@@ -1748,6 +1749,41 @@ ${this._renderTimespanSection(cfg)}
             ></ha-switch>
             <span>Show in tooltip</span>
           </div>
+          ${isBar
+            ? html`
+                <div class="row">
+                  <ha-switch
+                    .checked=${series.show_value_labels === true}
+                    @change=${(ev: Event) =>
+                      this._updateSeries(
+                        index,
+                        "show_value_labels",
+                        (ev.target as HTMLInputElement).checked
+                      )}
+                  ></ha-switch>
+                  <span>Show value labels</span>
+                </div>
+                ${series.show_value_labels === true
+                  ? this._renderTextInput({
+                      label: "Value label precision",
+                      type: "number",
+                      step: "1",
+                      min: "0",
+                      helper: "Default 0, no unit",
+                      value:
+                        series.value_label_precision !== undefined
+                          ? String(series.value_label_precision)
+                          : "",
+                      onInput: (value) =>
+                        this._updateSeriesNumber(
+                          index,
+                          "value_label_precision",
+                          value
+                        ),
+                    })
+                  : nothing}
+              `
+            : nothing}
           ${fillEnabled
             ? html`
                 <div class="row">

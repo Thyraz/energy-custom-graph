@@ -64,6 +64,10 @@ _Avoid_: Live value, near real-time value
 The hover or click detail panel that shows chart values at a selected point in time.
 _Avoid_: Popup, hover label
 
+**Value label**:
+A static value drawn directly on or near a chart data point.
+_Avoid_: Tooltip label, bar text
+
 **Axis pointer**:
 The hover guide line on the chart that marks the selected X axis position, Y axis value, or both.
 _Avoid_: Crosshair

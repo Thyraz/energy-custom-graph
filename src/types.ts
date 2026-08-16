@@ -61,6 +61,8 @@ export interface EnergyCustomGraphSeriesConfig {
   y_axis?: "left" | "right";
   show_in_legend?: boolean;
   show_in_tooltip?: boolean;
+  show_value_labels?: boolean;
+  value_label_precision?: number;
   hidden_by_default?: boolean;
   multiply?: number;
   add?: number;

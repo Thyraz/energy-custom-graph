@@ -190,6 +190,8 @@ Display a fixed time range. Dates use ISO 8601 format. If omitted, `start` defau
 | `y_axis` | `"left"`, `"right"` | `"left"` | Axis assignment. |
 | `show_in_legend` | boolean | `true` | Whether to display this series in the legend. If `false`, the series remains visible in the chart but has no legend entry. |
 | `show_in_tooltip` | boolean | `true` | Controls whether the series appears in the tooltip. Set to `false` to keep the graph visible while hiding numbers from the hover tooltip. |
+| `show_value_labels` | boolean | `false` | For unstacked bar charts only: show static value labels at the outer end of each non-zero bar. Ignored for stacked bars. |
+| `value_label_precision` | number | `0` | Decimal places for value labels. Units are not shown in value labels. |
 | `hidden_by_default` | boolean | `false` | Whether the series is initially hidden when the chart loads. The series can still be toggled via the legend. |
 | `color` | string | next in palette | Specific color (supports `#rrggbb`, `rgb()` or CSS variables). |
 | `compare_color` | string | inherit | Optional color for compare series. Defaults to the base series color with reduced opacity. |
