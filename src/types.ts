@@ -17,6 +17,27 @@ export type EnergyCustomGraphCalculationOperation =
   | "multiply"
   | "divide";
 
+export type EnergyCustomGraphHeaderReducer =
+  | "sum"
+  | "mean"
+  | "min"
+  | "max"
+  | "first"
+  | "last";
+
+export type EnergyCustomGraphHeaderStackSign =
+  | "signed"
+  | "positive"
+  | "negative"
+  | "absolute";
+
+export interface EnergyCustomGraphHeaderMetricTransform {
+  multiply?: number;
+  add?: number;
+  clip_min?: number;
+  clip_max?: number;
+}
+
 export interface EnergyCustomGraphCalculationTerm {
   statistic_id?: string;
   stat_type?: EnergyCustomGraphStatisticType;
@@ -49,6 +70,7 @@ export interface EnergyCustomGraphTimeOffsetConfig {
 }
 
 export interface EnergyCustomGraphSeriesConfig {
+  id?: string;
   source?: EnergyCustomGraphSeriesSource;
   statistic_id?: string;
   name?: string;
@@ -63,6 +85,7 @@ export interface EnergyCustomGraphSeriesConfig {
   show_in_tooltip?: boolean;
   show_value_labels?: boolean;
   value_label_precision?: number;
+  show_in_chart?: boolean;
   hidden_by_default?: boolean;
   multiply?: number;
   add?: number;
@@ -78,6 +101,71 @@ export interface EnergyCustomGraphSeriesConfig {
   clip_max?: number;
   time_offset?: EnergyCustomGraphTimeOffsetConfig;
   pv_production_entity?: string;
+}
+
+export interface EnergyCustomGraphHeaderSeriesMetricConfig
+  extends EnergyCustomGraphHeaderMetricTransform {
+  source: "series";
+  series_id?: string;
+  reducer?: EnergyCustomGraphHeaderReducer;
+}
+
+export interface EnergyCustomGraphHeaderStackMetricConfig
+  extends EnergyCustomGraphHeaderMetricTransform {
+  source: "stack";
+  stack?: string;
+  reducer?: EnergyCustomGraphHeaderReducer;
+  sign?: EnergyCustomGraphHeaderStackSign;
+}
+
+export interface EnergyCustomGraphHeaderEntityStateMetricConfig
+  extends EnergyCustomGraphHeaderMetricTransform {
+  source: "entity_state";
+  entity_id?: string;
+}
+
+export interface EnergyCustomGraphHeaderConstantMetricConfig
+  extends EnergyCustomGraphHeaderMetricTransform {
+  source: "constant";
+  constant?: number;
+}
+
+export type EnergyCustomGraphHeaderMetricInputConfig =
+  | EnergyCustomGraphHeaderSeriesMetricConfig
+  | EnergyCustomGraphHeaderStackMetricConfig
+  | EnergyCustomGraphHeaderEntityStateMetricConfig;
+
+export type EnergyCustomGraphHeaderCalculationTermConfig =
+  (
+    | EnergyCustomGraphHeaderMetricInputConfig
+    | EnergyCustomGraphHeaderConstantMetricConfig
+  ) & {
+    operation?: EnergyCustomGraphCalculationOperation;
+  };
+
+export interface EnergyCustomGraphHeaderCalculationConfig {
+  terms: EnergyCustomGraphHeaderCalculationTermConfig[];
+  initial_value?: number;
+}
+
+export interface EnergyCustomGraphHeaderCalculationMetricConfig
+  extends EnergyCustomGraphHeaderMetricTransform {
+  calculation: EnergyCustomGraphHeaderCalculationConfig;
+}
+
+export type EnergyCustomGraphHeaderMetricConfig =
+  | EnergyCustomGraphHeaderMetricInputConfig
+  | EnergyCustomGraphHeaderCalculationMetricConfig;
+
+export interface EnergyCustomGraphHeaderChipConfig {
+  label?: string;
+  unit?: string | null;
+  precision?: number;
+  metric?: EnergyCustomGraphHeaderMetricConfig;
+}
+
+export interface EnergyCustomGraphHeaderConfig {
+  chip?: EnergyCustomGraphHeaderChipConfig;
 }
 
 export interface EnergyCustomGraphRawOptions {
@@ -153,6 +241,7 @@ export interface EnergyCustomGraphCardConfig extends LovelaceCardConfig {
   legend_sort?: "asc" | "desc" | "none";
   collection_key?: string;
   allow_compare?: boolean;
+  header?: EnergyCustomGraphHeaderConfig;
   y_axes?: EnergyCustomGraphAxisConfig[];
   show_tooltip?: boolean;
   show_x_axis_pointer?: boolean;

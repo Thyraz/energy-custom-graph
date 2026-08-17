@@ -41,6 +41,17 @@ export interface BuiltSeriesResult {
   unitBySeries: Map<string, string | null | undefined>;
   seriesById: Map<string, EnergyCustomGraphSeriesConfig>;
   indicatorColorBySeries: Map<string, string>;
+  resolvedSeriesById: Map<string, ResolvedSeriesData>;
+}
+
+export interface ResolvedSeriesData {
+  id: string;
+  chartSeriesId: string;
+  name: string;
+  source: "statistic" | "calculation" | "forecast";
+  config: EnergyCustomGraphSeriesConfig;
+  data: [number, number | null][];
+  unit?: string | null;
 }
 
 export const DEFAULT_COLORS = [
@@ -273,6 +284,7 @@ export const buildSeries = ({
   const unitBySeries = new Map<string, string | null | undefined>();
   const seriesById = new Map<string, EnergyCustomGraphSeriesConfig>();
   const indicatorColorBySeries = new Map<string, string>();
+  const resolvedSeriesById = new Map<string, ResolvedSeriesData>();
   const output: (LineSeriesOption | BarSeriesOption)[] = [];
 
   type LineSeriesMeta = {
@@ -423,14 +435,13 @@ export const buildSeries = ({
     const defaultBarFillOpacity = BAR_FILL_ALPHA;
     const defaultLineFillOpacity = LINE_AREA_ALPHA;
 
-    const baseKey = statisticId ?? calculationKey ?? `series_${index}`;
-    const id = `${baseKey}:${statType}:${chartType}:${index}`;
-    unitBySeries.set(
-      id,
-      calcUnit ?? meta?.statistics_unit_of_measurement
-    );
-    seriesById.set(id, seriesConfig);
-    indicatorColorBySeries.set(id, indicatorColor);
+    const baseKey = statisticId ?? calculationKey ?? forecastKey ?? `series_${index}`;
+    const configuredId =
+      typeof seriesConfig.id === "string" && seriesConfig.id.trim().length
+        ? seriesConfig.id.trim()
+        : undefined;
+    const id = configuredId ?? `${baseKey}:${statType}:${chartType}:${index}`;
+    const unit = calcUnit ?? meta?.statistics_unit_of_measurement;
 
     const dataPoints: [number, number | null][] = raw.map(
       (entry: StatisticValue) => {
@@ -449,6 +460,31 @@ export const buildSeries = ({
         return [date, clamped];
       }
     );
+
+    const resolvedId = configuredId ?? id;
+    if (resolvedSeriesById.has(resolvedId)) {
+      warnOnce(
+        `duplicate-series-id-${resolvedId}`,
+        `Multiple series resolve to id "${resolvedId}". Header metrics referencing this id will be ambiguous.`
+      );
+    }
+    resolvedSeriesById.set(resolvedId, {
+      id: resolvedId,
+      chartSeriesId: id,
+      name,
+      source,
+      config: seriesConfig,
+      data: dataPoints,
+      unit,
+    });
+
+    if (seriesConfig.show_in_chart === false) {
+      return;
+    }
+
+    unitBySeries.set(id, unit);
+    seriesById.set(id, seriesConfig);
+    indicatorColorBySeries.set(id, indicatorColor);
 
     let legendFill: string | undefined;
     let legendBorder: string | undefined;
@@ -819,5 +855,6 @@ export const buildSeries = ({
     unitBySeries,
     seriesById,
     indicatorColorBySeries,
+    resolvedSeriesById,
   };
 };

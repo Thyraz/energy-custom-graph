@@ -18,6 +18,12 @@ import type {
   EnergyCustomGraphRelativeCalendarPeriod,
   EnergyCustomGraphRelativePeriod,
   EnergyCustomGraphTimeOffsetUnit,
+  EnergyCustomGraphHeaderCalculationConfig,
+  EnergyCustomGraphHeaderCalculationTermConfig,
+  EnergyCustomGraphHeaderChipConfig,
+  EnergyCustomGraphHeaderMetricConfig,
+  EnergyCustomGraphHeaderReducer,
+  EnergyCustomGraphHeaderStackSign,
 } from "./types";
 import { DEFAULT_COLORS } from "./chart/series-builder";
 import { fetchEnergyPreferences } from "./data/energy";
@@ -59,6 +65,22 @@ const TIME_OFFSET_UNIT_OPTIONS: Array<{ value: EnergyCustomGraphTimeOffsetUnit; 
   { value: "week", label: "Week" },
   { value: "month", label: "Month" },
   { value: "year", label: "Year" },
+];
+
+const HEADER_REDUCER_OPTIONS: Array<{ value: EnergyCustomGraphHeaderReducer; label: string }> = [
+  { value: "sum", label: "Sum" },
+  { value: "mean", label: "Mean" },
+  { value: "min", label: "Min" },
+  { value: "max", label: "Max" },
+  { value: "first", label: "First" },
+  { value: "last", label: "Last" },
+];
+
+const HEADER_STACK_SIGN_OPTIONS: Array<{ value: EnergyCustomGraphHeaderStackSign; label: string }> = [
+  { value: "signed", label: "Signed" },
+  { value: "positive", label: "Positive only" },
+  { value: "negative", label: "Negative only" },
+  { value: "absolute", label: "Absolute" },
 ];
 
 const TIME_OFFSET_UNITS = new Set<EnergyCustomGraphTimeOffsetUnit>(
@@ -110,6 +132,7 @@ export class EnergyCustomGraphCardEditor
   @state() private _activeTab: "general" | "series" = "general";
   @state() private _expandedSeries = new Set<number>();
   @state() private _expandedTermKeys = new Set<string>();
+  @state() private _expandedHeaderTermKeys = new Set<number>();
   @state() private _axesExpanded = false;
   @state() private _aggregationExpanded = false;
   @state() private _customColorDrafts: Map<number, string> = new Map();
@@ -228,6 +251,57 @@ export class EnergyCustomGraphCardEditor
     `;
   }
 
+  private _normalizeSeriesIds(
+    series: EnergyCustomGraphSeriesConfig[]
+  ): EnergyCustomGraphSeriesConfig[] {
+    const used = new Set<string>();
+    return series.map((item, index) => {
+      const current =
+        typeof item.id === "string" && item.id.trim().length
+          ? item.id.trim()
+          : undefined;
+      const id =
+        current && !used.has(current)
+          ? current
+          : this._createUniqueSeriesId(item, index, used);
+      used.add(id);
+      return item.id === id ? item : { ...item, id };
+    });
+  }
+
+  private _createUniqueSeriesId(
+    series: EnergyCustomGraphSeriesConfig,
+    index: number,
+    used: Set<string>
+  ): string {
+    const base =
+      this._sanitizeSeriesId(
+        series.statistic_id?.split(".").pop() ??
+          series.name ??
+          series.pv_production_entity?.split(".").pop() ??
+          (series.calculation
+            ? "calculation"
+            : series.source === "forecast"
+              ? "forecast"
+              : "series")
+      ) || `series_${index + 1}`;
+    let candidate = base;
+    let suffix = 2;
+    while (used.has(candidate)) {
+      candidate = `${base}_${suffix}`;
+      suffix += 1;
+    }
+    return candidate;
+  }
+
+  private _sanitizeSeriesId(value: string): string {
+    return value
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/gu, "_")
+      .replace(/^_+|_+$/gu, "");
+  }
+
   public setConfig(config: EnergyCustomGraphCardConfig): void {
     const hadConfig = this._config !== undefined;
     const normalizedSeries = config.series?.map((item) => {
@@ -243,23 +317,24 @@ export class EnergyCustomGraphCardEditor
       }
       return normalized;
     }) ?? [];
+    const normalizedSeriesWithIds = this._normalizeSeriesIds(normalizedSeries);
     const nextConfig: EnergyCustomGraphCardConfig = {
       ...config,
-      series: normalizedSeries,
+      series: normalizedSeriesWithIds,
     };
     nextConfig.type = "custom:energy-custom-graph-card";
     nextConfig.timespan = config.timespan ?? { mode: "energy" };
     this._config = nextConfig;
-    this._syncCustomColorDrafts(normalizedSeries);
-    this._syncColorSelections(normalizedSeries);
-    this._syncCompareCustomColorDrafts(normalizedSeries);
-    this._syncCompareColorSelections(normalizedSeries);
+    this._syncCustomColorDrafts(normalizedSeriesWithIds);
+    this._syncColorSelections(normalizedSeriesWithIds);
+    this._syncCompareCustomColorDrafts(normalizedSeriesWithIds);
+    this._syncCompareColorSelections(normalizedSeriesWithIds);
 
     if (!hadConfig) {
       this._expandedSeries = new Set();
       this._expandedTermKeys = new Set();
     } else {
-      this._syncExpandedState(normalizedSeries);
+      this._syncExpandedState(normalizedSeriesWithIds);
     }
   }
 
@@ -540,6 +615,549 @@ export class EnergyCustomGraphCardEditor
     `;
   }
 
+  private _renderHeaderSection(cfg: EnergyCustomGraphCardConfig) {
+    const chip = cfg.header?.chip;
+    const enabled = !!chip;
+    return html`
+      <div class="group-card">
+        <div class="group-header">
+          <span class="group-title">Header chip</span>
+        </div>
+        <div class="group-body">
+          <div class="row">
+            <ha-switch
+              .checked=${enabled}
+              @change=${(ev: Event) =>
+                this._setHeaderChipEnabled(
+                  (ev.target as HTMLInputElement).checked
+                )}
+            ></ha-switch>
+            <span>Show header chip</span>
+          </div>
+          ${enabled && chip
+            ? html`
+                <span class="subtitle">Display</span>
+                ${this._renderTextInput({
+                  label: "Label",
+                  value: chip.label ?? "",
+                  onInput: (value) =>
+                    this._updateHeaderChipField("label", value || undefined),
+                })}
+                ${this._renderTextInput({
+                  label: "Unit",
+                  helper: "Leave empty to use an automatic unit when possible",
+                  value: chip.unit ?? "",
+                  onInput: (value) =>
+                    this._updateHeaderChipField("unit", value || undefined),
+                })}
+                ${this._renderTextInput({
+                  label: "Precision",
+                  type: "number",
+                  step: "1",
+                  min: "0",
+                  helper: "Default follows tooltip precision",
+                  value:
+                    chip.precision !== undefined
+                      ? String(chip.precision)
+                      : "",
+                  onInput: (value) =>
+                    this._updateHeaderChipNumber("precision", value),
+                })}
+                <span class="subtitle">Metric</span>
+                ${this._renderHeaderMetricEditor(
+                  chip.metric ?? this._createDefaultHeaderMetric()
+                )}
+              `
+            : nothing}
+        </div>
+      </div>
+    `;
+  }
+
+  private _renderHeaderMetricEditor(
+    metric: EnergyCustomGraphHeaderMetricConfig
+  ) {
+    const mode = this._getHeaderMetricMode(metric);
+    const buttons: Array<{
+      value: "series" | "stack" | "entity_state" | "calculation";
+      label: string;
+    }> = [
+      { value: "series", label: "Series" },
+      { value: "stack", label: "Stack" },
+      { value: "entity_state", label: "Entity state" },
+      { value: "calculation", label: "Calculation" },
+    ];
+
+    return html`
+      <div class="field full-width">
+        <label>Source</label>
+        <div class="segment-group" role="group" aria-label="Header metric source">
+          ${buttons.map(
+            (button) => html`
+              <button
+                type="button"
+                class=${classMap({
+                  "segment-button": true,
+                  active: mode === button.value,
+                })}
+                @click=${() => this._setHeaderMetricMode(button.value)}
+              >
+                ${button.label}
+              </button>
+            `
+          )}
+        </div>
+      </div>
+      ${mode === "series"
+        ? this._renderHeaderSeriesMetric(metric)
+        : mode === "stack"
+          ? this._renderHeaderStackMetric(metric)
+          : mode === "entity_state"
+            ? this._renderHeaderEntityStateMetric(metric)
+            : this._renderHeaderCalculationMetric(metric)}
+    `;
+  }
+
+  private _renderHeaderSeriesMetric(metric: EnergyCustomGraphHeaderMetricConfig) {
+    const seriesMetric =
+      "source" in metric && metric.source === "series"
+        ? metric
+        : this._createDefaultHeaderMetric("series");
+    const options = this._getSeriesReferenceOptions();
+    return html`
+      <div class="field">
+        <label>Series</label>
+        <select
+          @change=${(ev: Event) =>
+            this._updateHeaderMetric({
+              ...seriesMetric,
+              series_id:
+                (ev.target as HTMLSelectElement).value || undefined,
+            })}
+        >
+          <option value="" ?selected=${!seriesMetric.series_id}>Select series</option>
+          ${options.map(
+            (option) => html`
+              <option
+                value=${option.value}
+                ?selected=${seriesMetric.series_id === option.value}
+              >
+                ${option.label}
+              </option>
+            `
+          )}
+        </select>
+      </div>
+      ${this._renderHeaderReducerField(seriesMetric.reducer, (reducer) =>
+        this._updateHeaderMetric({ ...seriesMetric, reducer })
+      )}
+      ${this._renderHeaderTransformFields(seriesMetric, (key, value) =>
+        this._updateHeaderMetric({ ...seriesMetric, [key]: value })
+      )}
+    `;
+  }
+
+  private _renderHeaderStackMetric(metric: EnergyCustomGraphHeaderMetricConfig) {
+    const stackMetric =
+      "source" in metric && metric.source === "stack"
+        ? metric
+        : this._createDefaultHeaderMetric("stack");
+    return html`
+      ${this._renderTextInput({
+        label: "Stack",
+        value: stackMetric.stack ?? "",
+        onInput: (value) =>
+          this._updateHeaderMetric({
+            ...stackMetric,
+            stack: value || undefined,
+          }),
+      })}
+      ${this._renderHeaderReducerField(stackMetric.reducer, (reducer) =>
+        this._updateHeaderMetric({ ...stackMetric, reducer })
+      )}
+      ${this._renderHeaderStackSignField(stackMetric.sign, (sign) =>
+        this._updateHeaderMetric({ ...stackMetric, sign })
+      )}
+      ${this._renderHeaderTransformFields(stackMetric, (key, value) =>
+        this._updateHeaderMetric({ ...stackMetric, [key]: value })
+      )}
+    `;
+  }
+
+  private _renderHeaderEntityStateMetric(
+    metric: EnergyCustomGraphHeaderMetricConfig
+  ) {
+    const entityMetric =
+      "source" in metric && metric.source === "entity_state"
+        ? metric
+        : this._createDefaultHeaderMetric("entity_state");
+    return html`
+      <ha-entity-picker
+        .hass=${this.hass}
+        .value=${entityMetric.entity_id}
+        .label=${"Entity"}
+        allow-custom-entity
+        @value-changed=${(ev: CustomEvent) =>
+          this._updateHeaderMetric({
+            ...entityMetric,
+            entity_id: ev.detail.value || undefined,
+          })}
+      ></ha-entity-picker>
+      ${this._renderHeaderTransformFields(entityMetric, (key, value) =>
+        this._updateHeaderMetric({ ...entityMetric, [key]: value })
+      )}
+    `;
+  }
+
+  private _renderHeaderCalculationMetric(
+    metric: EnergyCustomGraphHeaderMetricConfig
+  ) {
+    const calculationMetric =
+      "calculation" in metric
+        ? metric
+        : this._createDefaultHeaderMetric("calculation");
+    const calculation = calculationMetric.calculation;
+    return html`
+      ${this._renderTextInput({
+        label: "Initial value",
+        type: "number",
+        value:
+          calculation.initial_value !== undefined
+            ? String(calculation.initial_value)
+            : "0",
+        onInput: (value) =>
+          this._updateHeaderCalculation({
+            ...calculation,
+            initial_value: value ? Number(value) : 0,
+          }),
+      })}
+      <div class="terms-list">
+        ${calculation.terms?.length
+          ? calculation.terms.map((term, index) =>
+              this._renderHeaderCalculationTerm(term, index)
+            )
+          : html`<p class="hint">Add at least one term to build the header metric.</p>`}
+      </div>
+      <button type="button" class="outlined" @click=${this._addHeaderCalculationTerm}>
+        Add term
+      </button>
+      ${this._renderHeaderTransformFields(calculationMetric, (key, value) =>
+        this._updateHeaderMetric({ ...calculationMetric, [key]: value })
+      )}
+    `;
+  }
+
+  private _renderHeaderCalculationTerm(
+    term: EnergyCustomGraphHeaderCalculationTermConfig,
+    index: number
+  ) {
+    const expanded = this._expandedHeaderTermKeys.has(index);
+    const operation = term.operation ?? "add";
+    const descriptor = this._formatHeaderTermDescriptor(term);
+    return html`
+      <div class="nested-collapsible ${expanded ? "expanded" : "collapsed"}">
+        <button type="button" class="nested-header" @click=${() => this._toggleHeaderTermExpanded(index)}>
+          <div class="nested-title">
+            <strong>${this._formatOperation(operation)}</strong>
+            <p class="hint">${descriptor}</p>
+          </div>
+          <span class="chevron">
+            <ha-icon icon=${expanded ? "mdi:chevron-down" : "mdi:chevron-right"}></ha-icon>
+          </span>
+        </button>
+        ${expanded
+          ? html`
+              <div class="nested-body">
+                <div class="term-body column">
+                  ${this._renderHeaderTermOperationField(index, operation)}
+                  ${this._renderHeaderTermSourceFields(index, term)}
+                  ${this._renderHeaderTransformFields(term, (key, value) =>
+                    this._updateHeaderCalculationTerm(index, key, value)
+                  )}
+                </div>
+                <div class="nested-footer">
+                  <button
+                    type="button"
+                    class="text warning"
+                    @click=${(ev: Event) => {
+                      ev.stopPropagation();
+                      this._removeHeaderCalculationTerm(index);
+                    }}
+                  >
+                    Remove term
+                  </button>
+                </div>
+              </div>
+            `
+          : nothing}
+      </div>
+    `;
+  }
+
+  private _renderHeaderTermOperationField(
+    index: number,
+    operation: EnergyCustomGraphCalculationTerm["operation"]
+  ) {
+    const current = operation ?? "add";
+    return html`
+      <div class="field">
+        <label>Operation</label>
+        <select
+          @change=${(ev: Event) =>
+            this._updateHeaderCalculationTerm(
+              index,
+              "operation",
+              (ev.target as HTMLSelectElement).value
+            )}
+        >
+          <option value="add" ?selected=${current === "add"}>Add</option>
+          <option value="subtract" ?selected=${current === "subtract"}>Subtract</option>
+          <option value="multiply" ?selected=${current === "multiply"}>Multiply</option>
+          <option value="divide" ?selected=${current === "divide"}>Divide</option>
+        </select>
+      </div>
+    `;
+  }
+
+  private _renderHeaderTermSourceFields(
+    index: number,
+    term: EnergyCustomGraphHeaderCalculationTermConfig
+  ) {
+    const source = term.source ?? "series";
+    const buttons: Array<{
+      value: "series" | "stack" | "entity_state" | "constant";
+      label: string;
+    }> = [
+      { value: "series", label: "Series" },
+      { value: "stack", label: "Stack" },
+      { value: "entity_state", label: "Entity state" },
+      { value: "constant", label: "Constant" },
+    ];
+    return html`
+      <div class="field full-width">
+        <label>Input type</label>
+        <div class="segment-group" role="group" aria-label="Header term source">
+          ${buttons.map(
+            (button) => html`
+              <button
+                type="button"
+                class=${classMap({
+                  "segment-button": true,
+                  active: source === button.value,
+                })}
+                @click=${() => this._setHeaderTermSource(index, button.value)}
+              >
+                ${button.label}
+              </button>
+            `
+          )}
+        </div>
+      </div>
+      ${source === "series"
+        ? this._renderHeaderTermSeriesFields(index, term)
+        : source === "stack"
+          ? this._renderHeaderTermStackFields(index, term)
+          : source === "entity_state"
+            ? this._renderHeaderTermEntityFields(index, term)
+            : this._renderHeaderTermConstantFields(index, term)}
+    `;
+  }
+
+  private _renderHeaderTermSeriesFields(
+    index: number,
+    term: EnergyCustomGraphHeaderCalculationTermConfig
+  ) {
+    const options = this._getSeriesReferenceOptions();
+    return html`
+      <div class="field">
+        <label>Series</label>
+        <select
+          @change=${(ev: Event) =>
+            this._updateHeaderCalculationTerm(
+              index,
+              "series_id",
+              (ev.target as HTMLSelectElement).value || undefined
+            )}
+        >
+          <option value="" ?selected=${!("series_id" in term) || !term.series_id}>Select series</option>
+          ${options.map(
+            (option) => html`
+              <option
+                value=${option.value}
+                ?selected=${"series_id" in term && term.series_id === option.value}
+              >
+                ${option.label}
+              </option>
+            `
+          )}
+        </select>
+      </div>
+      ${this._renderHeaderReducerField(
+        "reducer" in term ? term.reducer : undefined,
+        (reducer) => this._updateHeaderCalculationTerm(index, "reducer", reducer)
+      )}
+    `;
+  }
+
+  private _renderHeaderTermStackFields(
+    index: number,
+    term: EnergyCustomGraphHeaderCalculationTermConfig
+  ) {
+    return html`
+      ${this._renderTextInput({
+        label: "Stack",
+        value: "stack" in term ? term.stack ?? "" : "",
+        onInput: (value) =>
+          this._updateHeaderCalculationTerm(
+            index,
+            "stack",
+            value || undefined
+          ),
+      })}
+      ${this._renderHeaderReducerField(
+        "reducer" in term ? term.reducer : undefined,
+        (reducer) => this._updateHeaderCalculationTerm(index, "reducer", reducer)
+      )}
+      ${this._renderHeaderStackSignField(
+        "sign" in term ? term.sign : undefined,
+        (sign) => this._updateHeaderCalculationTerm(index, "sign", sign)
+      )}
+    `;
+  }
+
+  private _renderHeaderTermEntityFields(
+    index: number,
+    term: EnergyCustomGraphHeaderCalculationTermConfig
+  ) {
+    return html`
+      <ha-entity-picker
+        .hass=${this.hass}
+        .value=${"entity_id" in term ? term.entity_id : undefined}
+        .label=${"Entity"}
+        allow-custom-entity
+        @value-changed=${(ev: CustomEvent) =>
+          this._updateHeaderCalculationTerm(
+            index,
+            "entity_id",
+            ev.detail.value || undefined
+          )}
+      ></ha-entity-picker>
+    `;
+  }
+
+  private _renderHeaderTermConstantFields(
+    index: number,
+    term: EnergyCustomGraphHeaderCalculationTermConfig
+  ) {
+    return this._renderTextInput({
+      label: "Constant",
+      type: "number",
+      value:
+        "constant" in term && term.constant !== undefined
+          ? String(term.constant)
+          : "0",
+      onInput: (value) =>
+        this._updateHeaderCalculationTerm(
+          index,
+          "constant",
+          value === "" ? undefined : Number(value)
+        ),
+    });
+  }
+
+  private _renderHeaderReducerField(
+    reducer: EnergyCustomGraphHeaderReducer | undefined,
+    onChange: (reducer: EnergyCustomGraphHeaderReducer) => void
+  ) {
+    const current = reducer ?? "sum";
+    return html`
+      <div class="field">
+        <label>Reducer</label>
+        <select
+          @change=${(ev: Event) =>
+            onChange((ev.target as HTMLSelectElement).value as EnergyCustomGraphHeaderReducer)}
+        >
+          ${HEADER_REDUCER_OPTIONS.map(
+            (option) => html`
+              <option value=${option.value} ?selected=${current === option.value}>
+                ${option.label}
+              </option>
+            `
+          )}
+        </select>
+      </div>
+    `;
+  }
+
+  private _renderHeaderStackSignField(
+    sign: EnergyCustomGraphHeaderStackSign | undefined,
+    onChange: (sign: EnergyCustomGraphHeaderStackSign) => void
+  ) {
+    const current = sign ?? "signed";
+    return html`
+      <div class="field">
+        <label>Sign</label>
+        <select
+          @change=${(ev: Event) =>
+            onChange((ev.target as HTMLSelectElement).value as EnergyCustomGraphHeaderStackSign)}
+        >
+          ${HEADER_STACK_SIGN_OPTIONS.map(
+            (option) => html`
+              <option value=${option.value} ?selected=${current === option.value}>
+                ${option.label}
+              </option>
+            `
+          )}
+        </select>
+      </div>
+    `;
+  }
+
+  private _renderHeaderTransformFields(
+    transform: {
+      multiply?: number;
+      add?: number;
+      clip_min?: number;
+      clip_max?: number;
+    },
+    onChange: (
+      key: "multiply" | "add" | "clip_min" | "clip_max",
+      value: number | undefined
+    ) => void
+  ) {
+    return html`
+      <span class="subtitle term-transform-title">Transform</span>
+      ${this._renderTextInput({
+        label: "Multiply",
+        type: "number",
+        value: transform.multiply !== undefined ? String(transform.multiply) : "",
+        onInput: (value) =>
+          onChange("multiply", value === "" ? undefined : Number(value)),
+      })}
+      ${this._renderTextInput({
+        label: "Add",
+        type: "number",
+        value: transform.add !== undefined ? String(transform.add) : "",
+        onInput: (value) =>
+          onChange("add", value === "" ? undefined : Number(value)),
+      })}
+      ${this._renderTextInput({
+        label: "Clip min",
+        type: "number",
+        value: transform.clip_min !== undefined ? String(transform.clip_min) : "",
+        onInput: (value) =>
+          onChange("clip_min", value === "" ? undefined : Number(value)),
+      })}
+      ${this._renderTextInput({
+        label: "Clip max",
+        type: "number",
+        value: transform.clip_max !== undefined ? String(transform.clip_max) : "",
+        onInput: (value) =>
+          onChange("clip_max", value === "" ? undefined : Number(value)),
+      })}
+    `;
+  }
+
   private _renderAggregationPickerOptions(
     pickerAggregation: NonNullable<EnergyCustomGraphAggregationConfig["energy_picker"]> | {}
   ) {
@@ -774,6 +1392,7 @@ export class EnergyCustomGraphCardEditor
         })}
 ${this._renderTimespanSection(cfg)}
       </div>
+      ${this._renderHeaderSection(cfg)}
       ${this._renderLegendSection(cfg)}
       ${this._renderTooltipSection(cfg)}
       ${this._renderAxesSection(cfg)}
@@ -1743,6 +2362,18 @@ ${this._renderTimespanSection(cfg)}
           </div>
           <div class="row">
             <ha-switch
+              .checked=${series.show_in_chart !== false}
+              @change=${(ev: Event) =>
+                this._updateSeries(
+                  index,
+                  "show_in_chart",
+                  (ev.target as HTMLInputElement).checked
+                )}
+            ></ha-switch>
+            <span>Show in chart</span>
+          </div>
+          <div class="row">
+            <ha-switch
               .checked=${series.show_in_tooltip !== false}
               @change=${(ev: Event) =>
                 this._updateSeries(index, "show_in_tooltip", (ev.target as HTMLInputElement).checked)}
@@ -2012,6 +2643,311 @@ ${this._renderTimespanSection(cfg)}
     }
     this._updateSeries(index, "source", undefined);
     this._updateSeries(index, "pv_production_entity", undefined);
+  }
+
+  private _getSeriesReferenceOptions(): Array<{ value: string; label: string }> {
+    return (this._config?.series ?? [])
+      .filter((series) => typeof series.id === "string" && series.id.trim().length)
+      .map((series, index) => {
+        const id = series.id!.trim();
+        const label =
+          series.name ??
+          series.statistic_id ??
+          series.pv_production_entity ??
+          (series.calculation ? "Calculation series" : `Series ${index + 1}`);
+        return {
+          value: id,
+          label: `${label} (${id})`,
+        };
+      });
+  }
+
+  private _getStackOptions(): string[] {
+    const stacks = new Set<string>();
+    (this._config?.series ?? []).forEach((series) => {
+      const stack = series.stack?.trim();
+      if (stack) {
+        stacks.add(stack);
+      }
+    });
+    return Array.from(stacks).sort((a, b) => a.localeCompare(b));
+  }
+
+  private _createDefaultHeaderMetric(
+    mode: "series" | "stack" | "entity_state" | "calculation" = "series"
+  ): EnergyCustomGraphHeaderMetricConfig {
+    if (mode === "stack") {
+      return {
+        source: "stack",
+        stack: this._getStackOptions()[0],
+        reducer: "sum",
+        sign: "signed",
+      };
+    }
+    if (mode === "entity_state") {
+      return {
+        source: "entity_state",
+        entity_id: "",
+      };
+    }
+    if (mode === "calculation") {
+      return {
+        calculation: {
+          initial_value: 0,
+          terms: [this._createDefaultHeaderCalculationTerm("series")],
+        },
+      };
+    }
+    return {
+      source: "series",
+      series_id: this._getSeriesReferenceOptions()[0]?.value,
+      reducer: "sum",
+    };
+  }
+
+  private _createDefaultHeaderCalculationTerm(
+    source: "series" | "stack" | "entity_state" | "constant"
+  ): EnergyCustomGraphHeaderCalculationTermConfig {
+    if (source === "stack") {
+      return {
+        operation: "add",
+        source: "stack",
+        stack: this._getStackOptions()[0],
+        reducer: "sum",
+        sign: "signed",
+      };
+    }
+    if (source === "entity_state") {
+      return {
+        operation: "add",
+        source: "entity_state",
+        entity_id: "",
+      };
+    }
+    if (source === "constant") {
+      return {
+        operation: "add",
+        source: "constant",
+        constant: 0,
+      };
+    }
+    return {
+      operation: "add",
+      source: "series",
+      series_id: this._getSeriesReferenceOptions()[0]?.value,
+      reducer: "sum",
+    };
+  }
+
+  private _getHeaderMetricMode(
+    metric: EnergyCustomGraphHeaderMetricConfig
+  ): "series" | "stack" | "entity_state" | "calculation" {
+    if ("calculation" in metric) {
+      return "calculation";
+    }
+    return metric.source;
+  }
+
+  private _setHeaderChipEnabled(enabled: boolean) {
+    if (!enabled) {
+      this._updateConfig("header", undefined);
+      return;
+    }
+    const current = this._config?.header?.chip;
+    this._updateHeaderChip(
+      current ?? {
+        metric: this._createDefaultHeaderMetric(),
+      }
+    );
+  }
+
+  private _updateHeaderChip(chip: EnergyCustomGraphHeaderChipConfig) {
+    this._updateConfig("header", {
+      ...(this._config?.header ?? {}),
+      chip,
+    });
+  }
+
+  private _updateHeaderChipField(
+    key: keyof EnergyCustomGraphHeaderChipConfig,
+    value: unknown
+  ) {
+    const chip = {
+      ...(this._config?.header?.chip ?? {
+        metric: this._createDefaultHeaderMetric(),
+      }),
+    };
+    if (value === undefined || value === "") {
+      delete (chip as any)[key];
+    } else {
+      (chip as any)[key] = value;
+    }
+    this._updateHeaderChip(chip);
+  }
+
+  private _updateHeaderChipNumber(
+    key: keyof EnergyCustomGraphHeaderChipConfig,
+    raw: string
+  ) {
+    this._updateHeaderChipField(
+      key,
+      raw === "" ? undefined : Number(raw)
+    );
+  }
+
+  private _updateHeaderMetric(metric: EnergyCustomGraphHeaderMetricConfig) {
+    const chip = {
+      ...(this._config?.header?.chip ?? {}),
+      metric,
+    };
+    this._updateHeaderChip(chip);
+  }
+
+  private _setHeaderMetricMode(
+    mode: "series" | "stack" | "entity_state" | "calculation"
+  ) {
+    const current = this._config?.header?.chip?.metric;
+    if (current && this._getHeaderMetricMode(current) === mode) {
+      return;
+    }
+    this._updateHeaderMetric(this._createDefaultHeaderMetric(mode));
+    if (mode === "calculation") {
+      this._expandedHeaderTermKeys = new Set([0]);
+    }
+  }
+
+  private _updateHeaderCalculation(
+    calculation: EnergyCustomGraphHeaderCalculationConfig
+  ) {
+    const metric = this._config?.header?.chip?.metric;
+    const calculationMetric =
+      metric && "calculation" in metric
+        ? { ...metric, calculation }
+        : {
+            ...this._createDefaultHeaderMetric("calculation"),
+            calculation,
+          };
+    this._updateHeaderMetric(calculationMetric);
+  }
+
+  private _addHeaderCalculationTerm() {
+    const metric = this._config?.header?.chip?.metric;
+    const calculation =
+      metric && "calculation" in metric
+        ? metric.calculation
+        : { initial_value: 0, terms: [] };
+    const terms = [
+      ...(calculation.terms ?? []),
+      this._createDefaultHeaderCalculationTerm("series"),
+    ];
+    this._updateHeaderCalculation({
+      ...calculation,
+      terms,
+    });
+    this._expandedHeaderTermKeys = new Set(this._expandedHeaderTermKeys).add(
+      terms.length - 1
+    );
+  }
+
+  private _removeHeaderCalculationTerm(index: number) {
+    const metric = this._config?.header?.chip?.metric;
+    if (!metric || !("calculation" in metric)) {
+      return;
+    }
+    const terms = [...(metric.calculation.terms ?? [])];
+    terms.splice(index, 1);
+    this._updateHeaderCalculation({
+      ...metric.calculation,
+      terms,
+    });
+    const nextExpanded = new Set<number>();
+    this._expandedHeaderTermKeys.forEach((oldIndex) => {
+      if (oldIndex === index) {
+        return;
+      }
+      nextExpanded.add(oldIndex > index ? oldIndex - 1 : oldIndex);
+    });
+    this._expandedHeaderTermKeys = nextExpanded;
+  }
+
+  private _setHeaderTermSource(
+    index: number,
+    source: "series" | "stack" | "entity_state" | "constant"
+  ) {
+    const metric = this._config?.header?.chip?.metric;
+    if (!metric || !("calculation" in metric)) {
+      return;
+    }
+    const current = metric.calculation.terms?.[index];
+    const next = {
+      ...this._createDefaultHeaderCalculationTerm(source),
+      operation: current?.operation ?? "add",
+    };
+    const terms = [...(metric.calculation.terms ?? [])];
+    terms[index] = next;
+    this._updateHeaderCalculation({
+      ...metric.calculation,
+      terms,
+    });
+    this._expandedHeaderTermKeys = new Set(this._expandedHeaderTermKeys).add(index);
+  }
+
+  private _updateHeaderCalculationTerm(
+    index: number,
+    key: string,
+    value: unknown
+  ) {
+    const metric = this._config?.header?.chip?.metric;
+    if (!metric || !("calculation" in metric)) {
+      return;
+    }
+    const terms = [...(metric.calculation.terms ?? [])];
+    if (index < 0 || index >= terms.length) {
+      return;
+    }
+    const term = { ...terms[index] } as Record<string, unknown>;
+    if (value === undefined || value === "") {
+      delete term[key];
+    } else {
+      term[key] = value;
+    }
+    terms[index] = term as EnergyCustomGraphHeaderCalculationTermConfig;
+    this._updateHeaderCalculation({
+      ...metric.calculation,
+      terms,
+    });
+    this._expandedHeaderTermKeys = new Set(this._expandedHeaderTermKeys).add(index);
+  }
+
+  private _toggleHeaderTermExpanded(index: number) {
+    const next = new Set(this._expandedHeaderTermKeys);
+    if (next.has(index)) {
+      next.delete(index);
+    } else {
+      next.add(index);
+    }
+    this._expandedHeaderTermKeys = next;
+  }
+
+  private _formatHeaderTermDescriptor(
+    term: EnergyCustomGraphHeaderCalculationTermConfig
+  ): string {
+    if (term.source === "series") {
+      const option = this._getSeriesReferenceOptions().find(
+        (item) => item.value === term.series_id
+      );
+      return option?.label ?? term.series_id ?? "No series selected";
+    }
+    if (term.source === "stack") {
+      return term.stack ? `Stack: ${term.stack}` : "No stack selected";
+    }
+    if (term.source === "entity_state") {
+      return term.entity_id ?? "No entity selected";
+    }
+    if (term.source === "constant") {
+      return `Constant: ${term.constant ?? 0}`;
+    }
+    return "No input selected";
   }
 
   private _addSeries() {
@@ -2484,19 +3420,34 @@ ${this._renderTimespanSection(cfg)}
     if (!this._config) {
       return;
     }
+    const normalizedValue =
+      key === "series" && Array.isArray(value)
+        ? this._normalizeSeriesIds(value as EnergyCustomGraphSeriesConfig[])
+        : value;
     const config: EnergyCustomGraphCardConfig = {
       ...this._config,
-      [key]: value,
+      [key]: normalizedValue,
     };
+    if (normalizedValue === undefined) {
+      delete (config as any)[key];
+    }
     if (key === "aggregation") {
-      if (value === undefined) {
+      if (normalizedValue === undefined) {
         delete (config as any).aggregation;
       } else if (
-        typeof value === "object" &&
-        Object.keys(value as any).length === 0
+        typeof normalizedValue === "object" &&
+        Object.keys(normalizedValue as any).length === 0
       ) {
         delete (config as any).aggregation;
       }
+    }
+    if (
+      key === "header" &&
+      (normalizedValue === undefined ||
+        (typeof normalizedValue === "object" &&
+          Object.keys(normalizedValue as any).length === 0))
+    ) {
+      delete (config as any).header;
     }
     if (config.timespan?.mode !== "energy") {
       delete config.collection_key;

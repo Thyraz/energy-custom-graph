@@ -118,6 +118,7 @@ By default the card mirrors the core energy cards and automatically selects the 
 | --- | ---- | ------- | ----------- |
 | `type` | string | – | Must be `custom:energy-custom-graph-card`. |
 | `title` | string | – | Optional card header. |
+| `header` | object | – | Optional header chip configuration (see below). |
 | `chart_height` | string | – | CSS height (e.g. `300px`). Ignored when the card is used inside a section layout (the grid rows control the height). |
 | `timespan` | object | `{mode: "energy"}` | Controls the time range displayed (see below). |
 | `collection_key` | string | – | Custom key when multiple energy date pickers are present (only for `timespan.mode: "energy"`). <br>[More Info](https://www.home-assistant.io/dashboards/energy/#using-multiple-collections) |
@@ -175,10 +176,90 @@ timespan:
 ```
 Display a fixed time range. Dates use ISO 8601 format. If omitted, `start` defaults to the beginning of today and `end` defaults to the end of the start day.
 
+### Header chip
+
+`header.chip` shows a single value on the right side of the card header, similar to the default HA cards. 
+The value can be created from existing series, from the current state of an entity, or from a calculation with (multiple) series or entity states.
+
+This feature respects the visible timespan to calculate the values for series.
+So you can e.g. sum up the values of the single bars to a total.
+The possibility to use calculations and current entity states should hopefully allow to realize more complex ideas. 
+
+```yaml
+header:
+  chip:
+    label: Usage
+    unit: kWh
+    precision: 1
+    metric:
+      source: stack
+      stack: energy
+      reducer: sum
+      sign: positive
+```
+
+The chip text is rendered as `label value unit`. If `label` is omitted, only the value and unit are shown. If `unit` is omitted, the card uses an automatic unit for simple series, stack, and entity-state metrics when possible. For calculation metrics you have to set `unit` explicitly.
+
+| Key | Type | Default | Description |
+| --- | ---- | ------- | ----------- |
+| `label` | string | – | Text shown before the value. |
+| `unit` | string | auto | Unit shown after the value. Leave unset for automatic units when possible. |
+| `precision` | number | `tooltip_precision` or `2` | Maximum number of decimal places. |
+| `metric` | object | – | Value source and calculation. |
+
+Metric sources:
+
+```yaml
+# Existing series by series id
+metric:
+  source: series
+  series_id: grid_import
+  reducer: sum
+
+# All series with the same stack key
+metric:
+  source: stack
+  stack: energy
+  reducer: sum
+  sign: positive
+
+# Current HA entity state
+metric:
+  source: entity_state
+  entity_id: sensor.current_power
+```
+
+Calculation metrics combine scalar terms:
+
+```yaml
+header:
+  chip:
+    label: Net
+    unit: kWh
+    metric:
+      calculation:
+        initial_value: 0
+        terms:
+          - source: series
+            series_id: grid_import
+            reducer: sum
+          - operation: subtract
+            source: series
+            series_id: grid_export
+            reducer: sum
+```
+
+Supported reducer functions are `sum`, `mean`, `min`, `max`, `first`, and `last`.
+
+For stacks, `sign` controls which values are used: `signed` (default), `positive` (omit negative values), `negative` (omit positive values), or `absolute` (uses Math.abs() on the values).
+
+Metric sources and calculation terms support `multiply`, `add`, `clip_min`, and `clip_max`. Calculation metrics also support those transforms on the final result.
+
 ### `series` options
 
 | Key | Type | Default | Description |
 | --- | ---- | ------- | ----------- |
+| `id` | string | auto in editor | Stable identifier used by header metrics. YAML users should set this when referencing the series from `header.chip`. |
 | `name` | string | entity name | Display name shown in tooltip and legend. |
 | `source` | `"statistic"`, `"calculation"`, `"forecast"` | inferred | Data source type. When omitted the card can auto-detect the source based on the other fields for `statistic` and `calculation` signals. Use `forecast` to plot solar forecasts configured in the Energy dashboard. |
 | `statistic_id` | string | – | Entity with long term statistics (e.g. `sensor.entity_id`). Required unless series uses a `calculation` instead. |
@@ -192,6 +273,7 @@ Display a fixed time range. Dates use ISO 8601 format. If omitted, `start` defau
 | `show_in_tooltip` | boolean | `true` | Controls whether the series appears in the tooltip. Set to `false` to keep the graph visible while hiding numbers from the hover tooltip. |
 | `show_value_labels` | boolean | `false` | For unstacked bar charts only: show static value labels at the outer end of each non-zero bar. Ignored for stacked bars. |
 | `value_label_precision` | number | `0` | Decimal places for value labels. Units are not shown in value labels. |
+| `show_in_chart` | boolean | `true` | When `false`, the series is loaded and can be used by header metrics, but is not rendered in the chart, legend, tooltip, or axis calculation. |
 | `hidden_by_default` | boolean | `false` | Whether the series is initially hidden when the chart loads. The series can still be toggled via the legend. |
 | `color` | string | next in palette | Specific color (supports `#rrggbb`, `rgb()` or CSS variables). |
 | `compare_color` | string | inherit | Optional color for compare series. Defaults to the base series color with reduced opacity. |

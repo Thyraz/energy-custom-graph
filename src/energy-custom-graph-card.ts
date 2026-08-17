@@ -63,8 +63,20 @@ import type {
   EnergyCustomGraphRelativeCalendarPeriod,
   EnergyCustomGraphTimeOffsetConfig,
   EnergyCustomGraphTimeOffsetUnit,
+  EnergyCustomGraphHeaderCalculationConfig,
+  EnergyCustomGraphHeaderCalculationTermConfig,
+  EnergyCustomGraphHeaderChipConfig,
+  EnergyCustomGraphHeaderMetricConfig,
+  EnergyCustomGraphHeaderMetricInputConfig,
+  EnergyCustomGraphHeaderMetricTransform,
+  EnergyCustomGraphHeaderReducer,
+  EnergyCustomGraphHeaderStackSign,
 } from "./types";
-import { buildSeries } from "./chart/series-builder";
+import {
+  BAR_MAX_WIDTH,
+  buildSeries,
+  type ResolvedSeriesData,
+} from "./chart/series-builder";
 import type {
   SeriesOption,
   ECOption,
@@ -73,7 +85,6 @@ import type {
   BarSeriesOption,
   XAxisOption,
 } from "./types/echarts";
-import { BAR_MAX_WIDTH } from "./chart/series-builder";
 
 interface EnergyData {
   start: Date;
@@ -143,6 +154,16 @@ interface LovelaceGridOptions {
   fixed_columns?: boolean;
 }
 
+interface HeaderChipRender {
+  text: string;
+  tooltip: string;
+}
+
+interface HeaderMetricValue {
+  value: number;
+  unit?: string | null;
+}
+
 const DEFAULT_TIMESPAN: EnergyCustomGraphTimespanConfig = { mode: "energy" };
 const LOG_PREFIX = "[energy-custom-graph-card]";
 const FETCH_TIMEOUT_MS = 60_000;
@@ -192,6 +213,7 @@ export class EnergyCustomGraphCard extends LitElement {
   @state() private _isLoading = false;
   @state() private _chartData: SeriesOption[] = [];
   @state() private _chartOptions?: ECOption;
+  @state() private _headerChip?: HeaderChipRender;
   @state() private _disabledMessage?: string;
   @state() private _usesSectionLayout = false;
 
@@ -218,6 +240,7 @@ export class EnergyCustomGraphCard extends LitElement {
   private _lastRawEndMain?: number;
   private _lastRawEndCompare?: number;
   private _seriesConfigById: Map<string, EnergyCustomGraphSeriesConfig> = new Map();
+  private _headerMetricWarnings = new Set<string>();
   private _liveStatistics?: Statistics;
   private _liveStatisticsCompare?: Statistics;
   private _lastStatisticIds?: string[];
@@ -3941,6 +3964,9 @@ export class EnergyCustomGraphCard extends LitElement {
     });
 
     const oldConfig = this._config;
+    if (oldConfig !== config) {
+      this._headerMetricWarnings.clear();
+    }
     this._config = {
       ...config,
       timespan: config.timespan ?? DEFAULT_TIMESPAN,
@@ -3980,7 +4006,8 @@ export class EnergyCustomGraphCard extends LitElement {
       changedProps.has("_comparePeriodEnd") ||
       changedProps.has("_config") ||
       changedProps.has("_forecastSeriesData") ||
-      changedProps.has("_forecastSeriesDataCompare")
+      changedProps.has("_forecastSeriesDataCompare") ||
+      (changedProps.has("hass") && this._headerMetricUsesEntityState())
     ) {
       this._generateChart();
     }
@@ -4052,15 +4079,31 @@ export class EnergyCustomGraphCard extends LitElement {
       return nothing;
     }
 
-    const hasTitle = Boolean(this._config.title && this._config.title.trim().length);
+    const title = this._config.title?.trim();
+    const hasTitle = Boolean(title);
+    const headerChip = this._headerChip;
+    const hasHeader = hasTitle || Boolean(headerChip);
     const contentClasses = {
       content: true,
-      "content--no-title": !hasTitle,
+      "content--no-title": !hasHeader,
     };
 
     return html`
       <ha-card>
-        ${this._config.title ? html`<h1 class="card-header">${this._config.title}</h1>` : nothing}
+        ${hasHeader
+          ? html`
+              <div class="card-header">
+                <h1 class="card-title">${title ?? ""}</h1>
+                ${headerChip
+                  ? html`
+                      <div class="header-chip" title=${headerChip.tooltip}>
+                        ${headerChip.text}
+                      </div>
+                    `
+                  : nothing}
+              </div>
+            `
+          : nothing}
         <div class=${classMap(contentClasses)}>
           ${this._renderChart()}
         </div>
@@ -4137,6 +4180,7 @@ export class EnergyCustomGraphCard extends LitElement {
     if (!this._config || !this._periodStart) {
       this._chartData = [];
       this._chartOptions = undefined;
+      this._headerChip = undefined;
       this._unitsBySeries = new Map();
       this._indicatorColorBySeries = new Map();
       this._seriesConfigById = new Map();
@@ -4146,6 +4190,7 @@ export class EnergyCustomGraphCard extends LitElement {
     if (!this._statistics || !this._statisticsRange) {
       this._chartData = [];
       this._chartOptions = undefined;
+      this._headerChip = undefined;
       this._unitsBySeries = new Map();
       this._indicatorColorBySeries = new Map();
       this._seriesConfigById = new Map();
@@ -4172,6 +4217,7 @@ export class EnergyCustomGraphCard extends LitElement {
       unitBySeries,
       seriesById,
       indicatorColorBySeries,
+      resolvedSeriesById,
     } = buildSeries({
       hass: this.hass,
       statistics: mainSeriesInputs.statistics,
@@ -4430,6 +4476,7 @@ export class EnergyCustomGraphCard extends LitElement {
 
     const combinedSeries = [...comparePlaceholders, ...compareSeries, ...mainSeries];
     this._seriesConfigById = new Map(combinedSeriesById);
+    this._headerChip = this._evaluateHeaderChip(resolvedSeriesById);
 
     const displayEnd =
       this._periodEnd?.getTime() ?? this._statisticsRange.end ?? null;
@@ -5989,6 +6036,446 @@ export class EnergyCustomGraphCard extends LitElement {
     return { yAxis, axisUnitByIndex };
   }
 
+  private _evaluateHeaderChip(
+    resolvedSeriesById: Map<string, ResolvedSeriesData>
+  ): HeaderChipRender | undefined {
+    const chip = this._config?.header?.chip;
+    if (!chip?.metric) {
+      return undefined;
+    }
+
+    const result = this._evaluateHeaderMetric(chip.metric, resolvedSeriesById);
+    if (!result || !Number.isFinite(result.value)) {
+      return undefined;
+    }
+
+    const precision = this._resolveHeaderChipPrecision(chip);
+    const unit = this._resolveHeaderChipUnit(chip, result.unit);
+    const formatted = this._formatNumber(result.value, {
+      maximumFractionDigits: precision,
+    });
+    const valueText = unit ? `${formatted} ${unit}` : formatted;
+    const label = chip.label?.trim();
+    const text = label ? `${label} ${valueText}` : valueText;
+
+    return {
+      text,
+      tooltip: text,
+    };
+  }
+
+  private _headerMetricUsesEntityState(
+    metric: EnergyCustomGraphHeaderMetricConfig | undefined =
+      this._config?.header?.chip?.metric
+  ): boolean {
+    if (!metric) {
+      return false;
+    }
+    if ("calculation" in metric) {
+      return (metric.calculation.terms ?? []).some(
+        (term) => term.source === "entity_state"
+      );
+    }
+    return metric.source === "entity_state";
+  }
+
+  private _evaluateHeaderMetric(
+    metric: EnergyCustomGraphHeaderMetricConfig,
+    resolvedSeriesById: Map<string, ResolvedSeriesData>
+  ): HeaderMetricValue | undefined {
+    if ("calculation" in metric) {
+      const result = this._evaluateHeaderCalculation(
+        metric.calculation,
+        resolvedSeriesById
+      );
+      if (!result) {
+        return undefined;
+      }
+      return this._applyHeaderMetricTransform(result, metric);
+    }
+
+    return this._evaluateHeaderMetricInput(metric, resolvedSeriesById);
+  }
+
+  private _evaluateHeaderCalculation(
+    calculation: EnergyCustomGraphHeaderCalculationConfig,
+    resolvedSeriesById: Map<string, ResolvedSeriesData>
+  ): HeaderMetricValue | undefined {
+    const terms = calculation.terms ?? [];
+    if (!terms.length) {
+      this._warnHeaderMetric(
+        "calculation-empty",
+        "Header chip calculation has no terms."
+      );
+      return undefined;
+    }
+
+    let total = calculation.initial_value ?? 0;
+
+    for (const [index, term] of terms.entries()) {
+      const termResult = this._evaluateHeaderCalculationTerm(
+        term,
+        resolvedSeriesById,
+        index
+      );
+      if (!termResult || !Number.isFinite(termResult.value)) {
+        return undefined;
+      }
+
+      const value = termResult.value;
+      switch (term.operation ?? "add") {
+        case "subtract":
+          total -= value;
+          break;
+        case "multiply":
+          total *= value;
+          break;
+        case "divide":
+          if (value === 0) {
+            this._warnHeaderMetric(
+              `calculation-division-zero-${index}`,
+              "Header chip calculation encountered division by zero."
+            );
+            return undefined;
+          }
+          total /= value;
+          break;
+        case "add":
+        default:
+          total += value;
+          break;
+      }
+    }
+
+    if (!Number.isFinite(total)) {
+      return undefined;
+    }
+    return { value: total };
+  }
+
+  private _evaluateHeaderCalculationTerm(
+    term: EnergyCustomGraphHeaderCalculationTermConfig,
+    resolvedSeriesById: Map<string, ResolvedSeriesData>,
+    index: number
+  ): HeaderMetricValue | undefined {
+    if (term.source === "constant") {
+      const rawValue =
+        typeof term.constant === "number" && Number.isFinite(term.constant)
+          ? term.constant
+          : 0;
+      return this._applyHeaderMetricTransform({ value: rawValue }, term);
+    }
+
+    const result = this._evaluateHeaderMetricInput(
+      term,
+      resolvedSeriesById,
+      `term-${index}`
+    );
+    if (!result) {
+      return undefined;
+    }
+    return result;
+  }
+
+  private _evaluateHeaderMetricInput(
+    metric: EnergyCustomGraphHeaderMetricInputConfig,
+    resolvedSeriesById: Map<string, ResolvedSeriesData>,
+    warningScope = "metric"
+  ): HeaderMetricValue | undefined {
+    switch (metric.source) {
+      case "series":
+        return this._evaluateHeaderSeriesMetric(
+          metric,
+          resolvedSeriesById,
+          warningScope
+        );
+      case "stack":
+        return this._evaluateHeaderStackMetric(
+          metric,
+          resolvedSeriesById,
+          warningScope
+        );
+      case "entity_state":
+        return this._evaluateHeaderEntityStateMetric(metric, warningScope);
+      default:
+        return undefined;
+    }
+  }
+
+  private _evaluateHeaderSeriesMetric(
+    metric: Extract<EnergyCustomGraphHeaderMetricInputConfig, { source: "series" }>,
+    resolvedSeriesById: Map<string, ResolvedSeriesData>,
+    warningScope: string
+  ): HeaderMetricValue | undefined {
+    const seriesId = metric.series_id?.trim();
+    if (!seriesId) {
+      this._warnHeaderMetric(
+        `${warningScope}-series-id-missing`,
+        "Header chip series metric is missing a series_id."
+      );
+      return undefined;
+    }
+
+    const series = resolvedSeriesById.get(seriesId);
+    if (!series) {
+      this._warnHeaderMetric(
+        `${warningScope}-series-missing-${seriesId}`,
+        `Header chip references unknown series "${seriesId}".`
+      );
+      return undefined;
+    }
+
+    const reducer = metric.reducer ?? "sum";
+    this._warnIfRawHeaderSum(`${warningScope}-series-${seriesId}`, reducer);
+    const reduced = this._reduceHeaderValues(
+      this._headerValuesFromSeries(series.data),
+      reducer
+    );
+    if (reduced === undefined) {
+      return undefined;
+    }
+
+    return this._applyHeaderMetricTransform(
+      { value: reduced, unit: series.unit },
+      metric
+    );
+  }
+
+  private _evaluateHeaderStackMetric(
+    metric: Extract<EnergyCustomGraphHeaderMetricInputConfig, { source: "stack" }>,
+    resolvedSeriesById: Map<string, ResolvedSeriesData>,
+    warningScope: string
+  ): HeaderMetricValue | undefined {
+    const stack = metric.stack?.trim();
+    if (!stack) {
+      this._warnHeaderMetric(
+        `${warningScope}-stack-missing`,
+        "Header chip stack metric is missing a stack name."
+      );
+      return undefined;
+    }
+
+    const reducer = metric.reducer ?? "sum";
+    const sign = metric.sign ?? "signed";
+    const values: number[] = [];
+    const units = new Set<string>();
+    let matchedSeries = 0;
+
+    resolvedSeriesById.forEach((series) => {
+      if (series.config.stack?.trim() !== stack) {
+        return;
+      }
+      matchedSeries += 1;
+      if (series.unit && series.unit.trim()) {
+        units.add(series.unit.trim());
+      }
+      values.push(...this._headerValuesFromSeries(series.data, sign));
+    });
+
+    if (!matchedSeries) {
+      this._warnHeaderMetric(
+        `${warningScope}-stack-unknown-${stack}`,
+        `Header chip references unknown stack "${stack}".`
+      );
+      return undefined;
+    }
+
+    this._warnIfRawHeaderSum(`${warningScope}-stack-${stack}`, reducer);
+    const reduced = this._reduceHeaderValues(values, reducer);
+    if (reduced === undefined) {
+      return undefined;
+    }
+
+    const unit = units.size === 1 ? Array.from(units)[0] : undefined;
+    return this._applyHeaderMetricTransform(
+      { value: reduced, unit },
+      metric
+    );
+  }
+
+  private _evaluateHeaderEntityStateMetric(
+    metric: Extract<EnergyCustomGraphHeaderMetricInputConfig, { source: "entity_state" }>,
+    warningScope: string
+  ): HeaderMetricValue | undefined {
+    const entityId = metric.entity_id?.trim();
+    if (!entityId) {
+      this._warnHeaderMetric(
+        `${warningScope}-entity-missing`,
+        "Header chip entity-state metric is missing an entity_id."
+      );
+      return undefined;
+    }
+
+    const stateObj = this.hass?.states?.[entityId];
+    if (!stateObj) {
+      this._warnHeaderMetric(
+        `${warningScope}-entity-unknown-${entityId}`,
+        `Header chip references unknown entity "${entityId}".`
+      );
+      return undefined;
+    }
+
+    if (
+      stateObj.state === "unknown" ||
+      stateObj.state === "unavailable" ||
+      stateObj.state === ""
+    ) {
+      return undefined;
+    }
+
+    const value = Number(stateObj.state);
+    if (!Number.isFinite(value)) {
+      this._warnHeaderMetric(
+        `${warningScope}-entity-nonnumeric-${entityId}`,
+        `Header chip entity "${entityId}" has a non-numeric state.`
+      );
+      return undefined;
+    }
+
+    return this._applyHeaderMetricTransform(
+      {
+        value,
+        unit: stateObj.attributes?.unit_of_measurement,
+      },
+      metric
+    );
+  }
+
+  private _headerValuesFromSeries(
+    data: [number, number | null][],
+    sign: EnergyCustomGraphHeaderStackSign = "signed"
+  ): number[] {
+    const values: number[] = [];
+    data.forEach(([, value]) => {
+      if (typeof value !== "number" || !Number.isFinite(value)) {
+        return;
+      }
+      switch (sign) {
+        case "positive":
+          if (value > 0) {
+            values.push(value);
+          }
+          break;
+        case "negative":
+          if (value < 0) {
+            values.push(value);
+          }
+          break;
+        case "absolute":
+          values.push(Math.abs(value));
+          break;
+        case "signed":
+        default:
+          values.push(value);
+          break;
+      }
+    });
+    return values;
+  }
+
+  private _reduceHeaderValues(
+    values: number[],
+    reducer: EnergyCustomGraphHeaderReducer
+  ): number | undefined {
+    const numericValues = values.filter((value) =>
+      typeof value === "number" && Number.isFinite(value)
+    );
+    if (!numericValues.length) {
+      return undefined;
+    }
+
+    switch (reducer) {
+      case "mean":
+        return (
+          numericValues.reduce((sum, value) => sum + value, 0) /
+          numericValues.length
+        );
+      case "min":
+        return Math.min(...numericValues);
+      case "max":
+        return Math.max(...numericValues);
+      case "first":
+        return numericValues[0];
+      case "last":
+        return numericValues[numericValues.length - 1];
+      case "sum":
+      default:
+        return numericValues.reduce((sum, value) => sum + value, 0);
+    }
+  }
+
+  private _applyHeaderMetricTransform(
+    result: HeaderMetricValue,
+    transform: EnergyCustomGraphHeaderMetricTransform
+  ): HeaderMetricValue | undefined {
+    const multiplied = result.value * (transform.multiply ?? 1);
+    const shifted = multiplied + (transform.add ?? 0);
+    const value = EnergyCustomGraphCard.clampValue(
+      shifted,
+      transform.clip_min,
+      transform.clip_max
+    );
+    if (!Number.isFinite(value)) {
+      return undefined;
+    }
+    return {
+      ...result,
+      value,
+    };
+  }
+
+  private _resolveHeaderChipPrecision(
+    chip: EnergyCustomGraphHeaderChipConfig
+  ): number {
+    const precision =
+      typeof chip.precision === "number" && Number.isFinite(chip.precision)
+        ? chip.precision
+        : this._config?.tooltip_precision ?? 2;
+    return Math.max(0, Math.min(20, Math.trunc(precision)));
+  }
+
+  private _resolveHeaderChipUnit(
+    chip: EnergyCustomGraphHeaderChipConfig,
+    autoUnit: string | null | undefined
+  ): string | undefined {
+    if (Object.prototype.hasOwnProperty.call(chip, "unit")) {
+      return typeof chip.unit === "string" && chip.unit.trim().length
+        ? chip.unit.trim()
+        : undefined;
+    }
+    if (this._config?.show_unit === false) {
+      return undefined;
+    }
+    return typeof autoUnit === "string" && autoUnit.trim().length
+      ? autoUnit.trim()
+      : undefined;
+  }
+
+  private _warnIfRawHeaderSum(
+    key: string,
+    reducer: EnergyCustomGraphHeaderReducer
+  ): void {
+    if (this._statisticsPeriod !== "raw" || reducer !== "sum") {
+      return;
+    }
+    this._warnHeaderMetric(
+      `raw-sum-${key}`,
+      "Header chip uses reducer sum with RAW history. Sample values will be added, which is usually not suitable for energy totals."
+    );
+  }
+
+  private _warnHeaderMetric(
+    key: string,
+    message: string,
+    details?: Record<string, unknown>
+  ): void {
+    if (this._headerMetricWarnings.has(key)) {
+      return;
+    }
+    this._headerMetricWarnings.add(key);
+    this._log("warn", message, details);
+  }
+
   private _renderTooltip(params: unknown): HTMLElement | null {
     if (!Array.isArray(params) || !params.length) {
       return null;
@@ -6470,8 +6957,38 @@ export class EnergyCustomGraphCard extends LitElement {
     }
 
     .card-header {
-      margin: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
       padding: 16px 16px 0px 16px;
+    }
+
+    .card-title {
+      margin: 0;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: var(--ha-font-size-3xl, 24px);
+      font-weight: var(--ha-font-weight-normal, 400);
+      line-height: 1.2;
+    }
+
+    .header-chip {
+      flex: 0 1 auto;
+      min-width: 0;
+      max-width: 45%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--primary-text-color);
+      font-size: var(--ha-font-size-m, 14px);
+      font-weight: var(--ha-font-weight-medium, 500);
+      line-height: normal;
+      padding: var(--ha-space-1, 4px) var(--ha-space-2, 8px);
+      border-radius: var(--ha-border-radius-md, 6px);
+      border: 1px solid var(--divider-color);
     }
 
     .content {

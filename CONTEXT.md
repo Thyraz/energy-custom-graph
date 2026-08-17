@@ -60,6 +60,14 @@ _Avoid_: Raw stream filtering
 An estimated hourly value for the ongoing hour, built from recent 5-minute statistics until Home Assistant publishes the hourly aggregate.
 _Avoid_: Live value, near real-time value
 
+**Header chip**:
+A compact value display in the card header beside the title.
+_Avoid_: Text field, header value
+
+**Header metric**:
+A scalar value shown in a header chip, based on chart data or an entity state.
+_Avoid_: Summary value, template text
+
 **Tooltip**:
 The hover or click detail panel that shows chart values at a selected point in time.
 _Avoid_: Popup, hover label
