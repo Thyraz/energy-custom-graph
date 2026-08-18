@@ -4558,6 +4558,7 @@ export class EnergyCustomGraphCard extends LitElement {
     const showXAxisPointer = this._config?.show_x_axis_pointer !== false;
     const showYAxisPointer = this._config?.show_y_axis_pointer === true;
     const showAnyAxisPointer = showXAxisPointer || showYAxisPointer;
+    const useHiddenXAxisPointerForTooltip = showTooltip && !showAnyAxisPointer;
 
     const options: ECOption = {
       xAxis,
@@ -4573,6 +4574,7 @@ export class EnergyCustomGraphCard extends LitElement {
 
     if (showTooltip || showAnyAxisPointer) {
       options.tooltip = {
+        show: true,
         trigger: "axis",
         showContent: showTooltip,
         appendTo: document.body,
@@ -4591,27 +4593,55 @@ export class EnergyCustomGraphCard extends LitElement {
               ? "x"
               : showYAxisPointer
                 ? "y"
-                : "auto",
+                : "x",
         },
       };
-
-      xAxis[0] = {
-        ...xAxis[0],
-        axisPointer: {
-          ...((xAxis[0] as Record<string, any>).axisPointer ?? {}),
-          show: showXAxisPointer,
-        },
+    } else {
+      options.tooltip = {
+        show: false,
+        trigger: "none",
       };
-      yAxis.forEach((axis, index) => {
-        yAxis[index] = {
-          ...axis,
-          axisPointer: {
-            ...((axis as Record<string, any>).axisPointer ?? {}),
-            show: showYAxisPointer,
-          },
-        };
-      });
     }
+
+    // ECharts' axis tooltip trigger still needs an axisPointer model. When both
+    // guide lines are disabled, keep an invisible X pointer instead of setting
+    // every axisPointer to show: false, which prevents the tooltip from opening.
+    const existingXAxisPointer =
+      (xAxis[0] as Record<string, any>).axisPointer ?? {};
+    const existingXAxisPointerLabel = existingXAxisPointer.label ?? {};
+    const xAxisPointerType = showXAxisPointer
+      ? "line"
+      : useHiddenXAxisPointerForTooltip
+        ? "none"
+        : "line";
+    xAxis[0] = {
+      ...xAxis[0],
+      axisPointer: {
+        ...existingXAxisPointer,
+        show: showXAxisPointer || useHiddenXAxisPointerForTooltip,
+        type: xAxisPointerType,
+        ...(useHiddenXAxisPointerForTooltip
+          ? {
+              label: {
+                ...existingXAxisPointerLabel,
+                show: false,
+              },
+            }
+          : {}),
+      },
+    };
+    yAxis.forEach((axis, index) => {
+      const existingYAxisPointer =
+        (axis as Record<string, any>).axisPointer ?? {};
+      yAxis[index] = {
+        ...axis,
+        axisPointer: {
+          ...existingYAxisPointer,
+          show: showYAxisPointer,
+          type: "line",
+        },
+      };
+    });
 
     if (legendOption) {
       options.legend = legendOption;
