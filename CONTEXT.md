@@ -16,6 +16,22 @@ _Avoid_: Plot
 A configured data stream drawn in the chart and represented in the legend and tooltip.
 _Avoid_: Dataset
 
+**Series source**:
+The kind of input a series uses: entity, calculation, or forecast.
+_Avoid_: Statistic, entity type, data source type
+
+**Series editor**:
+The card editor area for adding, ordering, and configuring series.
+_Avoid_: Entity editor, dataset editor
+
+**Series option group**:
+A collapsible area inside one series editor row that groups related series options, such as source, style, visibility, or transform.
+_Avoid_: Series segment, tab
+
+**Duplicate series**:
+A card editor action that creates a new series from an existing series configuration.
+_Avoid_: Copy series, clone series
+
 **Series time offset**:
 A per-series shift of the source timespan; the resulting data is displayed in the chart timespan.
 _Avoid_: Render offset
@@ -26,7 +42,15 @@ _Avoid_: Signal color, base color
 
 **Statistic series**:
 A series backed by one Home Assistant statistic ID.
-_Avoid_: Long-term series
+_Avoid_: Long-term series, entity series
+
+**External statistic**:
+A Home Assistant statistic that has statistic metadata but no matching entity state.
+_Avoid_: Entity, raw-only entity
+
+**Statistic type**:
+The statistic value field requested for a statistic series or calculation term, such as change, sum, mean, min, max, or state.
+_Avoid_: Entity type, data type
 
 **Calculation series**:
 A series computed from one or more terms.
@@ -48,6 +72,14 @@ _Avoid_: Solar source
 Unaggregated Home Assistant recorder history states used as an aggregation interval.
 _Avoid_: Raw source
 
+**Raw-only entity**:
+A Home Assistant entity that can provide raw history but has no matching statistic metadata.
+_Avoid_: Raw-only source, statistic source, entity type
+
+**Unknown entity**:
+An editor-entered entity ID or statistic ID with neither entity state nor statistic metadata.
+_Avoid_: Raw-only entity, external statistic
+
 **Last-known value**:
 The most recent non-empty raw history value reused for a calculation term when no value exists at the exact timestamp.
 _Avoid_: Cached value
@@ -60,6 +92,42 @@ _Avoid_: Raw stream filtering
 An estimated hourly value for the ongoing hour, built from recent 5-minute statistics until Home Assistant publishes the hourly aggregate.
 _Avoid_: Live value, near real-time value
 
+**Card editor**:
+Home Assistant's graphical editor for configuring Energy Custom Graph in Lovelace.
+_Avoid_: GUI editor, visual editor
+
+**Card preview**:
+The Home Assistant-rendered preview of the configured card shown beside or below the card editor.
+_Avoid_: Chart preview, editor preview
+
+**Editor section**:
+A top-level card editor area that groups related configuration options such as chart settings, card header, or series.
+_Avoid_: Settings category, editor panel
+
+**Chart settings**:
+The card editor section for options that affect the chart as a whole.
+_Avoid_: General settings, graph settings
+
+**Contextual editor option**:
+A card editor option whose visibility or enabled state depends on the current configuration.
+_Avoid_: Dynamic option, conditional field
+
+**More options**:
+The collapsed end-user control that reveals advanced editor options within the current editor context.
+_Avoid_: Advanced, expert options
+
+**Editor summary**:
+A compact read-only summary shown on a collapsed editor section or series row.
+_Avoid_: Preview text, collapsed description
+
+**HA-native editor control**:
+A Home Assistant-provided UI control used inside the card editor.
+_Avoid_: Custom editor widget, bespoke editor control
+
+**Card header**:
+The visible top area of the card containing the title and optional header chip.
+_Avoid_: Editor header, graph header
+
 **Header chip**:
 A compact value display in the card header beside the title.
 _Avoid_: Text field, header value
@@ -67,6 +135,14 @@ _Avoid_: Text field, header value
 **Header metric**:
 A scalar value shown in a header chip, based on chart data or an entity state.
 _Avoid_: Summary value, template text
+
+**Editor help hint**:
+A short help explanation for one card editor option, shown beside the option instead of as README-only documentation.
+_Avoid_: Tooltip, inline documentation
+
+**Editor hint severity**:
+The visual importance of an editor help hint: info, warning, or error.
+_Avoid_: Hint type, tooltip severity
 
 **Tooltip**:
 The hover or click detail panel that shows chart values at a selected point in time.

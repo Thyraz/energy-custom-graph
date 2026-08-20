@@ -1,6 +1,5 @@
-import { css, html, LitElement, nothing } from "lit";
+import { css, html, LitElement, nothing, type PropertyValues } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import { classMap } from "lit/directives/class-map.js";
 import type { HomeAssistant, LovelaceCardEditor } from "custom-card-helpers";
 import { fireEvent } from "custom-card-helpers";
 import type {
@@ -27,6 +26,29 @@ import type {
 } from "./types";
 import { DEFAULT_COLORS } from "./chart/series-builder";
 import { fetchEnergyPreferences } from "./data/energy";
+import {
+  getStatisticLabel,
+  getStatisticMetadata,
+  type StatisticsMetaData,
+} from "./data/statistics";
+import {
+  aggregationUsesRaw,
+  cleanSeriesForForecast,
+  cloneSeriesForDuplicate,
+  convertSeriesToCalculation,
+  convertSeriesToStatistic,
+  formatAggregationTarget,
+  getStatisticSourceIssue,
+  isStatisticTypeSupported,
+  normalizeStatisticId,
+  resolveSeriesSource,
+  resolveStatisticSourceStatus,
+  selectDefaultStatisticType,
+  seriesHasTimeOffset,
+  type EditorHintSeverity,
+  type EditorIssue,
+  type StatisticSourceResolution,
+} from "./editor-helpers";
 
 const ENERGY_COLOR_PRESETS: Array<{ label: string; value: string }> = [
   { label: "Grid Import • Blue", value: "--energy-grid-consumption-color" },
@@ -56,7 +78,7 @@ const AGGREGATION_OPTIONS: Array<{ value: EnergyCustomGraphAggregationTarget; la
   { value: "month", label: "Month" },
   { value: "year", label: "Year" },
   { value: "disabled", label: "Disable fetching" },
-  { value: "raw", label: "RAW (history)" },
+  { value: "raw", label: "RAW history" },
 ];
 
 const TIME_OFFSET_UNIT_OPTIONS: Array<{ value: EnergyCustomGraphTimeOffsetUnit; label: string }> = [
@@ -120,6 +142,15 @@ interface EditorTextInputConfig {
   onInput: (value: string, ev: Event) => void;
 }
 
+type SeriesOptionGroup = "source" | "style" | "visibility" | "transform";
+
+const SERIES_OPTION_GROUPS = new Set<SeriesOptionGroup>([
+  "source",
+  "style",
+  "visibility",
+  "transform",
+]);
+
 @customElement("energy-custom-graph-card-editor")
 export class EnergyCustomGraphCardEditor
   extends LitElement
@@ -129,19 +160,31 @@ export class EnergyCustomGraphCardEditor
 
   @state() private _config?: EnergyCustomGraphCardConfig;
 
-  @state() private _activeTab: "general" | "series" = "general";
+  @state() private _headerExpanded = false;
+  @state() private _chartSettingsExpanded = true;
+  @state() private _seriesSectionExpanded = true;
+  @state() private _legendExpanded = false;
+  @state() private _tooltipExpanded = false;
+  @state() private _chartMoreExpanded = false;
+  @state() private _headerMetricMoreExpanded = false;
   @state() private _expandedSeries = new Set<number>();
+  @state() private _seriesOptionGroupsExpanded = new Map<string, boolean>();
+  @state() private _seriesStyleMoreExpanded = new Set<number>();
+  @state() private _seriesVisibilityMoreExpanded = new Set<number>();
   @state() private _expandedTermKeys = new Set<string>();
   @state() private _expandedHeaderTermKeys = new Set<number>();
   @state() private _axesExpanded = false;
-  @state() private _aggregationExpanded = false;
+  @state() private _aggregationExpanded = true;
   @state() private _customColorDrafts: Map<number, string> = new Map();
   @state() private _colorModeSelections: Map<number, string> = new Map();
   @state() private _compareCustomColorDrafts: Map<number, string> = new Map();
   @state() private _compareColorModeSelections: Map<number, string> = new Map();
+  @state() private _metadataByStatisticId: Map<string, StatisticsMetaData | undefined> = new Map();
   @state() private _solarProductionOptions: Array<{ value: string; label: string; hasForecast: boolean }> = [];
   @state() private _solarOptionsLoading = false;
   @state() private _solarOptionsError?: string;
+
+  private _metadataRequests = new Set<string>();
 
   async connectedCallback() {
     super.connectedCallback();
@@ -149,20 +192,99 @@ export class EnergyCustomGraphCardEditor
     void this._loadSolarProductionOptions();
   }
 
+  protected updated(changedProps: PropertyValues): void {
+    super.updated(changedProps);
+    if (changedProps.has("hass")) {
+      void this._loadSolarProductionOptions();
+      if (this._config) {
+        void this._ensureStatisticMetadataForConfig(this._config);
+      }
+    }
+  }
+
   private async _preloadEditorElements() {
     const needsEntityPicker = !customElements.get("ha-entity-picker");
-    if (!needsEntityPicker) {
+    const needsExpansionPanel = !customElements.get("ha-expansion-panel");
+    const needsButtonToggleGroup = !customElements.get("ha-button-toggle-group");
+    if (!needsEntityPicker && !needsExpansionPanel && !needsButtonToggleGroup) {
       return;
     }
 
     try {
       const helpers = await (window as any).loadCardHelpers();
-      const card = await helpers.createCardElement({ type: "entities", entities: [] });
-      await card.constructor.getConfigElement();
+      const preloaders: Promise<void>[] = [];
+      if (needsEntityPicker) {
+        preloaders.push(
+          this._preloadCardEditor(helpers, { type: "entities", entities: [] })
+        );
+      }
+      if (needsExpansionPanel || needsButtonToggleGroup) {
+        preloaders.push(
+          this._preloadCardEditor(helpers, {
+            type: "tile",
+            entity: "sensor.energy_custom_graph_preload",
+          })
+        );
+      }
+      await Promise.allSettled(preloaders);
+      if (needsButtonToggleGroup) {
+        await this._preloadButtonToggleGroup();
+      }
       this.requestUpdate();
     } catch (e) {
-      // Preloading failed, but that's okay - we'll fall back gracefully
+      // The editor can still use whatever HA elements are already registered.
       console.debug("Energy Custom Graph: Could not preload editor elements", e);
+    }
+  }
+
+  private async _preloadCardEditor(
+    helpers: any,
+    config: Record<string, unknown>
+  ) {
+    const card = await helpers.createCardElement(config);
+    await card.constructor.getConfigElement();
+  }
+
+  private async _preloadButtonToggleGroup() {
+    if (customElements.get("ha-button-toggle-group") || !this.hass) {
+      return;
+    }
+    if (!customElements.get("ha-selector")) {
+      return;
+    }
+
+    const selector = document.createElement("ha-selector") as HTMLElement & {
+      hass?: HomeAssistant;
+      selector?: Record<string, unknown>;
+      value?: string;
+      required?: boolean;
+    };
+    selector.hass = this.hass;
+    selector.selector = {
+      button_toggle: {
+        options: [
+          { value: "a", label: "A" },
+          { value: "b", label: "B" },
+        ],
+      },
+    };
+    selector.value = "a";
+    selector.required = false;
+    selector.style.display = "none";
+    selector.style.position = "absolute";
+    selector.style.pointerEvents = "none";
+    this.appendChild(selector);
+
+    const buttonToggleDefined = customElements
+      .whenDefined("ha-button-toggle-group")
+      .then(() => this.requestUpdate());
+    try {
+      await Promise.race([
+        buttonToggleDefined,
+        new Promise((resolve) => setTimeout(resolve, 1000)),
+      ]);
+    } finally {
+      selector.remove();
     }
   }
 
@@ -209,14 +331,96 @@ export class EnergyCustomGraphCardEditor
     return statisticId;
   }
 
+  private _collectStatisticIds(
+    config: EnergyCustomGraphCardConfig
+  ): string[] {
+    const ids = new Set<string>();
+    (config.series ?? []).forEach((series) => {
+      if (this._resolveSeriesSource(series) === "statistic") {
+        const id = normalizeStatisticId(series.statistic_id);
+        if (id) {
+          ids.add(id);
+        }
+      }
+      series.calculation?.terms?.forEach((term) => {
+        const id = normalizeStatisticId(term.statistic_id);
+        if (id) {
+          ids.add(id);
+        }
+      });
+    });
+    return Array.from(ids);
+  }
+
+  private async _ensureStatisticMetadataForConfig(
+    config: EnergyCustomGraphCardConfig
+  ) {
+    await this._ensureStatisticMetadata(this._collectStatisticIds(config));
+  }
+
+  private async _ensureStatisticMetadata(ids: string[]) {
+    if (!this.hass) {
+      return;
+    }
+
+    const missing = ids
+      .map((id) => id.trim())
+      .filter(
+        (id) =>
+          id &&
+          !this._metadataByStatisticId.has(id) &&
+          !this._metadataRequests.has(id)
+      );
+    if (!missing.length) {
+      return;
+    }
+
+    missing.forEach((id) => this._metadataRequests.add(id));
+    try {
+      const metadata = await getStatisticMetadata(this.hass, missing);
+      const found = new Map<string, StatisticsMetaData>();
+      metadata.forEach((item) => {
+        found.set(item.statistic_id, item);
+      });
+      const next = new Map(this._metadataByStatisticId);
+      missing.forEach((id) => next.set(id, found.get(id)));
+      this._metadataByStatisticId = next;
+    } catch (error) {
+      console.debug(
+        "Energy Custom Graph: Could not load statistic metadata",
+        error
+      );
+    } finally {
+      missing.forEach((id) => this._metadataRequests.delete(id));
+    }
+  }
+
+  private _getStatisticMetadata(
+    statisticId: string | undefined
+  ): StatisticsMetaData | undefined {
+    const id = normalizeStatisticId(statisticId);
+    return id ? this._metadataByStatisticId.get(id) : undefined;
+  }
+
+  private _isStatisticMetadataLoaded(statisticId: string | undefined): boolean {
+    const id = normalizeStatisticId(statisticId);
+    return !id || this._metadataByStatisticId.has(id);
+  }
+
+  private _resolveStatisticSource(
+    statisticId: string | undefined
+  ): StatisticSourceResolution {
+    const id = normalizeStatisticId(statisticId);
+    return resolveStatisticSourceStatus({
+      statisticId: id,
+      hasEntity: Boolean(id && this.hass?.states?.[id]),
+      metadata: this._getStatisticMetadata(id),
+      metadataLoaded: this._isStatisticMetadataLoaded(id),
+    });
+  }
+
   private _resolveSeriesSource(series: EnergyCustomGraphSeriesConfig): "statistic" | "calculation" | "forecast" {
-    if (series.source) {
-      return series.source;
-    }
-    if (series.calculation) {
-      return "calculation";
-    }
-    return "statistic";
+    return resolveSeriesSource(series);
   }
 
   private _renderTextInput({
@@ -329,10 +533,12 @@ export class EnergyCustomGraphCardEditor
     this._syncColorSelections(normalizedSeriesWithIds);
     this._syncCompareCustomColorDrafts(normalizedSeriesWithIds);
     this._syncCompareColorSelections(normalizedSeriesWithIds);
+    void this._ensureStatisticMetadataForConfig(nextConfig);
 
     if (!hadConfig) {
       this._expandedSeries = new Set();
       this._expandedTermKeys = new Set();
+      this._headerExpanded = false;
     } else {
       this._syncExpandedState(normalizedSeriesWithIds);
     }
@@ -344,61 +550,555 @@ export class EnergyCustomGraphCardEditor
     }
 
     return html`
-      <div class="tab-bar">
-        ${this._renderTabButton("general", "General")}
-        ${this._renderTabButton("series", "Series")}
-      </div>
       <div class="editor-container">
-        ${this._activeTab === "general"
-          ? this._renderGeneralTab()
-          : this._renderSeriesTab()}
+        ${this._renderCardHeaderEditorSection(this._config)}
+        ${this._renderChartSettingsSection(this._config)}
+        ${this._renderSeriesEditorSection()}
       </div>
     `;
+  }
+
+  private _renderCardHeaderEditorSection(cfg: EnergyCustomGraphCardConfig) {
+    const expanded = this._headerExpanded;
+    return this._renderEditorSection({
+      title: "Card header",
+      icon: "mdi:card-text-outline",
+      summary: this._formatCardHeaderSummary(cfg),
+      expanded,
+      onToggle: () => {
+        this._headerExpanded = !expanded;
+      },
+      body: html`
+        <div class="section">
+          ${this._renderTextInput({
+            label: this.hass.localize("ui.panel.lovelace.editor.card.generic.title"),
+            value: cfg.title ?? "",
+            onInput: (value) => this._updateConfig("title", value || undefined),
+          })}
+          ${this._renderHeaderSection(cfg)}
+        </div>
+      `,
+    });
+  }
+
+  private _renderChartSettingsSection(cfg: EnergyCustomGraphCardConfig) {
+    const expanded = this._chartSettingsExpanded;
+    return this._renderEditorSection({
+      title: "Chart settings",
+      icon: "mdi:tune-variant",
+      summary: this._formatChartSettingsSummary(cfg),
+      expanded,
+      onToggle: () => {
+        this._chartSettingsExpanded = !expanded;
+      },
+      body: html`
+        ${this._renderTimespanSection(cfg)}
+        ${this._renderAggregationSection(cfg)}
+        ${this._renderAxesSection(cfg)}
+        ${this._renderLegendSection(cfg)}
+        ${this._renderTooltipSection(cfg)}
+        ${this._renderChartMoreOptions(cfg)}
+      `,
+    });
+  }
+
+  private _renderSeriesEditorSection() {
+    const series = this._config!.series ?? [];
+    const expanded = this._seriesSectionExpanded;
+    return this._renderExpansionPanel({
+      title: "Series",
+      icon: "mdi:chart-line-variant",
+      summary: this._formatSeriesSectionSummary(series),
+      expanded,
+      onToggle: () => {
+        this._seriesSectionExpanded = !expanded;
+      },
+      actions: html`
+        <button
+          type="button"
+          class="icon-button strong"
+          title="Add series"
+          aria-label="Add series"
+          @click=${this._addSeries}
+        >
+          <ha-icon icon="mdi:plus"></ha-icon>
+        </button>
+      `,
+      body: html`
+        <div class="series-list">
+          ${series.length
+            ? series.map((serie, index) => this._renderSeriesCard(serie, index))
+            : html`
+                <div class="empty-state">
+                  <p class="hint">No series configured yet.</p>
+                  <button type="button" class="outlined" @click=${this._addSeries}>
+                    Add series
+                  </button>
+                </div>
+              `}
+        </div>
+      `,
+      className: "editor-section series-section",
+    });
+  }
+
+  private _renderEditorSection({
+    title,
+    icon,
+    summary,
+    expanded,
+    onToggle,
+    body,
+  }: {
+    title: string;
+    icon?: string;
+    summary?: unknown;
+    expanded: boolean;
+    onToggle: () => void;
+    body: unknown;
+  }) {
+    return this._renderExpansionPanel({
+      title,
+      icon,
+      summary,
+      expanded,
+      onToggle,
+      body,
+      className: "editor-section",
+    });
+  }
+
+  private _renderExpansionPanel({
+    title,
+    icon,
+    summary,
+    expanded,
+    onToggle,
+    body,
+    actions,
+    className,
+  }: {
+    title: string;
+    icon?: string;
+    summary?: unknown;
+    expanded: boolean;
+    onToggle: () => void;
+    body: unknown;
+    actions?: unknown;
+    className?: string;
+  }) {
+    return html`
+      <ha-expansion-panel
+        outlined
+        class=${className ?? ""}
+        .expanded=${expanded}
+        @expanded-changed=${(ev: CustomEvent<{ expanded: boolean }>) =>
+          this._handleExpansionChanged(ev, onToggle)}
+      >
+        ${icon ? html`<ha-icon slot="leading-icon" icon=${icon}></ha-icon>` : nothing}
+        <div slot="header" class="panel-heading">
+          <div class="panel-title">${title}</div>
+          ${summary ? html`<div class="panel-summary">${summary}</div>` : nothing}
+        </div>
+        ${actions
+          ? html`
+              <div
+                slot="icons"
+                class="panel-actions"
+                @click=${(ev: Event) => ev.stopPropagation()}
+                @keydown=${(ev: Event) => ev.stopPropagation()}
+              >
+                ${actions}
+              </div>
+            `
+          : nothing}
+        <div class="panel-body">${body}</div>
+      </ha-expansion-panel>
+    `;
+  }
+
+  private _handleExpansionChanged(
+    ev: CustomEvent<{ expanded: boolean }>,
+    onToggle: () => void
+  ) {
+    if (ev.target !== ev.currentTarget) {
+      return;
+    }
+    ev.stopPropagation();
+    onToggle();
+  }
+
+  private _renderButtonToggleGroup<T extends string>(
+    buttons: Array<{ value: T; label: string }>,
+    active: T,
+    onChange: (value: T) => void
+  ) {
+    return html`
+      <ha-button-toggle-group
+        .buttons=${buttons}
+        .active=${active}
+        size="m"
+        .fullWidth=${true}
+        @value-changed=${(ev: CustomEvent<{ value: T }>) =>
+          onChange(ev.detail.value)}
+      ></ha-button-toggle-group>
+    `;
+  }
+
+  private _renderAggregationSection(cfg: EnergyCustomGraphCardConfig) {
+    const isEnergyMode = cfg.timespan?.mode === "energy";
+    const aggregationConfig = cfg.aggregation;
+    const pickerAggregation = aggregationConfig?.energy_picker ?? {};
+    const aggregationExpanded = this._aggregationExpanded;
+    const aggregationSummary = this._formatAggregationSummary(
+      aggregationConfig,
+      isEnergyMode
+    );
+    return this._renderExpansionPanel({
+      title: "Aggregation",
+      icon: "mdi:chart-bar-stacked",
+      summary: aggregationSummary ?? "Automatic",
+      expanded: aggregationExpanded,
+      onToggle: () => this._toggleAggregationExpanded(),
+      body: html`
+        <div class="aggregation-body">
+          ${isEnergyMode
+            ? html`
+                ${this._renderAggregationPickerOptions(pickerAggregation)}
+                ${this._renderAggregationFallbackField(aggregationConfig)}
+              `
+            : this._renderAggregationManualOptions(aggregationConfig)}
+          ${this._renderRawOptions(aggregationConfig)}
+          ${this._renderComputeCurrentHourOption(aggregationConfig)}
+        </div>
+      `,
+      className: "general-collapsible",
+    });
+  }
+
+  private _renderAggregationFallbackField(
+    aggregation: EnergyCustomGraphAggregationConfig | undefined
+  ) {
+    const current = aggregation?.fallback ?? "";
+    return html`
+      <div class="section">
+        <div class="field">
+          <label>Fallback aggregation</label>
+          <select
+            @change=${(ev: Event) =>
+              this._updateAggregation("fallback", (ev.target as HTMLSelectElement).value || "")}
+          >
+            <option value="" ?selected=${current === ""}>None</option>
+            ${AGGREGATION_OPTIONS.map(
+              (option) =>
+                html`<option value=${option.value} ?selected=${current === option.value}
+                  >${option.label}</option
+                >`
+            )}
+          </select>
+        </div>
+      </div>
+    `;
+  }
+
+  private _renderChartMoreOptions(cfg: EnergyCustomGraphCardConfig) {
+    const count = cfg.chart_height ? 1 : 0;
+    const expanded = this._chartMoreExpanded || count > 0;
+    return this._renderMoreBlock({
+      count,
+      expanded,
+      onToggle: () => {
+        this._chartMoreExpanded = !expanded;
+      },
+      body: html`
+        ${this._renderTextInput({
+          label: "Chart height",
+          helper: "CSS height, ignored in section layout.",
+          value: cfg.chart_height ?? "",
+          onInput: (value) =>
+            this._updateConfig("chart_height", value || undefined),
+        })}
+      `,
+    });
+  }
+
+  private _renderMoreBlock({
+    count,
+    expanded,
+    onToggle,
+    body,
+  }: {
+    count: number;
+    expanded: boolean;
+    onToggle: () => void;
+    body: unknown;
+  }) {
+    return this._renderExpansionPanel({
+      title: count > 0 ? `More · ${count} set` : "More",
+      icon: "mdi:dots-horizontal",
+      expanded,
+      onToggle,
+      body,
+      className: "more-block",
+    });
+  }
+
+  private _cardHeaderHasContent(cfg: EnergyCustomGraphCardConfig): boolean {
+    return Boolean(cfg.title?.trim() || cfg.header?.chip);
+  }
+
+  private _formatCardHeaderSummary(cfg: EnergyCustomGraphCardConfig): string {
+    const parts: string[] = [];
+    if (cfg.title?.trim()) {
+      parts.push(`Title: ${cfg.title.trim()}`);
+    } else {
+      parts.push("No Title");
+    }
+    parts.push(cfg.header?.chip ? "Chip on" : "No chip");
+    return parts.join(" · ");
+  }
+
+  private _formatChartSettingsSummary(cfg: EnergyCustomGraphCardConfig): string {
+    const parts = [this._formatTimespanSummary(cfg.timespan ?? { mode: "energy" })];
+    const aggregation = this._formatChartAggregationSummary(
+      cfg.aggregation,
+      cfg.timespan?.mode === "energy"
+    );
+    if (aggregation) {
+      parts.push(aggregation);
+    }
+    if (cfg.timespan?.mode === "energy" && this._hasAnySeriesTimeOffset()) {
+      parts.push("Compare disabled by time offset");
+    }
+    return parts.join(" · ");
+  }
+
+  private _formatChartAggregationSummary(
+    aggregation: EnergyCustomGraphAggregationConfig | undefined,
+    useEnergyPicker: boolean
+  ): string | undefined {
+    if (!aggregation || Object.keys(aggregation).length === 0) {
+      return undefined;
+    }
+    if (!useEnergyPicker && aggregation.manual) {
+      return `Aggregation: ${this._formatStatisticsPeriod(aggregation.manual)}`;
+    }
+    if (
+      useEnergyPicker &&
+      aggregation.energy_picker &&
+      Object.keys(aggregation.energy_picker).length
+    ) {
+      return "Aggregation: picker overrides";
+    }
+    return undefined;
+  }
+
+  private _formatTimespanSummary(timespan: EnergyCustomGraphTimespanConfig): string {
+    if (timespan.mode === "fixed") {
+      return `Fixed: ${timespan.start ?? "Start"} to ${timespan.end ?? "End"}`;
+    }
+    if (timespan.mode === "relative") {
+      const count =
+        isRelativeCalendarPeriod(timespan.period) && timespan.count
+          ? `${timespan.count} `
+          : "";
+      const offset =
+        isRelativeCalendarPeriod(timespan.period) && timespan.offset
+          ? `, offset ${timespan.offset}`
+          : "";
+      return `Relative: ${count}${this._formatRelativePeriod(timespan.period)}${offset}`;
+    }
+    return "Energy date picker";
+  }
+
+  private _formatRelativePeriod(period: EnergyCustomGraphRelativePeriod): string {
+    switch (period) {
+      case "last_60_minutes":
+        return "Last 60 minutes";
+      case "last_24_hours":
+        return "Last 24 hours";
+      case "last_7_days":
+        return "Last 7 days";
+      case "last_30_days":
+        return "Last 30 days";
+      case "last_12_months":
+        return "Last 12 months";
+      default:
+        return period.charAt(0).toUpperCase() + period.slice(1);
+    }
+  }
+
+  private _formatSeriesSectionSummary(series: EnergyCustomGraphSeriesConfig[]): string {
+    const warnings = series
+      .map((item) => this._getSeriesIssue(item))
+      .filter((issue): issue is EditorIssue => issue !== undefined).length;
+    const count = `${series.length} ${series.length === 1 ? "series" : "series"}`;
+    return warnings > 0 ? `${count} · ${warnings} need attention` : count;
+  }
+
+  private _hasAnySeriesTimeOffset(): boolean {
+    return (this._config?.series ?? []).some((series) => seriesHasTimeOffset(series));
+  }
+
+  private _getStatisticIssue(
+    statisticId: string | undefined,
+    statType: EnergyCustomGraphStatisticType | undefined
+  ): EditorIssue | undefined {
+    const resolution = this._resolveStatisticSource(statisticId);
+    return getStatisticSourceIssue({
+      status: resolution.status,
+      usesRaw: aggregationUsesRaw(this._config?.aggregation),
+      metadata: resolution.metadata,
+      statType,
+    });
+  }
+
+  private _getSeriesIssue(
+    series: EnergyCustomGraphSeriesConfig
+  ): EditorIssue | undefined {
+    const source = this._resolveSeriesSource(series);
+    if (source === "forecast") {
+      return undefined;
+    }
+    if (source === "calculation") {
+      const terms = series.calculation?.terms ?? [];
+      for (const term of terms) {
+        if (!normalizeStatisticId(term.statistic_id)) {
+          continue;
+        }
+        const issue = this._getStatisticIssue(
+          term.statistic_id,
+          term.stat_type ?? series.stat_type
+        );
+        if (issue) {
+          return issue;
+        }
+      }
+      return undefined;
+    }
+    return this._getStatisticIssue(series.statistic_id, series.stat_type);
+  }
+
+  private _renderEditorHelpHint(
+    message: string,
+    severity: EditorHintSeverity = "info"
+  ) {
+    return html`
+      <p class="editor-hint ${severity}">
+        <ha-icon
+          icon=${severity === "info"
+            ? "mdi:help-circle-outline"
+            : severity === "warning"
+              ? "mdi:alert"
+              : "mdi:alert-circle"}
+          role="img"
+          aria-label=${severity}
+        ></ha-icon>
+        <span>${message}</span>
+      </p>
+    `;
+  }
+
+  private _renderSummaryIssue(issue: EditorIssue | undefined) {
+    if (!issue) {
+      return nothing;
+    }
+    return html`
+      <span class="summary-issue ${issue.severity}">
+        <ha-icon
+          icon=${issue.severity === "error" ? "mdi:alert-circle" : "mdi:alert"}
+          role="img"
+          aria-label=${issue.severity}
+        ></ha-icon>
+        <span>${issue.cause}${issue.action ? html` · ${issue.action}` : nothing}</span>
+      </span>
+    `;
+  }
+
+  private _renderCompactToggle(
+    label: string,
+    checked: boolean,
+    onChange: (checked: boolean) => void
+  ) {
+    return html`
+      <div class="compact-toggle">
+        <ha-switch
+          .checked=${checked}
+          @change=${(ev: Event) =>
+            onChange((ev.target as HTMLInputElement).checked)}
+        ></ha-switch>
+        <span>${label}</span>
+      </div>
+    `;
+  }
+
+  private _formatLegendSummary(cfg: EnergyCustomGraphCardConfig): string {
+    if (cfg.hide_legend === true) {
+      return "Hidden";
+    }
+    const parts = ["Visible"];
+    if (cfg.legend_sort && cfg.legend_sort !== "none") {
+      parts.push(`Sort ${cfg.legend_sort}`);
+    }
+    if (cfg.expand_legend) {
+      parts.push("Expanded");
+    }
+    return parts.join(" · ");
+  }
+
+  private _formatTooltipSummary(cfg: EnergyCustomGraphCardConfig): string {
+    if (cfg.show_tooltip === false) {
+      return "Hidden";
+    }
+    const parts = ["Visible"];
+    const xPointer = cfg.show_x_axis_pointer !== false;
+    const yPointer = cfg.show_y_axis_pointer === true;
+    if (xPointer && yPointer) {
+      parts.push("X+Y Pointer");
+    } else if (xPointer) {
+      parts.push("X pointer");
+    } else if (yPointer) {
+      parts.push("Y pointer");
+    }
+    if (cfg.show_stack_sums) {
+      parts.push("Stack sums");
+    }
+    return parts.join(" · ");
   }
 
   private _renderLegendSection(cfg: EnergyCustomGraphCardConfig) {
     const legendSort = cfg.legend_sort ?? "none";
     const hideLegend = cfg.hide_legend === true;
+    const showLegend = !hideLegend;
+    const expanded = this._legendExpanded;
     const buttons: Array<{ value: "none" | "asc" | "desc"; label: string }> = [
       { value: "none", label: "None" },
       { value: "asc", label: "Asc" },
       { value: "desc", label: "Desc" },
     ];
-    return html`
-      <div class="group-card">
-        <div class="group-header">
-          <span class="group-title">Legend</span>
-        </div>
-        <div class="group-body">
+    return this._renderExpansionPanel({
+      title: "Legend",
+      icon: "mdi:format-list-bulleted-square",
+      summary: this._formatLegendSummary(cfg),
+      expanded,
+      onToggle: () => this._toggleLegendExpanded(),
+      body: html`
           <div class="row">
             <ha-switch
-              .checked=${hideLegend}
+              .checked=${showLegend}
               @change=${(ev: Event) =>
-                this._updateBooleanConfig("hide_legend", (ev.target as HTMLInputElement).checked)}
+                this._updateBooleanConfig("hide_legend", !(ev.target as HTMLInputElement).checked)}
             ></ha-switch>
-            <span>Hide legend</span>
+            <span>Show legend</span>
           </div>
           ${hideLegend
             ? nothing
             : html`
                 <div class="field">
                   <label>Legend sort</label>
-                  <div class="segment-group" role="group" aria-label="Legend sort">
-                    ${buttons.map(
-                      (button) => html`
-                        <button
-                          type="button"
-                          class=${classMap({
-                            "segment-button": true,
-                            active: legendSort === button.value,
-                          })}
-                          @click=${() => this._setLegendSort(button.value)}
-                        >
-                          ${button.label}
-                        </button>
-                      `
-                    )}
-                  </div>
+                  ${this._renderButtonToggleGroup(buttons, legendSort, (value) =>
+                    this._setLegendSort(value)
+                  )}
                 </div>
                 <div class="row">
                   <ha-switch
@@ -412,9 +1112,9 @@ export class EnergyCustomGraphCardEditor
                   <span>Expand legend by default</span>
                 </div>
               `}
-        </div>
-      </div>
-    `;
+      `,
+      className: "general-collapsible",
+    });
   }
 
   private _renderAxesSection(cfg: EnergyCustomGraphCardConfig) {
@@ -429,38 +1129,29 @@ export class EnergyCustomGraphCardEditor
     const axesExpanded = this._axesExpanded;
     const axesSummary = this._formatAxesSummary(leftAxis, rightAxis, showRightAxis);
 
-    return html`
-      <div class="collapsible general-collapsible ${axesExpanded ? "expanded" : "collapsed"}">
-        <button type="button" class="collapsible-header" @click=${this._toggleAxesExpanded}>
-          <div class="collapsible-title">
-            <span class="title">Y Axes</span>
-            ${axesSummary ? html`<span class="subtitle">${axesSummary}</span>` : nothing}
-          </div>
-          <span class="chevron">
-            <ha-icon icon=${axesExpanded ? "mdi:chevron-down" : "mdi:chevron-right"}></ha-icon>
-          </span>
-        </button>
-        ${axesExpanded
-          ? html`
-              <div class="collapsible-body">
-                <div class="section">
-                  ${this._renderAxisConfig("left", leftAxis)}
-                  ${showRightAxis
-                    ? html`
-                        <div class="axis-separator"></div>
-                        ${this._renderAxisConfig("right", rightAxis)}
-                      `
-                    : html`
-                        <p class="hint axis-hint">
-                          The right Y axis will appear automatically when you assign a series to it.
-                        </p>
-                      `}
-                </div>
-              </div>
-            `
-          : nothing}
-      </div>
-    `;
+    return this._renderExpansionPanel({
+      title: "Y Axes",
+      icon: "mdi:axis-arrow",
+      summary: axesSummary,
+      expanded: axesExpanded,
+      onToggle: () => this._toggleAxesExpanded(),
+      body: html`
+        <div class="section">
+          ${this._renderAxisConfig("left", leftAxis)}
+          ${showRightAxis
+            ? html`
+                <div class="axis-separator"></div>
+                ${this._renderAxisConfig("right", rightAxis)}
+              `
+            : html`
+                <p class="hint axis-hint">
+                  The right Y axis will appear automatically when you assign a series to it.
+                </p>
+              `}
+        </div>
+      `,
+      className: "general-collapsible",
+    });
   }
 
   private _renderAxisConfig(
@@ -473,61 +1164,39 @@ export class EnergyCustomGraphCardEditor
     return html`
       <div class="axis-config">
         <span class="subtitle axis-title">${axisLabel}</span>
-        ${this._renderTextInput({
-          label: "Min value",
-          type: "number",
-          disabled: centerZeroActive,
-          value: axisConfig?.min !== undefined ? String(axisConfig.min) : "",
-          helper: centerZeroActive ? "Disabled when center zero is active" : undefined,
-          onInput: (value) => this._updateAxisConfig(axisId, "min", value),
-        })}
-        ${this._renderTextInput({
-          label: "Max value",
-          type: "number",
-          value: axisConfig?.max !== undefined ? String(axisConfig.max) : "",
-          helper: centerZeroActive ? "Used for both +max and -max" : undefined,
-          onInput: (value) => this._updateAxisConfig(axisId, "max", value),
-        })}
-        ${this._renderTextInput({
-          label: "Unit",
-          value: axisConfig?.unit ?? "",
-          onInput: (value) => this._updateAxisConfig(axisId, "unit", value),
-        })}
-        <div class="row">
-          <ha-switch
-            .checked=${axisConfig?.fit_y_data === true}
-            @change=${(ev: Event) =>
-              this._updateAxisConfig(
-                axisId,
-                "fit_y_data",
-                (ev.target as HTMLInputElement).checked
-              )}
-          ></ha-switch>
-          <span>Fit to data</span>
+        <div class="compact-grid">
+          ${this._renderTextInput({
+            label: "Min value",
+            type: "number",
+            disabled: centerZeroActive,
+            value: axisConfig?.min !== undefined ? String(axisConfig.min) : "",
+            helper: centerZeroActive ? "Disabled when center zero is active." : undefined,
+            onInput: (value) => this._updateAxisConfig(axisId, "min", value),
+          })}
+          ${this._renderTextInput({
+            label: "Max value",
+            type: "number",
+            value: axisConfig?.max !== undefined ? String(axisConfig.max) : "",
+            helper: centerZeroActive ? "Used for both +max and -max." : undefined,
+            onInput: (value) => this._updateAxisConfig(axisId, "max", value),
+          })}
+          ${this._renderTextInput({
+            label: "Unit",
+            value: axisConfig?.unit ?? "",
+            onInput: (value) => this._updateAxisConfig(axisId, "unit", value),
+          })}
         </div>
-        <div class="row">
-          <ha-switch
-            .checked=${axisConfig?.center_zero === true}
-            @change=${(ev: Event) =>
-              this._updateAxisConfig(
-                axisId,
-                "center_zero",
-                (ev.target as HTMLInputElement).checked
-              )}
-          ></ha-switch>
-          <span>Center zero</span>
-        </div>
-        <div class="row">
-          <ha-switch
-            .checked=${axisConfig?.logarithmic_scale === true}
-            @change=${(ev: Event) =>
-              this._updateAxisConfig(
-                axisId,
-                "logarithmic_scale",
-                (ev.target as HTMLInputElement).checked
-              )}
-          ></ha-switch>
-          <span>Logarithmic scale</span>
+        <div class="toggle-grid" role="group" aria-label=${`${axisLabel} options`}>
+          ${this._renderCompactToggle(
+            "Fit to data",
+            axisConfig?.fit_y_data === true,
+            (value) => this._updateAxisConfig(axisId, "fit_y_data", value)
+          )}
+          ${this._renderCompactToggle(
+            "Center zero",
+            axisConfig?.center_zero === true,
+            (value) => this._updateAxisConfig(axisId, "center_zero", value)
+          )}
         </div>
       </div>
     `;
@@ -537,13 +1206,15 @@ export class EnergyCustomGraphCardEditor
     const showTooltip = cfg.show_tooltip !== false;
     const showXAxisPointer = cfg.show_x_axis_pointer !== false;
     const showYAxisPointer = cfg.show_y_axis_pointer === true;
+    const expanded = this._tooltipExpanded;
 
-    return html`
-      <div class="group-card">
-        <div class="group-header">
-          <span class="group-title">Tooltip</span>
-        </div>
-        <div class="group-body">
+    return this._renderExpansionPanel({
+      title: "Tooltip",
+      icon: "mdi:tooltip-text-outline",
+      summary: this._formatTooltipSummary(cfg),
+      expanded,
+      onToggle: () => this._toggleTooltipExpanded(),
+      body: html`
           <div class="row">
             <ha-switch
               .checked=${showTooltip}
@@ -555,40 +1226,29 @@ export class EnergyCustomGraphCardEditor
             ></ha-switch>
             <span>Show tooltip</span>
           </div>
-          <div class="row">
-            <ha-switch
-              .checked=${showXAxisPointer}
-              @change=${(ev: Event) =>
-                this._updateConfig(
-                  "show_x_axis_pointer",
-                  (ev.target as HTMLInputElement).checked
-                )}
-            ></ha-switch>
-            <span>Show X axis pointer</span>
-          </div>
-          <div class="row">
-            <ha-switch
-              .checked=${showYAxisPointer}
-              @change=${(ev: Event) =>
-                this._updateConfig(
-                  "show_y_axis_pointer",
-                  (ev.target as HTMLInputElement).checked
-                )}
-            ></ha-switch>
-            <span>Show Y axis pointer</span>
-          </div>
           ${showTooltip
             ? html`
-                <div class="row">
-                  <ha-switch
-                    .checked=${cfg.show_unit !== false}
-                    @change=${(ev: Event) =>
-                      this._updateConfig(
-                        "show_unit",
-                        (ev.target as HTMLInputElement).checked
-                      )}
-                  ></ha-switch>
-                  <span>Show units</span>
+                <div class="toggle-grid" role="group" aria-label="Tooltip details">
+                  ${this._renderCompactToggle(
+                    "X pointer",
+                    showXAxisPointer,
+                    (value) => this._updateConfig("show_x_axis_pointer", value)
+                  )}
+                  ${this._renderCompactToggle(
+                    "Y pointer",
+                    showYAxisPointer,
+                    (value) => this._updateConfig("show_y_axis_pointer", value)
+                  )}
+                  ${this._renderCompactToggle(
+                    "Units",
+                    cfg.show_unit !== false,
+                    (value) => this._updateConfig("show_unit", value)
+                  )}
+                  ${this._renderCompactToggle(
+                    "Stack sums",
+                    cfg.show_stack_sums === true,
+                    (value) => this._updateConfig("show_stack_sums", value)
+                  )}
                 </div>
                 ${this._renderTextInput({
                   label: "Tooltip precision",
@@ -597,33 +1257,19 @@ export class EnergyCustomGraphCardEditor
                   onInput: (value) =>
                     this._updateNumericConfig("tooltip_precision", value),
                 })}
-                <div class="row">
-                  <ha-switch
-                    .checked=${cfg.show_stack_sums === true}
-                    @change=${(ev: Event) =>
-                      this._updateConfig(
-                        "show_stack_sums",
-                        (ev.target as HTMLInputElement).checked
-                      )}
-                  ></ha-switch>
-                  <span>Show stack sums</span>
-                </div>
               `
             : nothing}
-        </div>
-      </div>
-    `;
+      `,
+      className: "general-collapsible",
+    });
   }
 
   private _renderHeaderSection(cfg: EnergyCustomGraphCardConfig) {
     const chip = cfg.header?.chip;
     const enabled = !!chip;
     return html`
-      <div class="group-card">
-        <div class="group-header">
-          <span class="group-title">Header chip</span>
-        </div>
-        <div class="group-body">
+      <div class="subsection header-chip-section">
+        <span class="subtitle">Header chip</span>
           <div class="row">
             <ha-switch
               .checked=${enabled}
@@ -636,40 +1282,40 @@ export class EnergyCustomGraphCardEditor
           </div>
           ${enabled && chip
             ? html`
-                <span class="subtitle">Display</span>
-                ${this._renderTextInput({
-                  label: "Label",
-                  value: chip.label ?? "",
-                  onInput: (value) =>
-                    this._updateHeaderChipField("label", value || undefined),
-                })}
-                ${this._renderTextInput({
-                  label: "Unit",
-                  helper: "Leave empty to use an automatic unit when possible",
-                  value: chip.unit ?? "",
-                  onInput: (value) =>
-                    this._updateHeaderChipField("unit", value || undefined),
-                })}
-                ${this._renderTextInput({
-                  label: "Precision",
-                  type: "number",
-                  step: "1",
-                  min: "0",
-                  helper: "Default follows tooltip precision",
-                  value:
-                    chip.precision !== undefined
-                      ? String(chip.precision)
-                      : "",
-                  onInput: (value) =>
-                    this._updateHeaderChipNumber("precision", value),
-                })}
+                <div class="compact-grid">
+                  ${this._renderTextInput({
+                    label: "Label",
+                    value: chip.label ?? "",
+                    onInput: (value) =>
+                      this._updateHeaderChipField("label", value || undefined),
+                  })}
+                  ${this._renderTextInput({
+                    label: "Unit",
+                    helper: "Leave empty for automatic unit.",
+                    value: chip.unit ?? "",
+                    onInput: (value) =>
+                      this._updateHeaderChipField("unit", value || undefined),
+                  })}
+                  ${this._renderTextInput({
+                    label: "Precision",
+                    type: "number",
+                    step: "1",
+                    min: "0",
+                    helper: "Default follows tooltip precision.",
+                    value:
+                      chip.precision !== undefined
+                        ? String(chip.precision)
+                        : "",
+                    onInput: (value) =>
+                      this._updateHeaderChipNumber("precision", value),
+                  })}
+                </div>
                 <span class="subtitle">Metric</span>
                 ${this._renderHeaderMetricEditor(
                   chip.metric ?? this._createDefaultHeaderMetric()
                 )}
               `
             : nothing}
-        </div>
       </div>
     `;
   }
@@ -684,29 +1330,16 @@ export class EnergyCustomGraphCardEditor
     }> = [
       { value: "series", label: "Series" },
       { value: "stack", label: "Stack" },
-      { value: "entity_state", label: "Entity state" },
+      { value: "entity_state", label: "Entity" },
       { value: "calculation", label: "Calculation" },
     ];
 
     return html`
       <div class="field full-width">
-        <label>Source</label>
-        <div class="segment-group" role="group" aria-label="Header metric source">
-          ${buttons.map(
-            (button) => html`
-              <button
-                type="button"
-                class=${classMap({
-                  "segment-button": true,
-                  active: mode === button.value,
-                })}
-                @click=${() => this._setHeaderMetricMode(button.value)}
-              >
-                ${button.label}
-              </button>
-            `
-          )}
-        </div>
+        <label>Metric</label>
+        ${this._renderButtonToggleGroup(buttons, mode, (value) =>
+          this._setHeaderMetricMode(value)
+        )}
       </div>
       ${mode === "series"
         ? this._renderHeaderSeriesMetric(metric)
@@ -715,6 +1348,7 @@ export class EnergyCustomGraphCardEditor
           : mode === "entity_state"
             ? this._renderHeaderEntityStateMetric(metric)
             : this._renderHeaderCalculationMetric(metric)}
+      ${this._renderHeaderMetricMore(metric)}
     `;
   }
 
@@ -751,9 +1385,6 @@ export class EnergyCustomGraphCardEditor
       ${this._renderHeaderReducerField(seriesMetric.reducer, (reducer) =>
         this._updateHeaderMetric({ ...seriesMetric, reducer })
       )}
-      ${this._renderHeaderTransformFields(seriesMetric, (key, value) =>
-        this._updateHeaderMetric({ ...seriesMetric, [key]: value })
-      )}
     `;
   }
 
@@ -778,9 +1409,6 @@ export class EnergyCustomGraphCardEditor
       ${this._renderHeaderStackSignField(stackMetric.sign, (sign) =>
         this._updateHeaderMetric({ ...stackMetric, sign })
       )}
-      ${this._renderHeaderTransformFields(stackMetric, (key, value) =>
-        this._updateHeaderMetric({ ...stackMetric, [key]: value })
-      )}
     `;
   }
 
@@ -803,9 +1431,6 @@ export class EnergyCustomGraphCardEditor
             entity_id: ev.detail.value || undefined,
           })}
       ></ha-entity-picker>
-      ${this._renderHeaderTransformFields(entityMetric, (key, value) =>
-        this._updateHeaderMetric({ ...entityMetric, [key]: value })
-      )}
     `;
   }
 
@@ -841,10 +1466,30 @@ export class EnergyCustomGraphCardEditor
       <button type="button" class="outlined" @click=${this._addHeaderCalculationTerm}>
         Add term
       </button>
-      ${this._renderHeaderTransformFields(calculationMetric, (key, value) =>
-        this._updateHeaderMetric({ ...calculationMetric, [key]: value })
-      )}
     `;
+  }
+
+  private _renderHeaderMetricMore(metric: EnergyCustomGraphHeaderMetricConfig) {
+    const count = this._countHeaderTransformFields(metric);
+    const expanded = this._headerMetricMoreExpanded || count > 0;
+    return this._renderMoreBlock({
+      count,
+      expanded,
+      onToggle: () => {
+        this._headerMetricMoreExpanded = !expanded;
+      },
+      body: this._renderHeaderTransformFields(metric, (key, value) =>
+        this._updateHeaderMetric({ ...metric, [key]: value })
+      ),
+    });
+  }
+
+  private _countHeaderTransformFields(
+    transform: EnergyCustomGraphHeaderMetricConfig
+  ): number {
+    return ["multiply", "add", "clip_min", "clip_max"].filter(
+      (key) => (transform as Record<string, unknown>)[key] !== undefined
+    ).length;
   }
 
   private _renderHeaderCalculationTerm(
@@ -854,44 +1499,37 @@ export class EnergyCustomGraphCardEditor
     const expanded = this._expandedHeaderTermKeys.has(index);
     const operation = term.operation ?? "add";
     const descriptor = this._formatHeaderTermDescriptor(term);
-    return html`
-      <div class="nested-collapsible ${expanded ? "expanded" : "collapsed"}">
-        <button type="button" class="nested-header" @click=${() => this._toggleHeaderTermExpanded(index)}>
-          <div class="nested-title">
-            <strong>${this._formatOperation(operation)}</strong>
-            <p class="hint">${descriptor}</p>
-          </div>
-          <span class="chevron">
-            <ha-icon icon=${expanded ? "mdi:chevron-down" : "mdi:chevron-right"}></ha-icon>
-          </span>
-        </button>
-        ${expanded
-          ? html`
-              <div class="nested-body">
-                <div class="term-body column">
-                  ${this._renderHeaderTermOperationField(index, operation)}
-                  ${this._renderHeaderTermSourceFields(index, term)}
-                  ${this._renderHeaderTransformFields(term, (key, value) =>
-                    this._updateHeaderCalculationTerm(index, key, value)
-                  )}
-                </div>
-                <div class="nested-footer">
-                  <button
-                    type="button"
-                    class="text warning"
-                    @click=${(ev: Event) => {
-                      ev.stopPropagation();
-                      this._removeHeaderCalculationTerm(index);
-                    }}
-                  >
-                    Remove term
-                  </button>
-                </div>
-              </div>
-            `
-          : nothing}
-      </div>
-    `;
+    return this._renderExpansionPanel({
+      title: this._formatOperation(operation),
+      icon: "mdi:function",
+      summary: descriptor,
+      expanded,
+      onToggle: () => this._toggleHeaderTermExpanded(index),
+      actions: html`
+          <button
+            type="button"
+            class="icon-button danger"
+            title="Remove term"
+            aria-label="Remove term"
+            @click=${(ev: Event) => {
+              ev.stopPropagation();
+              this._removeHeaderCalculationTerm(index);
+            }}
+          >
+            <ha-icon icon="mdi:close"></ha-icon>
+          </button>
+      `,
+      body: html`
+        <div class="term-body column">
+          ${this._renderHeaderTermOperationField(index, operation)}
+          ${this._renderHeaderTermSourceFields(index, term)}
+          ${this._renderHeaderTransformFields(term, (key, value) =>
+            this._updateHeaderCalculationTerm(index, key, value)
+          )}
+        </div>
+      `,
+      className: "term-panel",
+    });
   }
 
   private _renderHeaderTermOperationField(
@@ -930,28 +1568,15 @@ export class EnergyCustomGraphCardEditor
     }> = [
       { value: "series", label: "Series" },
       { value: "stack", label: "Stack" },
-      { value: "entity_state", label: "Entity state" },
+      { value: "entity_state", label: "Entity" },
       { value: "constant", label: "Constant" },
     ];
     return html`
       <div class="field full-width">
         <label>Input type</label>
-        <div class="segment-group" role="group" aria-label="Header term source">
-          ${buttons.map(
-            (button) => html`
-              <button
-                type="button"
-                class=${classMap({
-                  "segment-button": true,
-                  active: source === button.value,
-                })}
-                @click=${() => this._setHeaderTermSource(index, button.value)}
-              >
-                ${button.label}
-              </button>
-            `
-          )}
-        </div>
+        ${this._renderButtonToggleGroup(buttons, source, (value) =>
+          this._setHeaderTermSource(index, value)
+        )}
       </div>
       ${source === "series"
         ? this._renderHeaderTermSeriesFields(index, term)
@@ -1211,7 +1836,7 @@ export class EnergyCustomGraphCardEditor
           automatic behaviour.
         </p>
         <div class="field">
-          <label>Manual period aggregation</label>
+          <label>Manual aggregation</label>
           ${(() => {
             const current = aggregation?.manual ?? "";
             return html`<select
@@ -1307,10 +1932,10 @@ export class EnergyCustomGraphCardEditor
           ></ha-switch>
           <span>Compute current hour value</span>
         </div>
-        <p class="hint">
-          Adds a live estimate for the ongoing hour by aggregating recent 5 minute statistics.
-          This requires additional database queries, so server load might increase slightly.
-        </p>
+        ${this._renderEditorHelpHint(
+          "Home Assistant publishes hourly aggregates after the hour completes; this adds a current-hour estimate from recent 5 minute statistics.",
+          "info"
+        )}
       </div>
     `;
   }
@@ -1357,180 +1982,344 @@ export class EnergyCustomGraphCardEditor
     this._updateConfig("aggregation", cleaned);
   }
 
-  private _renderTabButton(tab: typeof this._activeTab, label: string) {
-    return html`
-      <button
-        type="button"
-        class=${classMap({ tab: true, active: this._activeTab === tab })}
-        @click=${() => this._setActiveTab(tab)}
-      >
-        ${label}
-      </button>
-    `;
-  }
-
-  private _renderGeneralTab() {
-    const cfg = this._config!;
-    const isEnergyMode = cfg.timespan?.mode === "energy";
-    const aggregationConfig = cfg.aggregation;
-    const pickerAggregation = aggregationConfig?.energy_picker ?? {};
-    const aggregationExpanded = this._aggregationExpanded;
-    const aggregationSummary = this._formatAggregationSummary(aggregationConfig, isEnergyMode);
-    return html`
-      <div class="section">
-        ${this._renderTextInput({
-          label: this.hass.localize("ui.panel.lovelace.editor.card.generic.title"),
-          value: cfg.title ?? "",
-          onInput: (value) => this._updateConfig("title", value),
-        })}
-        ${this._renderTextInput({
-          label: "Chart height",
-          helper: "CSS height (e.g. 320px, 20rem). Ignored when used in a section layout.",
-          value: cfg.chart_height ?? "",
-          onInput: (value) =>
-            this._updateConfig("chart_height", value || undefined),
-        })}
-${this._renderTimespanSection(cfg)}
-      </div>
-      ${this._renderHeaderSection(cfg)}
-      ${this._renderLegendSection(cfg)}
-      ${this._renderTooltipSection(cfg)}
-      ${this._renderAxesSection(cfg)}
-      <div class="collapsible general-collapsible ${aggregationExpanded ? "expanded" : "collapsed"}">
-        <button type="button" class="collapsible-header" @click=${this._toggleAggregationExpanded}>
-          <div class="collapsible-title">
-            <span class="title">Aggregation</span>
-            ${aggregationSummary
-              ? html`<span class="subtitle">${aggregationSummary}</span>`
-              : nothing}
-          </div>
-          <span class="chevron">
-            <ha-icon icon=${aggregationExpanded ? "mdi:chevron-down" : "mdi:chevron-right"}></ha-icon>
-          </span>
-        </button>
-        ${aggregationExpanded
-          ? html`
-              <div class="collapsible-body aggregation-body">
-                ${isEnergyMode
-                  ? this._renderAggregationPickerOptions(pickerAggregation)
-                  : this._renderAggregationManualOptions(aggregationConfig)}
-                ${this._renderRawOptions(aggregationConfig)}
-                ${this._renderComputeCurrentHourOption(aggregationConfig)}
-              </div>
-            `
-          : nothing}
-      </div>
-    `;
-  }
-
-  private _renderSeriesTab() {
-    const series = this._config!.series ?? [];
-    return html`
-      <div class="series-list">
-        ${series.length
-          ? series.map((serie, index) => this._renderSeriesCard(serie, index))
-          : html`<p class="hint">No series configured yet.</p>`}
-        <button type="button" class="outlined" @click=${this._addSeries}>Add series</button>
-      </div>
-    `;
-  }
-
   private _renderSeriesCard(series: EnergyCustomGraphSeriesConfig, index: number) {
-    const usingCalculation = !!series.calculation;
     const expanded = this._expandedSeries.has(index);
     const seriesCount = this._config?.series?.length ?? 0;
     const isFirst = index === 0;
     const isLast = index === seriesCount - 1;
+    const issue = this._getSeriesIssue(series);
 
-    return html`
-      <div class="collapsible ${expanded ? "expanded" : "collapsed"}">
-        <button
-          type="button"
-          class="collapsible-header"
-          @click=${() => this._toggleSeriesExpanded(index)}
-        >
-          <div class="collapsible-title">
-            <span class="title">${series.name ?? series.statistic_id ?? `Series ${index + 1}`}</span>
-            <span class="subtitle">
-              ${usingCalculation
-                ? "Calculation series"
-                : series.statistic_id || "No statistic selected"}
-            </span>
-          </div>
-          <div class="header-actions">
+    return this._renderExpansionPanel({
+      title: this._formatSeriesTitle(series, index),
+      icon: this._getSeriesSourceIcon(series),
+      summary: html`
+        <span class="series-summary">
+          ${this._formatSeriesSummary(series)}
+          ${this._renderSummaryIssue(issue)}
+        </span>
+      `,
+      expanded,
+      onToggle: () => this._toggleSeriesExpanded(index),
+      actions: html`
+        <div class="header-actions">
             <div class="reorder-buttons">
-              <div
+              <button
+                type="button"
                 class="icon-button ${isFirst ? "disabled" : ""}"
-                role="button"
-                tabindex="0"
+                ?disabled=${isFirst}
                 @click=${(ev: Event) => {
                   if (!isFirst) {
                     ev.stopPropagation();
                     this._moveSeriesUp(index);
                   }
                 }}
-                @keydown=${(ev: KeyboardEvent) => {
-                  if (!isFirst && (ev.key === "Enter" || ev.key === " ")) {
-                    ev.preventDefault();
-                    ev.stopPropagation();
-                    this._moveSeriesUp(index);
-                  }
-                }}
                 title="Move up"
+                aria-label="Move series up"
               >
                 <ha-icon icon="mdi:chevron-up"></ha-icon>
-              </div>
-              <div
+              </button>
+              <button
+                type="button"
                 class="icon-button ${isLast ? "disabled" : ""}"
-                role="button"
-                tabindex="0"
+                ?disabled=${isLast}
                 @click=${(ev: Event) => {
                   if (!isLast) {
                     ev.stopPropagation();
                     this._moveSeriesDown(index);
                   }
                 }}
-                @keydown=${(ev: KeyboardEvent) => {
-                  if (!isLast && (ev.key === "Enter" || ev.key === " ")) {
-                    ev.preventDefault();
-                    ev.stopPropagation();
-                    this._moveSeriesDown(index);
-                  }
-                }}
                 title="Move down"
+                aria-label="Move series down"
               >
                 <ha-icon icon="mdi:chevron-down"></ha-icon>
-              </div>
+              </button>
             </div>
-            <span class="chevron">
-              <ha-icon icon=${expanded ? "mdi:chevron-down" : "mdi:chevron-right"}></ha-icon>
-            </span>
+            <button
+              type="button"
+              class="icon-button"
+              title="Duplicate series"
+              aria-label="Duplicate series"
+              @click=${(ev: Event) => {
+                ev.stopPropagation();
+                this._duplicateSeries(index);
+              }}
+            >
+              <ha-icon icon="mdi:content-duplicate"></ha-icon>
+            </button>
+            <button
+              type="button"
+              class="icon-button danger"
+              title="Delete series"
+              aria-label="Delete series"
+              @click=${(ev: Event) => {
+                ev.stopPropagation();
+                this._confirmRemoveSeries(index);
+              }}
+            >
+              <ha-icon icon="mdi:close"></ha-icon>
+            </button>
           </div>
-        </button>
-        ${expanded
-          ? html`
-              <div class="collapsible-body">
-                ${this._renderSeriesBasicsGroup(series, index)}
-                ${this._renderSeriesSourceGroup(series, index)}
-                ${this._renderSeriesDisplayGroup(series, index)}
-                ${this._renderSeriesTransformGroup(series, index)}
-                <div class="section-footer series-footer">
-                  <button
-                    type="button"
-                    class="text warning"
-                    @click=${(ev: Event) => {
-                      ev.stopPropagation();
-                      this._removeSeries(index);
-                    }}
-                  >
-                    Delete series
-                  </button>
-                </div>
-              </div>
-            `
-          : nothing}
-      </div>
-    `;
+      `,
+      body: html`
+        ${this._renderTextInput({
+          label: "Series name",
+          helper: "Optional. Empty uses the entity or statistic name.",
+          value: series.name ?? "",
+          onInput: (value) =>
+            this._updateSeries(index, "name", value || undefined),
+        })}
+        <div class="series-option-groups">
+          ${this._renderSeriesOptionGroup(
+            series,
+            index,
+            "source",
+            "Source",
+            this._formatSeriesSourceSummary(series),
+            this._renderSeriesSourceGroup(series, index)
+          )}
+          ${this._renderSeriesOptionGroup(
+            series,
+            index,
+            "style",
+            "Style",
+            this._formatSeriesStyleSummary(series),
+            this._renderSeriesStyleSegment(series, index)
+          )}
+          ${this._renderSeriesOptionGroup(
+            series,
+            index,
+            "visibility",
+            "Visibility",
+            this._formatSeriesVisibilitySummary(series),
+            this._renderSeriesVisibilitySegment(series, index)
+          )}
+          ${this._renderSeriesOptionGroup(
+            series,
+            index,
+            "transform",
+            "Transform",
+            this._formatSeriesTransformSummary(series),
+            this._renderSeriesTransformGroup(series, index)
+          )}
+        </div>
+      `,
+      className: "series-card",
+    });
+  }
+
+  private _seriesHasConfiguredSource(series: EnergyCustomGraphSeriesConfig): boolean {
+    const source = this._resolveSeriesSource(series);
+    if (source === "calculation") {
+      return Boolean(series.calculation?.terms?.length);
+    }
+    if (source === "forecast") {
+      return true;
+    }
+    return Boolean(normalizeStatisticId(series.statistic_id));
+  }
+
+  private _getSeriesSourceIcon(series: EnergyCustomGraphSeriesConfig): string {
+    const source = this._resolveSeriesSource(series);
+    if (source === "calculation") {
+      return "mdi:function-variant";
+    }
+    if (source === "forecast") {
+      return "mdi:weather-sunny";
+    }
+    return "mdi:database";
+  }
+
+  private _renderSeriesOptionGroup(
+    series: EnergyCustomGraphSeriesConfig,
+    index: number,
+    group: SeriesOptionGroup,
+    title: string,
+    summary: string,
+    body: unknown
+  ) {
+    const expanded = this._isSeriesOptionGroupExpanded(series, index, group);
+    return this._renderExpansionPanel({
+      title,
+      icon: this._getSeriesOptionGroupIcon(group),
+      summary,
+      expanded,
+      onToggle: () => this._toggleSeriesOptionGroup(index, group, expanded),
+      body,
+      className: "series-option-group",
+    });
+  }
+
+  private _getSeriesOptionGroupIcon(group: SeriesOptionGroup): string {
+    switch (group) {
+      case "style":
+        return "mdi:palette";
+      case "visibility":
+        return "mdi:eye";
+      case "transform":
+        return "mdi:function";
+      case "source":
+      default:
+        return "mdi:database-search";
+    }
+  }
+
+  private _isSeriesOptionGroupExpanded(
+    series: EnergyCustomGraphSeriesConfig,
+    index: number,
+    group: SeriesOptionGroup
+  ): boolean {
+    const key = this._seriesOptionGroupKey(index, group);
+    const explicit = this._seriesOptionGroupsExpanded.get(key);
+    if (explicit !== undefined) {
+      return explicit;
+    }
+    const hasSource = this._seriesHasConfiguredSource(series);
+    if (group === "source") {
+      return !hasSource;
+    }
+    if (group === "style") {
+      return hasSource;
+    }
+    return false;
+  }
+
+  private _toggleSeriesOptionGroup(
+    index: number,
+    group: SeriesOptionGroup,
+    expanded: boolean
+  ) {
+    this._setSeriesOptionGroupExpanded(index, group, !expanded);
+  }
+
+  private _setSeriesOptionGroupExpanded(
+    index: number,
+    group: SeriesOptionGroup,
+    expanded: boolean
+  ) {
+    const next = new Map(this._seriesOptionGroupsExpanded);
+    next.set(this._seriesOptionGroupKey(index, group), expanded);
+    this._seriesOptionGroupsExpanded = next;
+    this._expandedSeries = new Set(this._expandedSeries).add(index);
+  }
+
+  private _seriesOptionGroupKey(index: number, group: SeriesOptionGroup): string {
+    return `${index}:${group}`;
+  }
+
+  private _parseSeriesOptionGroupKey(
+    key: string
+  ): { index: number; group: SeriesOptionGroup } | undefined {
+    const [indexPart, groupPart] = key.split(":");
+    const index = Number(indexPart);
+    if (
+      Number.isNaN(index) ||
+      !SERIES_OPTION_GROUPS.has(groupPart as SeriesOptionGroup)
+    ) {
+      return undefined;
+    }
+    return { index, group: groupPart as SeriesOptionGroup };
+  }
+
+  private _formatSeriesSummary(series: EnergyCustomGraphSeriesConfig): string {
+    const parts: string[] = [];
+    if (series.name?.trim()) {
+      parts.push(this._formatSeriesSourceDescriptor(series));
+    }
+    parts.push(this._formatChartType(series.chart_type ?? "bar"));
+    parts.push((series.y_axis ?? "left") === "right" ? "Right axis" : "Left axis");
+    return parts.join(" · ");
+  }
+
+  private _formatSeriesSourceSummary(series: EnergyCustomGraphSeriesConfig): string {
+    return this._formatSeriesSourceDescriptor(series);
+  }
+
+  private _formatSeriesStyleSummary(series: EnergyCustomGraphSeriesConfig): string {
+    const parts = [
+      this._formatChartType(series.chart_type ?? "bar"),
+      (series.y_axis ?? "left") === "right" ? "Right axis" : "Left axis",
+    ];
+    if (series.stack?.trim()) {
+      parts.push(`Stack: ${series.stack.trim()}`);
+    }
+    if (series.fill === true) {
+      parts.push("Fill");
+    }
+    return parts.join(" · ");
+  }
+
+  private _formatSeriesVisibilitySummary(series: EnergyCustomGraphSeriesConfig): string {
+    const hidden: string[] = [];
+    if (series.show_in_chart === false) {
+      hidden.push("Chart");
+    }
+    if (series.show_in_legend === false) {
+      hidden.push("Legend");
+    }
+    if (series.show_in_tooltip === false) {
+      hidden.push("Tooltip");
+    }
+    const parts = hidden.length ? [`Hidden: ${hidden.join(", ")}`] : ["Visible"];
+    if (series.hidden_by_default === true) {
+      parts.push("Hidden by default");
+    }
+    if (series.show_value_labels === true) {
+      parts.push("Value labels");
+    }
+    return parts.join(" · ");
+  }
+
+  private _formatSeriesTransformSummary(series: EnergyCustomGraphSeriesConfig): string {
+    const parts: string[] = [];
+    if (series.multiply !== undefined) {
+      parts.push("Multiply");
+    }
+    if (series.add !== undefined) {
+      parts.push("Add");
+    }
+    if (series.clip_min !== undefined) {
+      parts.push("Clip min");
+    }
+    if (series.clip_max !== undefined) {
+      parts.push("Clip max");
+    }
+    return parts.length ? parts.join(" · ") : "No transform";
+  }
+
+  private _formatSeriesTitle(
+    series: EnergyCustomGraphSeriesConfig,
+    index: number
+  ): string {
+    const explicitName = series.name?.trim();
+    if (explicitName) {
+      return explicitName;
+    }
+    return this._formatSeriesSourceDescriptor(series) || `Series ${index + 1}`;
+  }
+
+  private _formatSeriesSourceDescriptor(
+    series: EnergyCustomGraphSeriesConfig
+  ): string {
+    const source = this._resolveSeriesSource(series);
+    if (source === "calculation") {
+      const count = series.calculation?.terms?.length ?? 0;
+      return count ? `Calculation · ${count} terms` : "Calculation · no terms";
+    }
+    if (source === "forecast") {
+      return series.pv_production_entity
+        ? `Forecast · ${series.pv_production_entity}`
+        : "Forecast · all solar forecasts";
+    }
+    const id = normalizeStatisticId(series.statistic_id);
+    if (!id) {
+      return "No entity selected";
+    }
+    const metadata = this._getStatisticMetadata(id);
+    return getStatisticLabel(this.hass, id, metadata);
+  }
+
+  private _formatChartType(type: EnergyCustomGraphChartType): string {
+    return type.charAt(0).toUpperCase() + type.slice(1);
   }
 
   private _renderTimespanSection(cfg: EnergyCustomGraphCardConfig) {
@@ -1538,76 +2327,94 @@ ${this._renderTimespanSection(cfg)}
     const mode = timespan.mode;
     const showCount =
       timespan.mode === "relative" && isRelativeCalendarPeriod(timespan.period);
+    const hasTimeOffset = this._hasAnySeriesTimeOffset();
+    const relativeKind =
+      timespan.mode === "relative" && !isRelativeCalendarPeriod(timespan.period)
+        ? "rolling"
+        : "calendar";
 
     return html`
       <div class="section">
         <div class="field">
-          <label>Mode</label>
-          <div class="radio-group">
-            ${[
-              { value: "energy", label: "Follow energy date picker" },
-              { value: "relative", label: "Relative time period" },
-              { value: "fixed", label: "Fixed timespan" },
-            ].map(
-              (option) => html`
-                <label class="radio-option">
-                  <input
-                    type="radio"
-                    name="timespan-mode"
-                    .value=${option.value}
-                    .checked=${mode === option.value}
-                    @change=${() => this._setTimespanMode(option.value as "energy" | "relative" | "fixed")}
-                  />
-                  <span>${option.label}</span>
-                </label>
-              `
-            )}
-          </div>
+          <label>Timespan</label>
+          ${this._renderButtonToggleGroup(
+            [
+              { value: "energy", label: "Energy" },
+              { value: "relative", label: "Relative" },
+              { value: "fixed", label: "Fixed" },
+            ],
+            mode,
+            (value) => this._setTimespanMode(value)
+          )}
         </div>
 
         ${mode === "energy"
           ? html`
-              ${this._renderTextInput({
-                label: "Collection key",
-                helper: "Optional key when multiple energy pickers are present",
-                value: cfg.collection_key ?? "",
-                onInput: (value) =>
-                  this._updateConfig("collection_key", value || undefined),
-              })}
               <div class="row">
                 <ha-switch
                   .checked=${cfg.allow_compare !== false}
+                  ?disabled=${hasTimeOffset}
                   @change=${(ev: Event) =>
                     this._updateConfig(
                       "allow_compare",
                       (ev.target as HTMLInputElement).checked
                     )}
                 ></ha-switch>
-                <span>Follow compare toggle</span>
+                <span>Allow compare</span>
               </div>
+              ${hasTimeOffset
+                ? this._renderEditorHelpHint(
+                    "Series time offset disables the Energy date picker compare mode.",
+                    "warning"
+                  )
+                : nothing}
+              ${this._renderTextInput({
+                label: "Collection key",
+                helper: "Usually only needed for multiple independent Energy date pickers on one dashboard page.",
+                value: cfg.collection_key ?? "",
+                onInput: (value) =>
+                  this._updateConfig("collection_key", value || undefined),
+              })}
             `
           : nothing}
 
         ${mode === "relative"
           ? html`
               <div class="field">
+                <label>Relative type</label>
+                ${this._renderButtonToggleGroup(
+                  [
+                    { value: "calendar", label: "Calendar" },
+                    { value: "rolling", label: "Rolling" },
+                  ],
+                  relativeKind,
+                  (value) =>
+                    this._updateTimespanRelativePeriod(
+                      value === "calendar" ? "day" : "last_24_hours"
+                    )
+                )}
+              </div>
+              <div class="field">
                 <label>Period</label>
                 <select
                   @change=${(ev: Event) =>
                     this._updateTimespanRelativePeriod((ev.target as HTMLSelectElement).value as EnergyCustomGraphRelativePeriod)}
                 >
-                  ${[
-                    { value: "hour", label: "Hour" },
-                    { value: "day", label: "Day" },
-                    { value: "week", label: "Week" },
-                    { value: "month", label: "Month" },
-                    { value: "year", label: "Year" },
-                    { value: "last_60_minutes", label: "Last 60 minutes" },
-                    { value: "last_24_hours", label: "Last 24 hours" },
-                    { value: "last_7_days", label: "Last 7 days" },
-                    { value: "last_30_days", label: "Last 30 days" },
-                    { value: "last_12_months", label: "Last 12 months" },
-                  ].map(
+                  ${(relativeKind === "calendar"
+                    ? [
+                        { value: "hour", label: "Hour" },
+                        { value: "day", label: "Day" },
+                        { value: "week", label: "Week" },
+                        { value: "month", label: "Month" },
+                        { value: "year", label: "Year" },
+                      ]
+                    : [
+                        { value: "last_60_minutes", label: "Last 60 minutes" },
+                        { value: "last_24_hours", label: "Last 24 hours" },
+                        { value: "last_7_days", label: "Last 7 days" },
+                        { value: "last_30_days", label: "Last 30 days" },
+                        { value: "last_12_months", label: "Last 12 months" },
+                      ]).map(
                     ({ value, label }) => html`
                       <option
                         value=${value}
@@ -1633,129 +2440,54 @@ ${this._renderTimespanSection(cfg)}
                       this._updateTimespanRelativeCount(value),
                   })
                 : nothing}
-              ${this._renderTextInput({
-                label: "Offset",
-                type: "number",
-                value: timespan.mode === "relative" ? String(timespan.offset ?? 0) : "0",
-                onInput: (value) =>
-                  this._updateTimespanRelativeOffset(Number(value)),
-              })}
+              ${showCount
+                ? this._renderTextInput({
+                    label: "Offset",
+                    type: "number",
+                    value: String(timespan.offset ?? 0),
+                    onInput: (value) =>
+                      this._updateTimespanRelativeOffset(Number(value)),
+                  })
+                : nothing}
             `
           : nothing}
 
         ${mode === "fixed"
           ? html`
-              ${this._renderTextInput({
-                label: "Start",
-                helper: "ISO 8601 format (e.g. 2024-01-01T00:00:00)",
-                value: timespan.mode === "fixed" ? (timespan.start ?? "") : "",
-                onInput: (value) =>
-                  this._updateTimespanFixedStart(value || undefined),
-              })}
-              ${this._renderTextInput({
-                label: "End",
-                helper: "ISO 8601 format (e.g. 2024-01-31T23:59:59)",
-                value: timespan.mode === "fixed" ? (timespan.end ?? "") : "",
-                onInput: (value) =>
-                  this._updateTimespanFixedEnd(value || undefined),
-              })}
+              <div class="compact-grid two">
+                ${this._renderTextInput({
+                  label: "Start",
+                  helper: "ISO 8601, e.g. 2024-01-01T00:00:00.",
+                  value: timespan.mode === "fixed" ? (timespan.start ?? "") : "",
+                  onInput: (value) =>
+                    this._updateTimespanFixedStart(value || undefined),
+                })}
+                ${this._renderTextInput({
+                  label: "End",
+                  helper: "ISO 8601, e.g. 2024-01-31T23:59:59.",
+                  value: timespan.mode === "fixed" ? (timespan.end ?? "") : "",
+                  onInput: (value) =>
+                    this._updateTimespanFixedEnd(value || undefined),
+                })}
+              </div>
             `
           : nothing}
-      </div>
-    `;
-  }
-
-  private _renderSeriesBasicsGroup(series: EnergyCustomGraphSeriesConfig, index: number) {
-    const chartType = series.chart_type ?? "bar";
-    const chartButtons: Array<{ value: EnergyCustomGraphChartType; label: string }> = [
-      { value: "bar", label: "Bar" },
-      { value: "line", label: "Line" },
-      { value: "step", label: "Step" },
-    ];
-    return html`
-      <div class="group-card">
-        <div class="group-header">
-          <span class="group-title">Basics</span>
-        </div>
-        <div class="group-body">
-          ${this._renderTextInput({
-            label: "Series name",
-            value: series.name ?? "",
-            onInput: (value) =>
-              this._updateSeries(index, "name", value || undefined),
-          })}
-          <div class="field">
-            <label>Chart type</label>
-            <div class="segment-group" role="group" aria-label="Chart type">
-              ${chartButtons.map(
-                (button) => html`
-                  <button
-                    type="button"
-                    class=${classMap({
-                      "segment-button": true,
-                      active: chartType === button.value,
-                    })}
-                    @click=${() => this._setSeriesChartType(index, button.value)}
-                  >
-                    ${button.label}
-                  </button>
-                `
-              )}
-            </div>
-          </div>
-          <div class="field">
-            <label>Y axis</label>
-            <div class="segment-group" role="group" aria-label="Y axis">
-              ${[
-                { value: "left", label: "Left" },
-                { value: "right", label: "Right" },
-              ].map(
-                (button) => html`
-                  <button
-                    type="button"
-                    class=${classMap({
-                      "segment-button": true,
-                      active: (series.y_axis ?? "left") === button.value,
-                    })}
-                    @click=${() => this._updateSeries(index, "y_axis", button.value as "left" | "right")}
-                  >
-                    ${button.label}
-                  </button>
-                `
-              )}
-            </div>
-          </div>
-        </div>
       </div>
     `;
   }
 
   private _renderSeriesSourceGroup(series: EnergyCustomGraphSeriesConfig, index: number) {
     const source = this._resolveSeriesSource(series);
+    const buttons: Array<{ value: "statistic" | "calculation" | "forecast"; label: string }> = [
+      { value: "statistic", label: "Entity" },
+      { value: "calculation", label: "Calculation" },
+      { value: "forecast", label: "Forecast" },
+    ];
     return html`
-      <div class="group-card">
-        <div class="group-header">
-          <span class="group-title">Data source</span>
-        </div>
-        <div class="group-body series-source-body">
-          <div class="segment-group" role="group" aria-label="Data source">
-            ${(["statistic", "calculation", "forecast"] as const).map(
-              (mode) => html`
-                <button
-                  type="button"
-                  class=${classMap({
-                    "segment-button": true,
-                    active: source === mode,
-                  })}
-                  @click=${() => this._setSeriesSource(index, mode)}
-                >
-                  ${mode === "statistic"
-                    ? "Statistic"
-                    : mode === "calculation"
-                      ? "Calculation"
-                      : "Forecast"}
-                </button>
-              `
+      <div class="section series-source-body">
+          <div class="field full-width">
+            ${this._renderButtonToggleGroup(buttons, source, (mode) =>
+              this._setSeriesSource(index, mode)
             )}
           </div>
           ${source === "calculation"
@@ -1763,7 +2495,6 @@ ${this._renderTimespanSection(cfg)}
             : source === "forecast"
               ? this._renderSeriesForecastContent(series, index)
               : this._renderSeriesStatisticContent(series, index)}
-        </div>
       </div>
     `;
   }
@@ -1772,36 +2503,62 @@ ${this._renderTimespanSection(cfg)}
     if (!this.hass) {
       return html`<p>Loading...</p>`;
     }
+    const id = normalizeStatisticId(series.statistic_id);
+    const resolution = this._resolveStatisticSource(id);
+    const issue = this._getStatisticIssue(id, series.stat_type);
+    const metadata = resolution.metadata;
+    const statTypeDisabled = !metadata;
+    const current = series.stat_type ?? selectDefaultStatisticType(metadata) ?? "";
 
     return html`
       <ha-entity-picker
         .hass=${this.hass}
         .value=${series.statistic_id}
-        .label=${"Statistic ID"}
+        .label=${"Entity"}
         allow-custom-entity
         @value-changed=${(ev: CustomEvent) =>
-          this._updateSeries(index, "statistic_id", ev.detail.value || undefined)}
+          this._handleSeriesStatisticChanged(index, ev.detail.value || undefined)}
       ></ha-entity-picker>
       <div class="field">
         <label>Statistic type</label>
-        ${(() => {
-          const current = series.stat_type ?? "change";
-          return html`<select
-            @change=${(ev: Event) =>
-              this._updateSeries(
-                index,
-                "stat_type",
-                (ev.target as HTMLSelectElement).value as EnergyCustomGraphStatisticType
-              )}
-          >
-            ${STAT_TYPE_OPTIONS.map(
-              (option) =>
-                html`<option value=${option.value} ?selected=${current === option.value}
-                  >${option.label}</option
-                >`
+        <select
+          ?disabled=${statTypeDisabled}
+          @change=${(ev: Event) =>
+            this._updateSeries(
+              index,
+              "stat_type",
+              (ev.target as HTMLSelectElement).value as EnergyCustomGraphStatisticType
             )}
-          </select>`;
-        })()}
+        >
+          <option value="" ?selected=${current === ""}>
+            Not used
+          </option>
+          ${STAT_TYPE_OPTIONS.map(
+            (option) => {
+              const supported = isStatisticTypeSupported(metadata, option.value);
+              return html`<option
+                value=${option.value}
+                ?selected=${current === option.value}
+                ?disabled=${!supported}
+              >
+                ${option.label}
+              </option>`;
+            }
+          )}
+        </select>
+        ${statTypeDisabled
+          ? this._renderEditorHelpHint(
+              resolution.status === "raw_only"
+                ? "Statistic type does not affect RAW history."
+                : "Select an entity with recorder statistics to choose a statistic type.",
+              "info"
+            )
+          : issue
+            ? this._renderEditorHelpHint(
+                `${issue.cause}${issue.action ? ` · ${issue.action}` : ""}`,
+                issue.severity
+              )
+            : nothing}
       </div>
       ${this._renderSeriesTimeOffsetFields(series, index)}
     `;
@@ -1916,16 +2673,27 @@ ${this._renderTimespanSection(cfg)}
           }),
       })}
       ${this._renderSeriesTimeOffsetFields(series, index)}
-      <div class="terms-list">
-        ${calculation.terms?.length
-          ? calculation.terms.map((term, termIndex) =>
-              this._renderCalculationTerm(index, termIndex, term)
-            )
-          : html`<p class="hint">Add at least one term to build the calculation.</p>`}
+      <div class="terms-section">
+        <div class="terms-header">
+          <span class="subtitle">Terms</span>
+          <button
+            type="button"
+            class="icon-button strong"
+            title="Add term"
+            aria-label="Add term"
+            @click=${() => this._addCalculationTerm(index)}
+          >
+            <ha-icon icon="mdi:plus"></ha-icon>
+          </button>
+        </div>
+        <div class="terms-list">
+          ${calculation.terms?.length
+            ? calculation.terms.map((term, termIndex) =>
+                this._renderCalculationTerm(index, termIndex, term)
+              )
+            : html`<p class="hint">No terms configured yet.</p>`}
+        </div>
       </div>
-      <button type="button" class="outlined" @click=${() => this._addCalculationTerm(index)}>
-        Add term
-      </button>
     `;
   }
 
@@ -1943,42 +2711,35 @@ ${this._renderTimespanSection(cfg)}
       : term.constant !== undefined
         ? `Constant: ${term.constant}`
         : "No input selected";
-    return html`
-      <div class="nested-collapsible ${expanded ? "expanded" : "collapsed"}">
-        <button type="button" class="nested-header" @click=${() => this._toggleTermExpanded(termKey)}>
-          <div class="nested-title">
-            <strong>${operationLabel}</strong>
-            <p class="hint">${descriptor}</p>
-          </div>
-          <span class="chevron">
-            <ha-icon icon=${expanded ? "mdi:chevron-down" : "mdi:chevron-right"}></ha-icon>
-          </span>
-        </button>
-        ${expanded
-          ? html`
-              <div class="nested-body">
-                <div class="term-body column">
-                  ${this._renderTermOperationField(seriesIndex, termIndex, operation)}
-                  ${this._renderTermSourceFields(seriesIndex, termIndex, term)}
-                  ${this._renderTermTransformFields(seriesIndex, termIndex, term)}
-                </div>
-                <div class="nested-footer">
-                  <button
-                    type="button"
-                    class="text warning"
-                    @click=${(ev: Event) => {
-                      ev.stopPropagation();
-                      this._removeCalculationTerm(seriesIndex, termIndex);
-                    }}
-                  >
-                    Remove term
-                  </button>
-                </div>
-              </div>
-            `
-          : nothing}
-      </div>
-    `;
+    return this._renderExpansionPanel({
+      title: operationLabel,
+      icon: "mdi:function",
+      summary: descriptor,
+      expanded,
+      onToggle: () => this._toggleTermExpanded(termKey),
+      actions: html`
+          <button
+            type="button"
+            class="icon-button danger"
+            title="Remove term"
+            aria-label="Remove term"
+            @click=${(ev: Event) => {
+              ev.stopPropagation();
+              this._removeCalculationTerm(seriesIndex, termIndex);
+            }}
+          >
+            <ha-icon icon="mdi:close"></ha-icon>
+          </button>
+      `,
+      body: html`
+        <div class="term-body column">
+          ${this._renderTermOperationField(seriesIndex, termIndex, operation)}
+          ${this._renderTermSourceFields(seriesIndex, termIndex, term)}
+          ${this._renderTermTransformFields(seriesIndex, termIndex, term)}
+        </div>
+      `,
+      className: "term-panel",
+    });
   }
 
   private _renderTermOperationField(
@@ -2020,43 +2781,36 @@ ${this._renderTimespanSection(cfg)}
     const mode: "statistic" | "constant" =
       term.constant !== undefined ? "constant" : "statistic";
     const buttons: Array<{ value: "statistic" | "constant"; label: string }> = [
-      { value: "statistic", label: "Statistic" },
+      { value: "statistic", label: "Entity" },
       { value: "constant", label: "Constant" },
     ];
+    const id = normalizeStatisticId(term.statistic_id);
+    const resolution = this._resolveStatisticSource(id);
+    const issue = this._getStatisticIssue(id, term.stat_type);
+    const metadata = resolution.metadata;
+    const statTypeDisabled = !metadata;
+    const current = term.stat_type ?? selectDefaultStatisticType(metadata) ?? "";
     return html`
       <div class="field full-width">
         <label>Input type</label>
-        <div class="segment-group" role="group" aria-label="Term input type">
-          ${buttons.map(
-            (button) => html`
-              <button
-                type="button"
-                class=${classMap({
-                  "segment-button": true,
-                  active: mode === button.value,
-                })}
-                @click=${() => this._setTermMode(seriesIndex, termIndex, button.value)}
-              >
-                ${button.label}
-              </button>
-            `
-          )}
-        </div>
+        ${this._renderButtonToggleGroup(buttons, mode, (value) =>
+          this._setTermMode(seriesIndex, termIndex, value)
+        )}
       </div>
       ${mode === "statistic"
         ? html`
             <ha-entity-picker
               .hass=${this.hass}
               .value=${term.statistic_id}
-              .label=${"Statistic ID"}
-              .helper=${"Recorder statistic (e.g. sensor.energy_import)"}
+              .label=${"Entity"}
               allow-custom-entity
               @value-changed=${(ev: CustomEvent) =>
-                this._updateTerm(seriesIndex, termIndex, "statistic_id", ev.detail.value || undefined)}
+                this._handleTermStatisticChanged(seriesIndex, termIndex, ev.detail.value || undefined)}
             ></ha-entity-picker>
             <div class="field">
               <label>Statistic type</label>
               <select
+                ?disabled=${statTypeDisabled}
                 @change=${(ev: Event) =>
                   this._updateTerm(
                     seriesIndex,
@@ -2065,13 +2819,35 @@ ${this._renderTimespanSection(cfg)}
                     (ev.target as HTMLSelectElement).value as EnergyCustomGraphStatisticType
                   )}
               >
+                <option value="" ?selected=${current === ""}>
+                  Not used
+                </option>
                 ${STAT_TYPE_OPTIONS.map(
-                  (option) =>
-                    html`<option value=${option.value} ?selected=${(term.stat_type ?? "change") === option.value}>
+                  (option) => {
+                    const supported = isStatisticTypeSupported(metadata, option.value);
+                    return html`<option
+                      value=${option.value}
+                      ?selected=${current === option.value}
+                      ?disabled=${!supported}
+                    >
                       ${option.label}
-                    </option>`
+                    </option>`;
+                  }
                 )}
               </select>
+              ${statTypeDisabled
+                ? this._renderEditorHelpHint(
+                    resolution.status === "raw_only"
+                      ? "Statistic type does not affect RAW history."
+                      : "Select an entity with recorder statistics to choose a statistic type.",
+                    "info"
+                  )
+                : issue
+                  ? this._renderEditorHelpHint(
+                      `${issue.cause}${issue.action ? ` · ${issue.action}` : ""}`,
+                      issue.severity
+                    )
+                  : nothing}
             </div>
           `
         : html`
@@ -2159,9 +2935,6 @@ ${this._renderTimespanSection(cfg)}
         if (!draft.statistic_id) {
           draft.statistic_id = "";
         }
-        if (!draft.stat_type) {
-          draft.stat_type = "change";
-        }
       } else {
         draft.statistic_id = undefined;
         draft.stat_type = undefined;
@@ -2174,6 +2947,416 @@ ${this._renderTimespanSection(cfg)}
         }
       }
     });
+  }
+
+  private _renderSeriesStyleSegment(series: EnergyCustomGraphSeriesConfig, index: number) {
+    const chartType = series.chart_type ?? "bar";
+    const isLineLike = chartType === "line" || chartType === "step";
+    const fillActive = isLineLike && series.fill === true;
+    const chartButtons: Array<{ value: EnergyCustomGraphChartType; label: string }> = [
+      { value: "bar", label: "Bar" },
+      { value: "line", label: "Line" },
+      { value: "step", label: "Step" },
+    ];
+    const rawColor =
+      typeof series.color === "string" ? series.color.trim() : undefined;
+    const presetToken = this._extractPresetToken(rawColor);
+    const configColorMode = !rawColor
+      ? COLOR_SELECT_DEFAULT
+      : presetToken
+        ? presetToken
+        : COLOR_SELECT_CUSTOM;
+    const overrideMode = this._colorModeSelections.get(index);
+    const colorMode = overrideMode ?? configColorMode;
+    const storedCustom = this._customColorDrafts.get(index);
+    const autoColorToken = this._resolveAutoColorToken(index);
+    const customTextValue =
+      colorMode === COLOR_SELECT_CUSTOM
+        ? storedCustom ?? rawColor ?? ""
+        : storedCustom ?? "";
+    const previewToken =
+      colorMode === COLOR_SELECT_DEFAULT
+        ? autoColorToken
+        : colorMode === COLOR_SELECT_CUSTOM
+          ? customTextValue || rawColor || autoColorToken
+          : colorMode;
+    const previewColor =
+      previewToken !== undefined ? this._normalizeColorToken(previewToken) : undefined;
+    const customInputValue = colorMode === COLOR_SELECT_CUSTOM ? customTextValue ?? "" : "";
+
+    return html`
+      <div class="section">
+        <div class="compact-grid two">
+          <div class="field">
+            <label>Chart type</label>
+            ${this._renderButtonToggleGroup(chartButtons, chartType, (value) =>
+              this._setSeriesChartType(index, value)
+            )}
+          </div>
+          <div class="field">
+            <label>Y axis</label>
+            ${this._renderButtonToggleGroup(
+              [
+                { value: "left", label: "Left" },
+                { value: "right", label: "Right" },
+              ],
+              series.y_axis ?? "left",
+              (value) => this._updateSeries(index, "y_axis", value)
+            )}
+          </div>
+        </div>
+        <div class="color-row">
+          <div class="field">
+            <label>Series color</label>
+            <div class="color-select-wrapper">
+              ${this._renderColorPreview(previewColor, chartType)}
+              <select
+                .value=${colorMode}
+                @change=${(ev: Event) =>
+                  this._handleSeriesColorSelect(index, (ev.target as HTMLSelectElement).value)}
+              >
+                <option
+                  value=${COLOR_SELECT_DEFAULT}
+                  ?selected=${colorMode === COLOR_SELECT_DEFAULT}
+                >
+                  Default
+                </option>
+                ${ENERGY_COLOR_PRESETS.map(
+                  (preset) =>
+                    html`<option
+                      value=${preset.value}
+                      ?selected=${colorMode === preset.value}
+                    >
+                      ${preset.label}
+                    </option>`
+                )}
+                <option
+                  value=${COLOR_SELECT_CUSTOM}
+                  ?selected=${colorMode === COLOR_SELECT_CUSTOM}
+                >
+                  Custom
+                </option>
+              </select>
+            </div>
+          </div>
+        </div>
+        ${colorMode === COLOR_SELECT_CUSTOM
+          ? html`
+              <div class="color-row">
+                ${this._renderTextInput({
+                  label: "Custom color",
+                  value: customInputValue ?? "",
+                  onInput: (value) =>
+                    this._handleCustomColorInput(index, value),
+                })}
+              </div>
+            `
+          : nothing}
+        ${this._renderTextInput({
+          label: "Stack group",
+          helper: "Series using the same name stack together.",
+          value: series.stack ?? "",
+          onInput: (value) =>
+            this._updateSeries(index, "stack", value || undefined),
+        })}
+        ${isLineLike
+          ? html`
+              <div class="row">
+                <ha-switch
+                  .checked=${series.fill === true}
+                  @change=${(ev: Event) =>
+                    this._updateSeries(index, "fill", (ev.target as HTMLInputElement).checked)}
+                ></ha-switch>
+                <span>Fill</span>
+              </div>
+            `
+          : nothing}
+        ${this._renderSeriesStyleMore(series, index, fillActive)}
+      </div>
+    `;
+  }
+
+  private _renderSeriesStyleMore(
+    series: EnergyCustomGraphSeriesConfig,
+    index: number,
+    fillActive: boolean
+  ) {
+    const chartType = series.chart_type ?? "bar";
+    const isLineLike = chartType === "line" || chartType === "step";
+    const gradientFillActive = fillActive && series.gradient_fill === true;
+    const fillOpacityHelper = isLineLike
+      ? gradientFillActive
+        ? "Default 0.75, zero line 0.25."
+        : "Default 0.15 for line fill."
+      : "Default 0.5 for bars.";
+    const count = this._countSeriesStyleMoreFields(series);
+    const expanded = this._seriesStyleMoreExpanded.has(index) || count > 0;
+    const compareRawColor =
+      typeof series.compare_color === "string" ? series.compare_color.trim() : undefined;
+    const comparePresetToken = this._extractPresetToken(compareRawColor);
+    const compareConfigMode = !compareRawColor
+      ? COLOR_SELECT_INHERIT
+      : comparePresetToken
+        ? comparePresetToken
+        : COLOR_SELECT_CUSTOM;
+    const compareOverride = this._compareColorModeSelections.get(index);
+    const compareMode = compareOverride ?? compareConfigMode;
+    const compareStoredCustom = this._compareCustomColorDrafts.get(index);
+    const compareCustomText = compareMode === COLOR_SELECT_CUSTOM
+      ? compareStoredCustom ?? compareRawColor ?? ""
+      : compareStoredCustom ?? "";
+    const baseColor = this._deriveCustomDraftForSeries(index);
+    const comparePreviewSource =
+      compareMode === COLOR_SELECT_INHERIT
+        ? baseColor
+        : compareMode === COLOR_SELECT_CUSTOM
+          ? compareStoredCustom ?? compareRawColor ?? ""
+          : compareMode;
+    const comparePreviewColor =
+      comparePreviewSource !== undefined
+        ? this._normalizeColorToken(comparePreviewSource)
+        : undefined;
+
+    return this._renderMoreBlock({
+      count,
+      expanded,
+      onToggle: () => this._toggleSeriesStyleMore(index, expanded),
+      body: html`
+        <div class="color-row">
+          <div class="field">
+            <label>Compare series color</label>
+            <div class="color-select-wrapper">
+              ${this._renderColorPreview(comparePreviewColor, chartType)}
+              <select
+                .value=${compareMode}
+                @change=${(ev: Event) =>
+                  this._handleCompareColorSelect(
+                    index,
+                    (ev.target as HTMLSelectElement).value
+                  )}
+              >
+                <option
+                  value=${COLOR_SELECT_INHERIT}
+                  ?selected=${compareMode === COLOR_SELECT_INHERIT}
+                >
+                  Inherit
+                </option>
+                ${ENERGY_COLOR_PRESETS.map(
+                  (preset) =>
+                    html`<option
+                      value=${preset.value}
+                      ?selected=${compareMode === preset.value}
+                    >
+                      ${preset.label}
+                    </option>`
+                )}
+                <option
+                  value=${COLOR_SELECT_CUSTOM}
+                  ?selected=${compareMode === COLOR_SELECT_CUSTOM}
+                >
+                  Custom
+                </option>
+              </select>
+            </div>
+          </div>
+        </div>
+        ${compareMode === COLOR_SELECT_CUSTOM
+          ? html`
+              <div class="color-row">
+                ${this._renderTextInput({
+                  label: "Custom compare color",
+                  value: compareCustomText ?? "",
+                  onInput: (value) =>
+                    this._handleCompareCustomColorInput(index, value),
+                })}
+              </div>
+            `
+          : nothing}
+        ${fillActive
+          ? html`
+              <div class="row">
+                <ha-switch
+                  .checked=${series.gradient_fill === true}
+                  @change=${(ev: Event) =>
+                    this._updateSeries(
+                      index,
+                      "gradient_fill",
+                      (ev.target as HTMLInputElement).checked
+                    )}
+                ></ha-switch>
+                <span>Gradient fill</span>
+              </div>
+            `
+          : nothing}
+        ${this._renderTextInput({
+          label: "Fill opacity",
+          type: "number",
+          step: "0.01",
+          min: "0",
+          max: "1",
+          helper: fillOpacityHelper,
+          value: series.fill_opacity !== undefined ? String(series.fill_opacity) : "",
+          onInput: (value) =>
+            this._updateSeriesNumber(index, "fill_opacity", value),
+        })}
+        ${fillActive
+          ? this._renderTextInput({
+              label: "Fill to series",
+              helper: "Name of the line series to fill towards.",
+              value: series.fill_to_series ?? "",
+              onInput: (value) =>
+                this._updateSeries(index, "fill_to_series", value || undefined),
+            })
+          : nothing}
+        ${this._renderTextInput({
+          label: "Line opacity",
+          type: "number",
+          step: "0.01",
+          min: "0",
+          max: "1",
+          helper: "Default 0.85 for lines, 1.0 for bars.",
+          value: series.line_opacity !== undefined ? String(series.line_opacity) : "",
+          onInput: (value) =>
+            this._updateSeriesNumber(index, "line_opacity", value),
+        })}
+        ${isLineLike
+          ? html`
+              ${this._renderTextInput({
+                label: "Line width",
+                type: "number",
+                step: "0.5",
+                min: "0.5",
+                helper: "Default 1.5.",
+                value: series.line_width !== undefined ? String(series.line_width) : "",
+                onInput: (value) =>
+                  this._updateSeriesNumber(index, "line_width", value),
+              })}
+              <div class="field">
+                <label>Line style</label>
+                ${this._renderButtonToggleGroup(
+                  [
+                    { value: "solid", label: "Solid" },
+                    { value: "dashed", label: "Dashed" },
+                    { value: "dotted", label: "Dotted" },
+                  ],
+                  series.line_style ?? "solid",
+                  (value) => this._setSeriesLineStyle(index, value)
+                )}
+              </div>
+              ${this._renderTextInput({
+                label: "Smooth",
+                helper: "Boolean or number (0-1). Empty uses default.",
+                value: series.smooth !== undefined ? String(series.smooth) : "",
+                onInput: (value) =>
+                  this._updateSeriesSmooth(index, value),
+              })}
+            `
+          : nothing}
+      `,
+    });
+  }
+
+  private _renderSeriesVisibilitySegment(
+    series: EnergyCustomGraphSeriesConfig,
+    index: number
+  ) {
+    const chartType = series.chart_type ?? "bar";
+    const showValueLabels = chartType === "bar" && series.show_value_labels === true;
+    return html`
+      <div class="section">
+        <div class="toggle-grid" role="group" aria-label="Series visibility">
+          ${this._renderCompactToggle(
+            "Chart",
+            series.show_in_chart !== false,
+            (value) => this._updateSeries(index, "show_in_chart", value)
+          )}
+          ${this._renderCompactToggle(
+            "Legend",
+            series.show_in_legend !== false,
+            (value) => this._updateSeries(index, "show_in_legend", value)
+          )}
+          ${this._renderCompactToggle(
+            "Tooltip",
+            series.show_in_tooltip !== false,
+            (value) => this._updateSeries(index, "show_in_tooltip", value)
+          )}
+          ${this._renderCompactToggle(
+            "Hidden by default",
+            series.hidden_by_default === true,
+            (value) => this._updateSeries(index, "hidden_by_default", value)
+          )}
+          ${chartType === "bar"
+            ? this._renderCompactToggle(
+                "Value labels",
+                showValueLabels,
+                (value) => this._updateSeries(index, "show_value_labels", value)
+              )
+            : nothing}
+        </div>
+        ${showValueLabels ? this._renderSeriesVisibilityMore(series, index) : nothing}
+      </div>
+    `;
+  }
+
+  private _renderSeriesVisibilityMore(
+    series: EnergyCustomGraphSeriesConfig,
+    index: number
+  ) {
+    const count = series.value_label_precision !== undefined ? 1 : 0;
+    const expanded = this._seriesVisibilityMoreExpanded.has(index) || count > 0;
+    return this._renderMoreBlock({
+      count,
+      expanded,
+      onToggle: () => this._toggleSeriesVisibilityMore(index, expanded),
+      body: this._renderTextInput({
+        label: "Value label precision",
+        type: "number",
+        step: "1",
+        min: "0",
+        helper: "Default 0, no unit.",
+        value:
+          series.value_label_precision !== undefined
+            ? String(series.value_label_precision)
+            : "",
+        onInput: (value) =>
+          this._updateSeriesNumber(index, "value_label_precision", value),
+      }),
+    });
+  }
+
+  private _countSeriesStyleMoreFields(
+    series: EnergyCustomGraphSeriesConfig
+  ): number {
+    return [
+      series.compare_color,
+      series.gradient_fill === true ? true : undefined,
+      series.fill_opacity,
+      series.fill_to_series,
+      series.line_opacity,
+      series.line_width,
+      series.line_style && series.line_style !== "solid" ? series.line_style : undefined,
+      series.smooth,
+    ].filter((value) => value !== undefined && value !== "").length;
+  }
+
+  private _toggleSeriesStyleMore(index: number, expanded: boolean) {
+    const next = new Set(this._seriesStyleMoreExpanded);
+    if (expanded) {
+      next.delete(index);
+    } else {
+      next.add(index);
+    }
+    this._seriesStyleMoreExpanded = next;
+  }
+
+  private _toggleSeriesVisibilityMore(index: number, expanded: boolean) {
+    const next = new Set(this._seriesVisibilityMoreExpanded);
+    if (expanded) {
+      next.delete(index);
+    } else {
+      next.add(index);
+    }
+    this._seriesVisibilityMoreExpanded = next;
   }
 
   private _renderSeriesDisplayGroup(series: EnergyCustomGraphSeriesConfig, index: number) {
@@ -2502,22 +3685,15 @@ ${this._renderTimespanSection(cfg)}
                 })}
                 <div class="field">
                   <label>Line style</label>
-                  <div class="segment-group" role="group" aria-label="Line style">
-                    ${(["solid", "dashed", "dotted"] as const).map(
-                      (style) => html`
-                        <button
-                          type="button"
-                          class=${classMap({
-                            "segment-button": true,
-                            active: (series.line_style ?? "solid") === style,
-                          })}
-                          @click=${() => this._setSeriesLineStyle(index, style)}
-                        >
-                          ${style.charAt(0).toUpperCase() + style.slice(1)}
-                        </button>
-                      `
-                    )}
-                  </div>
+                  ${this._renderButtonToggleGroup(
+                    [
+                      { value: "solid", label: "Solid" },
+                      { value: "dashed", label: "Dashed" },
+                      { value: "dotted", label: "Dotted" },
+                    ],
+                    series.line_style ?? "solid",
+                    (value) => this._setSeriesLineStyle(index, value)
+                  )}
                 </div>
               `
             : nothing}
@@ -2534,14 +3710,8 @@ ${this._renderTimespanSection(cfg)}
   }
 
   private _renderSeriesTransformGroup(series: EnergyCustomGraphSeriesConfig, index: number) {
-    const chartType = series.chart_type ?? "bar";
-    const showSmooth = chartType === "line";
     return html`
-      <div class="group-card">
-        <div class="group-header">
-          <span class="group-title">Transform</span>
-        </div>
-        <div class="group-body">
+      <div class="section">
           ${this._renderTextInput({
             label: "Multiply",
             type: "number",
@@ -2556,17 +3726,6 @@ ${this._renderTimespanSection(cfg)}
             onInput: (value) =>
               this._updateSeriesNumber(index, "add", value),
           })}
-          ${showSmooth
-            ? html`
-                ${this._renderTextInput({
-                  label: "Smooth",
-                  helper: "Boolean or number (0-1). Leave empty for default.",
-                  value: series.smooth !== undefined ? String(series.smooth) : "",
-                  onInput: (value) =>
-                    this._updateSeriesSmooth(index, value),
-                })}
-              `
-            : nothing}
           ${this._renderTextInput({
             label: "Clip min",
             type: "number",
@@ -2581,7 +3740,6 @@ ${this._renderTimespanSection(cfg)}
             onInput: (value) =>
               this._updateSeriesNumber(index, "clip_max", value),
           })}
-        </div>
       </div>
     `;
   }
@@ -2616,33 +3774,17 @@ ${this._renderTimespanSection(cfg)}
       return;
     }
     if (mode === "calculation") {
-      if (!current.calculation) {
-        this._convertSeriesToCalculation(index);
-      }
-      this._updateSeries(index, "source", "calculation");
-      this._updateSeries(index, "pv_production_entity", undefined);
+      this._replaceSeries(index, convertSeriesToCalculation(current));
+      this._setSeriesOptionGroupExpanded(index, "source", true);
       return;
     }
     if (mode === "forecast") {
-      if (current.calculation) {
-        this._convertSeriesToStatistic(index);
-      }
-      const updatedSeries = [...(this._config!.series ?? [])];
-      const target = { ...updatedSeries[index] };
-      target.source = "forecast";
-      target.statistic_id = undefined;
-      target.calculation = undefined;
-      target.time_offset = undefined;
-      updatedSeries[index] = target;
-      this._updateConfig("series", updatedSeries);
-      this._expandedSeries = new Set(this._expandedSeries).add(index);
+      this._replaceSeries(index, cleanSeriesForForecast(current));
+      this._setSeriesOptionGroupExpanded(index, "source", true);
       return;
     }
-    if (current.calculation) {
-      this._convertSeriesToStatistic(index);
-    }
-    this._updateSeries(index, "source", undefined);
-    this._updateSeries(index, "pv_production_entity", undefined);
+    this._replaceSeries(index, convertSeriesToStatistic(current));
+    this._setSeriesOptionGroupExpanded(index, "source", true);
   }
 
   private _getSeriesReferenceOptions(): Array<{ value: string; label: string }> {
@@ -2954,11 +4096,12 @@ ${this._renderTimespanSection(cfg)}
     const newSeries: EnergyCustomGraphSeriesConfig = {
       statistic_id: "",
       chart_type: "bar",
-      stat_type: "change",
     };
     const updated = [...(this._config!.series ?? []), newSeries];
     this._updateConfig("series", updated);
-    this._expandedSeries = new Set(this._expandedSeries).add(updated.length - 1);
+    const index = updated.length - 1;
+    this._expandedSeries = new Set(this._expandedSeries).add(index);
+    this._setSeriesOptionGroupExpanded(index, "source", true);
   }
 
   private _moveSeriesUp(index: number) {
@@ -2966,19 +4109,7 @@ ${this._renderTimespanSection(cfg)}
 
     const series = [...(this._config!.series ?? [])];
     [series[index - 1], series[index]] = [series[index], series[index - 1]];
-
-    // Update expanded state
-    const updatedExpanded = new Set<number>();
-    this._expandedSeries.forEach((oldIndex) => {
-      if (oldIndex === index) {
-        updatedExpanded.add(index - 1);
-      } else if (oldIndex === index - 1) {
-        updatedExpanded.add(index);
-      } else {
-        updatedExpanded.add(oldIndex);
-      }
-    });
-    this._expandedSeries = updatedExpanded;
+    this._swapSeriesIndexState(index, index - 1);
 
     this._updateConfig("series", series);
   }
@@ -2988,21 +4119,76 @@ ${this._renderTimespanSection(cfg)}
     if (index >= series.length - 1) return;
 
     [series[index], series[index + 1]] = [series[index + 1], series[index]];
-
-    // Update expanded state
-    const updatedExpanded = new Set<number>();
-    this._expandedSeries.forEach((oldIndex) => {
-      if (oldIndex === index) {
-        updatedExpanded.add(index + 1);
-      } else if (oldIndex === index + 1) {
-        updatedExpanded.add(index);
-      } else {
-        updatedExpanded.add(oldIndex);
-      }
-    });
-    this._expandedSeries = updatedExpanded;
+    this._swapSeriesIndexState(index, index + 1);
 
     this._updateConfig("series", series);
+  }
+
+  private _swapSeriesIndexState(left: number, right: number) {
+    const swapIndex = (value: number) =>
+      value === left ? right : value === right ? left : value;
+
+    this._expandedSeries = new Set(
+      Array.from(this._expandedSeries).map(swapIndex)
+    );
+    this._seriesStyleMoreExpanded = new Set(
+      Array.from(this._seriesStyleMoreExpanded).map(swapIndex)
+    );
+    this._seriesVisibilityMoreExpanded = new Set(
+      Array.from(this._seriesVisibilityMoreExpanded).map(swapIndex)
+    );
+
+    const nextOptionGroups = new Map<string, boolean>();
+    this._seriesOptionGroupsExpanded.forEach((expanded, key) => {
+      const parsed = this._parseSeriesOptionGroupKey(key);
+      if (!parsed) {
+        return;
+      }
+      nextOptionGroups.set(
+        this._seriesOptionGroupKey(swapIndex(parsed.index), parsed.group),
+        expanded
+      );
+    });
+    this._seriesOptionGroupsExpanded = nextOptionGroups;
+
+    const nextTermKeys: string[] = [];
+    this._expandedTermKeys.forEach((key) => {
+      const [seriesPart, termPart] = key.split("-");
+      const oldSeriesIndex = Number(seriesPart);
+      if (Number.isNaN(oldSeriesIndex)) {
+        return;
+      }
+      nextTermKeys.push(`${swapIndex(oldSeriesIndex)}-${termPart}`);
+    });
+    this._expandedTermKeys = new Set(nextTermKeys);
+  }
+
+  private _duplicateSeries(index: number) {
+    const series = [...(this._config!.series ?? [])];
+    const current = series[index];
+    if (!current) {
+      return;
+    }
+    const duplicate = cloneSeriesForDuplicate(current);
+    series.splice(index + 1, 0, duplicate);
+    this._updateConfig("series", series);
+    const duplicateIndex = index + 1;
+    const nextExpanded = new Set<number>();
+    this._expandedSeries.forEach((oldIndex) => {
+      nextExpanded.add(oldIndex > index ? oldIndex + 1 : oldIndex);
+    });
+    nextExpanded.add(duplicateIndex);
+    this._expandedSeries = nextExpanded;
+    this._setSeriesOptionGroupExpanded(duplicateIndex, "source", true);
+  }
+
+  private _confirmRemoveSeries(index: number) {
+    const series = this._config?.series?.[index];
+    const label = series ? this._formatSeriesTitle(series, index) : `Series ${index + 1}`;
+    if (!window.confirm(`Delete ${label}?`)) {
+      return;
+    }
+    this._removeSeries(index);
   }
 
   private _removeSeries(index: number) {
@@ -3037,28 +4223,33 @@ ${this._renderTimespanSection(cfg)}
       }
     });
     this._expandedTermKeys = new Set(updatedTermKeys);
-  }
-
-  private _convertSeriesToCalculation(index: number) {
-    const seriesList = [...(this._config!.series ?? [])];
-    const target = { ...seriesList[index] };
-    delete target.statistic_id;
-    target.calculation = target.calculation ?? { terms: [] };
-    seriesList[index] = target;
-    this._updateConfig("series", seriesList);
-    this._expandedSeries = new Set(this._expandedSeries).add(index);
-  }
-
-  private _convertSeriesToStatistic(index: number) {
-    const seriesList = [...(this._config!.series ?? [])];
-    const target = { ...seriesList[index] };
-    delete target.calculation;
-    if (!target.statistic_id) {
-      target.statistic_id = "";
-    }
-    seriesList[index] = target;
-    this._updateConfig("series", seriesList);
-    this._expandedSeries = new Set(this._expandedSeries).add(index);
+    this._seriesStyleMoreExpanded = new Set(
+      Array.from(this._seriesStyleMoreExpanded)
+        .filter((oldIndex) => oldIndex !== index)
+        .map((oldIndex) => (oldIndex > index ? oldIndex - 1 : oldIndex))
+        .filter((newIndex) => newIndex >= 0 && newIndex < series.length)
+    );
+    this._seriesVisibilityMoreExpanded = new Set(
+      Array.from(this._seriesVisibilityMoreExpanded)
+        .filter((oldIndex) => oldIndex !== index)
+        .map((oldIndex) => (oldIndex > index ? oldIndex - 1 : oldIndex))
+        .filter((newIndex) => newIndex >= 0 && newIndex < series.length)
+    );
+    const nextOptionGroups = new Map<string, boolean>();
+    this._seriesOptionGroupsExpanded.forEach((expanded, key) => {
+      const parsed = this._parseSeriesOptionGroupKey(key);
+      if (!parsed || parsed.index === index) {
+        return;
+      }
+      const newIndex = parsed.index > index ? parsed.index - 1 : parsed.index;
+      if (newIndex >= 0 && newIndex < series.length) {
+        nextOptionGroups.set(
+          this._seriesOptionGroupKey(newIndex, parsed.group),
+          expanded
+        );
+      }
+    });
+    this._seriesOptionGroupsExpanded = nextOptionGroups;
   }
 
   private _addCalculationTerm(index: number) {
@@ -3087,9 +4278,23 @@ ${this._renderTimespanSection(cfg)}
     target.calculation = { ...target.calculation, terms };
     series[seriesIndex] = target;
     this._updateConfig("series", series);
-    this._expandedTermKeys = new Set(
-      Array.from(this._expandedTermKeys).filter((key) => key !== `${seriesIndex}-${termIndex}`)
-    );
+    const nextKeys: string[] = [];
+    this._expandedTermKeys.forEach((key) => {
+      const [seriesPart, termPart] = key.split("-");
+      const oldSeriesIndex = Number(seriesPart);
+      const oldTermIndex = Number(termPart);
+      if (oldSeriesIndex !== seriesIndex || Number.isNaN(oldTermIndex)) {
+        nextKeys.push(key);
+        return;
+      }
+      if (oldTermIndex === termIndex) {
+        return;
+      }
+      nextKeys.push(
+        `${seriesIndex}-${oldTermIndex > termIndex ? oldTermIndex - 1 : oldTermIndex}`
+      );
+    });
+    this._expandedTermKeys = new Set(nextKeys);
   }
 
   private _updateTerm(
@@ -3164,6 +4369,84 @@ ${this._renderTimespanSection(cfg)}
     series[index] = current;
     this._updateConfig("series", series);
     this._expandedSeries = new Set(this._expandedSeries).add(index);
+  }
+
+  private _replaceSeries(
+    index: number,
+    nextSeries: EnergyCustomGraphSeriesConfig
+  ) {
+    const series = [...(this._config!.series ?? [])];
+    if (index < 0 || index >= series.length) {
+      return;
+    }
+    series[index] = nextSeries;
+    this._updateConfig("series", series);
+    this._expandedSeries = new Set(this._expandedSeries).add(index);
+  }
+
+  private _handleSeriesStatisticChanged(
+    index: number,
+    rawStatisticId: string | undefined
+  ) {
+    const statisticId = normalizeStatisticId(rawStatisticId);
+    const series = [...(this._config!.series ?? [])];
+    const current = { ...series[index] };
+    current.statistic_id = statisticId || undefined;
+    delete current.stat_type;
+    series[index] = current;
+    this._updateConfig("series", series);
+    this._expandedSeries = new Set(this._expandedSeries).add(index);
+    this._setSeriesOptionGroupExpanded(index, "source", true);
+    if (statisticId) {
+      void this._autoSelectSeriesStatisticType(index, statisticId);
+    }
+  }
+
+  private async _autoSelectSeriesStatisticType(index: number, statisticId: string) {
+    await this._ensureStatisticMetadata([statisticId]);
+    const current = this._config?.series?.[index];
+    if (!current || normalizeStatisticId(current.statistic_id) !== statisticId) {
+      return;
+    }
+    const metadata = this._getStatisticMetadata(statisticId);
+    const nextType = selectDefaultStatisticType(metadata);
+    this._replaceSeries(index, {
+      ...current,
+      stat_type: nextType,
+    });
+  }
+
+  private _handleTermStatisticChanged(
+    seriesIndex: number,
+    termIndex: number,
+    rawStatisticId: string | undefined
+  ) {
+    const statisticId = normalizeStatisticId(rawStatisticId);
+    this._mutateTerm(seriesIndex, termIndex, (draft) => {
+      draft.statistic_id = statisticId || undefined;
+      draft.constant = undefined;
+      delete draft.stat_type;
+    });
+    if (statisticId) {
+      void this._autoSelectTermStatisticType(seriesIndex, termIndex, statisticId);
+    }
+  }
+
+  private async _autoSelectTermStatisticType(
+    seriesIndex: number,
+    termIndex: number,
+    statisticId: string
+  ) {
+    await this._ensureStatisticMetadata([statisticId]);
+    const term = this._config?.series?.[seriesIndex]?.calculation?.terms?.[termIndex];
+    if (!term || normalizeStatisticId(term.statistic_id) !== statisticId) {
+      return;
+    }
+    const metadata = this._getStatisticMetadata(statisticId);
+    const nextType = selectDefaultStatisticType(metadata);
+    this._mutateTerm(seriesIndex, termIndex, (draft) => {
+      draft.stat_type = nextType;
+    });
   }
 
   private _updateSeriesNumber(
@@ -3397,6 +4680,26 @@ ${this._renderTimespanSection(cfg)}
       }
     });
     this._expandedTermKeys = validTerms;
+
+    const validOptionGroups = new Map<string, boolean>();
+    this._seriesOptionGroupsExpanded.forEach((expanded, key) => {
+      const parsed = this._parseSeriesOptionGroupKey(key);
+      if (parsed && parsed.index >= 0 && parsed.index < series.length) {
+        validOptionGroups.set(key, expanded);
+      }
+    });
+    this._seriesOptionGroupsExpanded = validOptionGroups;
+
+    this._seriesStyleMoreExpanded = new Set(
+      Array.from(this._seriesStyleMoreExpanded).filter(
+        (index) => index >= 0 && index < series.length
+      )
+    );
+    this._seriesVisibilityMoreExpanded = new Set(
+      Array.from(this._seriesVisibilityMoreExpanded).filter(
+        (index) => index >= 0 && index < series.length
+      )
+    );
   }
 
   private _formatOperation(operation: EnergyCustomGraphCalculationTerm["operation"]): string {
@@ -3461,6 +4764,9 @@ ${this._renderTimespanSection(cfg)}
     this._syncColorSelections(config.series ?? []);
     this._syncCompareCustomColorDrafts(config.series ?? []);
     this._syncCompareColorSelections(config.series ?? []);
+    if ((key === "title" || key === "header") && !this._cardHeaderHasContent(config)) {
+      this._headerExpanded = false;
+    }
     fireEvent(this, "config-changed", { config });
   }
 
@@ -3596,8 +4902,8 @@ ${this._renderTimespanSection(cfg)}
     if (!current || current.mode !== "relative") return;
 
     if (!isRelativeCalendarPeriod(period)) {
-      const { count: _count, ...withoutCount } = current;
-      this._updateConfig("timespan", { ...withoutCount, period });
+      const { count: _count, offset: _offset, ...withoutCalendarFields } = current;
+      this._updateConfig("timespan", { ...withoutCalendarFields, period });
       return;
     }
 
@@ -3656,6 +4962,14 @@ ${this._renderTimespanSection(cfg)}
     this._axesExpanded = !this._axesExpanded;
   }
 
+  private _toggleLegendExpanded() {
+    this._legendExpanded = !this._legendExpanded;
+  }
+
+  private _toggleTooltipExpanded() {
+    this._tooltipExpanded = !this._tooltipExpanded;
+  }
+
   private _formatAxesSummary(
     leftAxis: EnergyCustomGraphAxisConfig | undefined,
     rightAxis: EnergyCustomGraphAxisConfig | undefined,
@@ -3668,7 +4982,6 @@ ${this._renderTimespanSection(cfg)}
       if (leftAxis.unit) leftParts.push(leftAxis.unit);
       if (leftAxis.fit_y_data) leftParts.push("fit");
       if (leftAxis.center_zero) leftParts.push("center zero");
-      if (leftAxis.logarithmic_scale) leftParts.push("log");
       if (leftAxis.min !== undefined || leftAxis.max !== undefined) {
         const range = `${leftAxis.min ?? "auto"}-${leftAxis.max ?? "auto"}`;
         leftParts.push(range);
@@ -3683,7 +4996,6 @@ ${this._renderTimespanSection(cfg)}
       if (rightAxis.unit) rightParts.push(rightAxis.unit);
       if (rightAxis.fit_y_data) rightParts.push("fit");
       if (rightAxis.center_zero) rightParts.push("center zero");
-      if (rightAxis.logarithmic_scale) rightParts.push("log");
       if (rightAxis.min !== undefined || rightAxis.max !== undefined) {
         const range = `${rightAxis.min ?? "auto"}-${rightAxis.max ?? "auto"}`;
         rightParts.push(range);
@@ -3705,9 +5017,9 @@ ${this._renderTimespanSection(cfg)}
     }
     const parts: string[] = [];
     if (!useEnergyPicker && aggregation.manual) {
-      parts.push(`Manual: ${this._formatStatisticsPeriod(aggregation.manual)}`);
+      parts.push(this._formatStatisticsPeriod(aggregation.manual));
     }
-    if (!useEnergyPicker && aggregation.fallback) {
+    if (aggregation.fallback) {
       parts.push(`Fallback: ${this._formatStatisticsPeriod(aggregation.fallback)}`);
     }
     if (
@@ -3717,18 +5029,17 @@ ${this._renderTimespanSection(cfg)}
     ) {
       parts.push("Picker overrides");
     }
+    if (this._aggregationUsesRaw(aggregation)) {
+      parts.push("RAW history");
+    }
+    if (aggregation.compute_current_hour) {
+      parts.push("Compute current hour");
+    }
     return parts.length ? parts.join(" • ") : undefined;
   }
 
   private _formatStatisticsPeriod(value: EnergyCustomGraphAggregationTarget): string {
-    return AGGREGATION_OPTIONS.find((option) => option.value === value)?.label ?? value;
-  }
-
-  private _setActiveTab(tab: typeof this._activeTab) {
-    if (this._activeTab === tab) {
-      return;
-    }
-    this._activeTab = tab;
+    return AGGREGATION_OPTIONS.find((option) => option.value === value)?.label ?? formatAggregationTarget(value);
   }
 
   private _setColorSelection(index: number, mode: string | undefined) {
@@ -4017,9 +5328,69 @@ ${this._renderTimespanSection(cfg)}
   }
 
   static styles = css`
+    :host {
+      display: block;
+      color: var(--primary-text-color);
+      font-family: var(
+        --ha-font-family-body,
+        var(--paper-font-body1_-_font-family, Roboto, sans-serif)
+      );
+      -webkit-font-smoothing: var(--ha-font-smoothing, antialiased);
+      -moz-osx-font-smoothing: var(--ha-moz-osx-font-smoothing, grayscale);
+    }
+
     ha-entity-picker {
       display: block;
       width: 100%;
+    }
+
+    ha-expansion-panel {
+      display: block;
+      background: var(--card-background-color, var(--ha-card-background, #fff));
+      --expansion-panel-summary-padding: 0 var(--ha-space-4, 16px);
+      --expansion-panel-content-padding: 0;
+    }
+
+    ha-expansion-panel ha-icon[slot="leading-icon"] {
+      color: var(--secondary-text-color);
+    }
+
+    ha-button-toggle-group {
+      width: 100%;
+    }
+
+    .panel-heading {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+    }
+
+    .panel-title {
+      color: var(--primary-text-color);
+      font-size: var(--ha-font-size-l, 16px);
+      font-weight: var(--ha-font-weight-medium, 500);
+      line-height: var(--ha-line-height-condensed, 1.2);
+    }
+
+    .panel-summary {
+      color: var(--secondary-text-color);
+      font-size: var(--ha-font-size-s, 13px);
+      line-height: var(--ha-line-height-condensed, 1.2);
+    }
+
+    .panel-actions {
+      display: flex;
+      align-items: center;
+      gap: var(--ha-space-1, 4px);
+    }
+
+    .panel-body {
+      display: flex;
+      flex-direction: column;
+      gap: var(--ha-space-4, 16px);
+      padding: var(--ha-space-4, 16px);
+      border-top: 1px solid var(--divider-color, rgba(0, 0, 0, 0.12));
     }
 
     .native-text-input input {
@@ -4027,45 +5398,28 @@ ${this._renderTimespanSection(cfg)}
       width: 100%;
     }
 
-    .tab-bar {
-      display: flex;
-      gap: 8px;
-      margin-top: 16px;
-      border-bottom: 1px solid var(--divider-color);
-      padding-bottom: 4px;
-    }
-
-    .tab {
-      border: none;
-      background: none;
-      font: inherit;
-      padding: 8px 12px;
-      border-radius: 6px 6px 0 0;
-      cursor: pointer;
-      color: var(--secondary-text-color);
-    }
-
-    .tab.active {
-      color: var(--primary-text-color);
-      background: var(--card-background-color, rgba(0, 0, 0, 0.05));
-      border-bottom: 2px solid var(--primary-color);
-    }
-
-    .tab:hover {
-      background: var(--card-background-color, rgba(0, 0, 0, 0.08));
-    }
-
     .editor-container {
-      padding: 16px 4px 16px 0;
+      padding: var(--ha-space-4, 16px) var(--ha-space-1, 4px) var(--ha-space-4, 16px) 0;
       display: flex;
       flex-direction: column;
-      gap: 16px;
+      gap: var(--ha-space-4, 16px);
     }
 
     .section {
       display: flex;
       flex-direction: column;
       gap: 12px;
+    }
+
+    .compact-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 12px;
+      align-items: start;
+    }
+
+    .compact-grid.two {
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
     }
 
     .field {
@@ -4122,6 +5476,18 @@ ${this._renderTimespanSection(cfg)}
       gap: 12px;
     }
 
+    .series-option-groups {
+      display: flex;
+      flex-direction: column;
+      gap: var(--ha-space-2, 8px);
+    }
+
+    .series-option-group .panel-body,
+    .term-panel .panel-body {
+      gap: var(--ha-space-3, 12px);
+      padding: var(--ha-space-3, 12px);
+    }
+
     button.outlined {
       padding: 6px 12px;
       border-radius: 6px;
@@ -4161,11 +5527,12 @@ ${this._renderTimespanSection(cfg)}
 
     .collapsible {
       border: 1px solid var(--divider-color, rgba(0, 0, 0, 0.12));
-      border-radius: 16px;
+      border-radius: 8px;
       background: var(--ha-card-background, var(--card-background-color, #fff));
     }
 
     .collapsible-header {
+      box-sizing: border-box;
       border: none;
       background: none;
       font: inherit;
@@ -4175,6 +5542,36 @@ ${this._renderTimespanSection(cfg)}
       justify-content: space-between;
       cursor: pointer;
       padding: 14px 16px;
+      min-width: 0;
+    }
+
+    .section-heading,
+    .series-heading {
+      gap: 8px;
+      cursor: default;
+    }
+
+    .section-heading-main,
+    .series-heading-main,
+    .nested-heading-main {
+      border: none;
+      background: none;
+      font: inherit;
+      color: inherit;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      cursor: pointer;
+      padding: 0;
+      min-width: 0;
+      flex: 1 1 auto;
+    }
+
+    .section-heading-main .collapsible-title,
+    .series-heading-main .collapsible-title,
+    .nested-heading-main .nested-title {
+      min-width: 0;
     }
 
     .collapsible-header:hover {
@@ -4186,6 +5583,7 @@ ${this._renderTimespanSection(cfg)}
       flex-direction: column;
       gap: 4px;
       text-align: left;
+      min-width: 0;
     }
 
     .collapsible-title .title {
@@ -4202,6 +5600,8 @@ ${this._renderTimespanSection(cfg)}
       display: flex;
       align-items: center;
       gap: 8px;
+      flex: 0 0 auto;
+      margin-inline-start: auto;
     }
 
     .reorder-buttons {
@@ -4222,14 +5622,23 @@ ${this._renderTimespanSection(cfg)}
       transition: background-color 0.2s;
     }
 
-    .icon-button:hover:not(.disabled) {
+    .icon-button:hover:not(.disabled):not(:disabled) {
       background-color: rgba(0, 0, 0, 0.08);
       color: var(--primary-text-color);
     }
 
-    .icon-button.disabled {
+    .icon-button.disabled,
+    .icon-button:disabled {
       opacity: 0.3;
       cursor: not-allowed;
+    }
+
+    .icon-button.strong {
+      color: var(--primary-color);
+    }
+
+    .icon-button.danger {
+      color: var(--error-color, #db4437);
     }
 
     .icon-button ha-icon {
@@ -4257,8 +5666,14 @@ ${this._renderTimespanSection(cfg)}
 
     .group-card {
       border: 1px solid var(--divider-color, rgba(0, 0, 0, 0.12));
-      border-radius: 12px;
+      border-radius: 8px;
       background: var(--ha-card-background, var(--card-background-color, #fff));
+    }
+
+    .editor-section .group-card {
+      border: none;
+      background: transparent;
+      border-radius: 0;
     }
 
     .group-header {
@@ -4300,6 +5715,32 @@ ${this._renderTimespanSection(cfg)}
       font-size: 13px;
     }
 
+    .editor-hint {
+      display: flex;
+      align-items: flex-start;
+      gap: 6px;
+      margin: 0;
+      color: var(--secondary-text-color);
+      font-size: 13px;
+      line-height: 1.35;
+    }
+
+    .editor-hint ha-icon {
+      --mdc-icon-size: 16px;
+      flex: 0 0 auto;
+      margin-top: 1px;
+    }
+
+    .editor-hint.warning,
+    .summary-issue.warning {
+      color: var(--warning-color, #f4b400);
+    }
+
+    .editor-hint.error,
+    .summary-issue.error {
+      color: var(--error-color, #db4437);
+    }
+
     .error {
       margin: 0;
       color: var(--error-color, #db4437);
@@ -4316,6 +5757,39 @@ ${this._renderTimespanSection(cfg)}
       align-items: center;
     }
 
+    .series-summary {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .summary-issue {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      color: var(--secondary-text-color);
+    }
+
+    .summary-issue ha-icon {
+      --mdc-icon-size: 15px;
+    }
+
+    .toggle-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 8px;
+    }
+
+    .compact-toggle {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-height: 32px;
+      font-size: 13px;
+      color: var(--primary-text-color);
+    }
+
     .row.space-between {
       justify-content: space-between;
     }
@@ -4326,51 +5800,14 @@ ${this._renderTimespanSection(cfg)}
       gap: 12px;
     }
 
-    .segment-group {
-      display: inline-flex;
-      border: 1px solid var(--divider-color, rgba(0, 0, 0, 0.12));
-      border-radius: 999px;
-      overflow: hidden;
-    }
-
-    .segment-button {
-      background: none;
-      border: none;
-      padding: 6px 16px;
-      font: inherit;
-      color: var(--secondary-text-color);
-      flex: 1 1 0;
-      min-width: 0;
-      text-align: center;
-      cursor: pointer;
-      transition: background 0.2s ease, color 0.2s ease;
-    }
-
-    .segment-button + .segment-button {
-      border-inline-start: 1px solid var(--divider-color, rgba(0, 0, 0, 0.12));
-    }
-
-    .segment-button:hover {
-      background: rgba(0, 0, 0, 0.05);
-    }
-
-    .segment-button.active {
-      background: var(--primary-color);
-      color: #fff;
-      font-weight: 600;
-    }
-
-    .segment-button.active:hover {
-      background: var(--primary-color);
-    }
-
     .nested-collapsible {
       border: 1px solid var(--divider-color, rgba(0, 0, 0, 0.12));
-      border-radius: 12px;
+      border-radius: 8px;
       background: var(--ha-card-background, var(--card-background-color, #fff));
     }
 
     .nested-header {
+      box-sizing: border-box;
       width: 100%;
       display: flex;
       align-items: center;
@@ -4380,6 +5817,24 @@ ${this._renderTimespanSection(cfg)}
       background: none;
       cursor: pointer;
       font: inherit;
+    }
+
+    .term-heading {
+      gap: 8px;
+      cursor: default;
+    }
+
+    .terms-section {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .terms-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
     }
 
     .nested-header:hover {
@@ -4461,33 +5916,11 @@ ${this._renderTimespanSection(cfg)}
       display: block;
     }
 
-    .radio-group {
+    .empty-state {
       display: flex;
       flex-direction: column;
       gap: 8px;
-    }
-
-    .radio-option {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      cursor: pointer;
-      padding: 8px;
-      border-radius: 4px;
-      transition: background-color 0.2s;
-    }
-
-    .radio-option:hover {
-      background-color: rgba(0, 0, 0, 0.04);
-    }
-
-    .radio-option input[type="radio"] {
-      margin: 0;
-      cursor: pointer;
-    }
-
-    .radio-option span {
-      flex: 1;
+      align-items: flex-start;
     }
   `;
 }
