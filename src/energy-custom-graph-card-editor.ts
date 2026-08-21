@@ -466,6 +466,46 @@ export class EnergyCustomGraphCardEditor
     `;
   }
 
+  private _renderColorTextInput({
+    label,
+    value,
+    onInput,
+  }: {
+    label: string;
+    value: string;
+    onInput: (value: string, ev: Event) => void;
+  }) {
+    const pickerValue = this._toNativeColorValue(value);
+    const handleTextInput = (ev: Event) => {
+      onInput((ev.target as HTMLInputElement).value ?? "", ev);
+    };
+    const handleColorInput = (ev: Event) => {
+      onInput((ev.target as HTMLInputElement).value ?? "", ev);
+    };
+
+    return html`
+      <div class="field native-text-input">
+        <label>${label}</label>
+        <div class="color-text-control">
+          <input
+            class="color-value-input"
+            type="text"
+            .value=${value}
+            @input=${handleTextInput}
+          />
+          <input
+            class="color-picker-input"
+            type="color"
+            .value=${pickerValue}
+            title="Pick color"
+            aria-label=${`Pick ${label.toLowerCase()}`}
+            @input=${handleColorInput}
+          />
+        </div>
+      </div>
+    `;
+  }
+
   private _renderNativeAddButton(label: string, onClick: (ev: Event) => void) {
     return html`
       <ha-button
@@ -793,6 +833,22 @@ export class EnergyCustomGraphCardEditor
     `;
   }
 
+  private _renderInlineButtonToggleGroup<T extends string>(
+    label: string,
+    buttons: Array<{ value: T; label: string }>,
+    active: T,
+    onChange: (value: T) => void
+  ) {
+    return html`
+      <div class="segmented-row">
+        <span class="segmented-row-label">${label}</span>
+        <div class="segmented-row-control">
+          ${this._renderButtonToggleGroup(buttons, active, onChange)}
+        </div>
+      </div>
+    `;
+  }
+
   private _renderAggregationSection(cfg: EnergyCustomGraphCardConfig) {
     const isEnergyMode = cfg.timespan?.mode === "energy";
     const aggregationConfig = cfg.aggregation;
@@ -805,7 +861,7 @@ export class EnergyCustomGraphCardEditor
     return this._renderExpansionPanel({
       title: "Aggregation",
       icon: "mdi:clock-fast",
-      summary: aggregationSummary ?? "Automatic",
+      summary: aggregationSummary,
       expanded: aggregationExpanded,
       onToggle: () => this._toggleAggregationExpanded(),
       body: html`
@@ -1133,18 +1189,18 @@ export class EnergyCustomGraphCardEditor
       expanded,
       onToggle: () => this._toggleLegendExpanded(),
       body: html`
-          ${this._renderCompactToggle("Show legend", showLegend, (value) =>
+          ${this._renderCompactToggle("Visible", showLegend, (value) =>
             this._updateBooleanConfig("hide_legend", !value)
           )}
           ${hideLegend
             ? nothing
             : html`
-                <div class="field">
-                  <label>Legend sort</label>
-                  ${this._renderButtonToggleGroup(buttons, legendSort, (value) =>
-                    this._setLegendSort(value)
-                  )}
-                </div>
+                ${this._renderInlineButtonToggleGroup(
+                  "Sort",
+                  buttons,
+                  legendSort,
+                  (value) => this._setLegendSort(value)
+                )}
                 ${this._renderCompactToggle(
                   "Expand legend by default",
                   cfg.expand_legend === true,
@@ -1254,7 +1310,7 @@ export class EnergyCustomGraphCardEditor
       expanded,
       onToggle: () => this._toggleTooltipExpanded(),
       body: html`
-          ${this._renderCompactToggle("Show tooltip", showTooltip, (value) =>
+          ${this._renderCompactToggle("Visible", showTooltip, (value) =>
             this._updateConfig("show_tooltip", value)
           )}
           ${showTooltip
@@ -1275,11 +1331,16 @@ export class EnergyCustomGraphCardEditor
                     cfg.show_unit !== false,
                     (value) => this._updateConfig("show_unit", value)
                   )}
-                  ${this._renderCompactToggle(
-                    "Stack sums",
-                    cfg.show_stack_sums === true,
-                    (value) => this._updateConfig("show_stack_sums", value)
-                  )}
+                  <div class="toggle-with-hint">
+                    ${this._renderCompactToggle(
+                      "Stack sums",
+                      cfg.show_stack_sums === true,
+                      (value) => this._updateConfig("show_stack_sums", value)
+                    )}
+                    <p class="hint">
+                      Shows summed values for stacked series in the tooltip.
+                    </p>
+                  </div>
                 </div>
                 ${this._renderTextInput({
                   label: "Tooltip precision",
@@ -1301,7 +1362,7 @@ export class EnergyCustomGraphCardEditor
     return html`
       <div class="subsection header-chip-section">
         <span class="subtitle">Header chip</span>
-          ${this._renderCompactToggle("Show header chip", enabled, (value) =>
+          ${this._renderCompactToggle("Enabled", enabled, (value) =>
             this._setHeaderChipEnabled(value)
           )}
           ${enabled && chip
@@ -1359,8 +1420,7 @@ export class EnergyCustomGraphCardEditor
     ];
 
     return html`
-      <div class="field full-width">
-        <label>Metric</label>
+      <div class="segmented-only">
         ${this._renderButtonToggleGroup(buttons, mode, (value) =>
           this._setHeaderMetricMode(value)
         )}
@@ -1749,6 +1809,9 @@ export class EnergyCustomGraphCardEditor
             `
           )}
         </select>
+        <p class="hint">
+          Defines how individual values are combined into one total value.
+        </p>
       </div>
     `;
   }
@@ -1830,9 +1893,6 @@ export class EnergyCustomGraphCardEditor
     >;
     return html`
       <div class="section">
-        <p class="hint">
-          Override the interval used when requesting statistics via the energy date picker.
-        </p>
         <div class="picker-grid">
           ${(["hour", "day", "week", "month", "year"] as AggregationPickerKey[]).map(
             (key) => html`
@@ -1857,6 +1917,9 @@ export class EnergyCustomGraphCardEditor
             `
           )}
         </div>
+        <p class="hint">
+          Override the interval used when requesting statistics via the energy date picker.
+        </p>
       </div>
     `;
   }
@@ -1870,10 +1933,6 @@ export class EnergyCustomGraphCardEditor
   ) {
     return html`
       <div class="section">
-        <p class="hint">
-          Override the interval used when requesting recorder statistics. Leave empty to keep the
-          automatic behaviour.
-        </p>
         <div class="field">
           <label>Manual aggregation</label>
           ${(() => {
@@ -1910,6 +1969,10 @@ export class EnergyCustomGraphCardEditor
             </select>`;
           })()}
         </div>
+        <p class="hint">
+          Override the interval used when requesting recorder statistics. Leave empty to keep the
+          automatic behaviour.
+        </p>
       </div>
     `;
   }
@@ -1963,10 +2026,10 @@ export class EnergyCustomGraphCardEditor
         ${this._renderCompactToggle("Compute current hour value", enabled, (value) =>
           this._updateAggregationFlag("compute_current_hour", value)
         )}
-        ${this._renderEditorHelpHint(
-          "Home Assistant publishes hourly aggregates after the hour completes; this adds a current-hour estimate from recent 5 minute statistics.",
-          "info"
-        )}
+        <p class="hint">
+          Home Assistant publishes hourly aggregates after the hour completes. This adds a
+          current-hour estimate from recent 5 minute statistics.
+        </p>
       </div>
     `;
   }
@@ -2341,23 +2404,28 @@ export class EnergyCustomGraphCardEditor
 
     return html`
       <div class="section">
-        <div class="field">
-          <label>Timespan</label>
-          ${this._renderButtonToggleGroup(
-            [
-              { value: "energy", label: "Energy" },
-              { value: "relative", label: "Relative" },
-              { value: "fixed", label: "Fixed" },
-            ],
-            mode,
-            (value) => this._setTimespanMode(value)
-          )}
-        </div>
+        ${this._renderInlineButtonToggleGroup(
+          "Mode",
+          [
+            { value: "energy", label: "Energy" },
+            { value: "relative", label: "Relative" },
+            { value: "fixed", label: "Fixed" },
+          ],
+          mode,
+          (value) => this._setTimespanMode(value)
+        )}
+        ${mode === "energy"
+          ? html`
+              <p class="hint">
+                In Energy mode, the card follows the range selected in the Energy date picker.
+              </p>
+            `
+          : nothing}
 
         ${mode === "energy"
           ? html`
               ${this._renderCompactToggle(
-                "Allow compare",
+                "Follow date picker compare toggle",
                 cfg.allow_compare !== false,
                 (value) => this._updateConfig("allow_compare", value),
                 hasTimeOffset
@@ -2547,6 +2615,9 @@ export class EnergyCustomGraphCardEditor
             }
           )}
         </select>
+        <p class="hint">
+          Home Assistant stores only certain aggregation types depending on the entity.
+        </p>
         ${statTypeDisabled
           ? this._renderEditorHelpHint(
               resolution.status === "raw_only"
@@ -2881,6 +2952,9 @@ export class EnergyCustomGraphCardEditor
                   }
                 )}
               </select>
+              <p class="hint">
+                Home Assistant stores only certain aggregation types depending on the entity.
+              </p>
               ${statTypeDisabled
                 ? this._renderEditorHelpHint(
                     resolution.status === "raw_only"
@@ -3089,7 +3163,7 @@ export class EnergyCustomGraphCardEditor
         ${colorMode === COLOR_SELECT_CUSTOM
           ? html`
               <div class="color-row">
-                ${this._renderTextInput({
+                ${this._renderColorTextInput({
                   label: "Custom color",
                   value: customInputValue ?? "",
                   onInput: (value) =>
@@ -3199,7 +3273,7 @@ export class EnergyCustomGraphCardEditor
       ${compareMode === COLOR_SELECT_CUSTOM
         ? html`
             <div class="color-row">
-              ${this._renderTextInput({
+              ${this._renderColorTextInput({
                 label: "Custom compare color",
                 value: compareCustomText ?? "",
                 onInput: (value) =>
@@ -3323,11 +3397,18 @@ export class EnergyCustomGraphCardEditor
             (value) => this._updateSeries(index, "hidden_by_default", value)
           )}
           ${chartType === "bar"
-            ? this._renderCompactToggle(
-                "Value labels",
-                showValueLabels,
-                (value) => this._updateSeries(index, "show_value_labels", value)
-              )
+            ? html`
+                <div class="toggle-with-hint">
+                  ${this._renderCompactToggle(
+                    "Value labels",
+                    showValueLabels,
+                    (value) => this._updateSeries(index, "show_value_labels", value)
+                  )}
+                  <p class="hint">
+                    Displays values directly above bars. Not compatible with stacked bars.
+                  </p>
+                </div>
+              `
             : nothing}
         </div>
       </div>
@@ -3475,7 +3556,7 @@ export class EnergyCustomGraphCardEditor
           ${colorMode === COLOR_SELECT_CUSTOM
             ? html`
                 <div class="color-row">
-                  ${this._renderTextInput({
+                  ${this._renderColorTextInput({
                     label: "Custom color",
                     value: customInputValue ?? "",
                     onInput: (value) =>
@@ -3528,7 +3609,7 @@ export class EnergyCustomGraphCardEditor
           ${compareMode === COLOR_SELECT_CUSTOM
             ? html`
                 <div class="color-row">
-                  ${this._renderTextInput({
+                  ${this._renderColorTextInput({
                     label: "Custom compare color",
                     value: compareCustomText ?? "",
                     onInput: (value) =>
@@ -5085,23 +5166,24 @@ export class EnergyCustomGraphCardEditor
   private _formatAggregationSummary(
     aggregation: EnergyCustomGraphAggregationConfig | undefined,
     useEnergyPicker: boolean
-  ): string | undefined {
+  ): string {
     if (!aggregation || Object.keys(aggregation).length === 0) {
-      return undefined;
+      return "Automatic";
     }
     const parts: string[] = [];
     if (!useEnergyPicker && aggregation.manual) {
       parts.push(this._formatStatisticsPeriod(aggregation.manual));
-    }
-    if (aggregation.fallback) {
-      parts.push(`Fallback: ${this._formatStatisticsPeriod(aggregation.fallback)}`);
-    }
-    if (
+    } else if (
       useEnergyPicker &&
       aggregation.energy_picker &&
       Object.keys(aggregation.energy_picker).length
     ) {
       parts.push("Picker overrides");
+    } else {
+      parts.push("Automatic");
+    }
+    if (aggregation.fallback) {
+      parts.push(`Fallback: ${this._formatStatisticsPeriod(aggregation.fallback)}`);
     }
     if (this._aggregationUsesRaw(aggregation)) {
       parts.push("RAW history");
@@ -5109,7 +5191,7 @@ export class EnergyCustomGraphCardEditor
     if (aggregation.compute_current_hour) {
       parts.push("Compute current hour");
     }
-    return parts.length ? parts.join(" • ") : undefined;
+    return parts.join(" · ");
   }
 
   private _formatStatisticsPeriod(value: EnergyCustomGraphAggregationTarget): string {
@@ -5367,6 +5449,51 @@ export class EnergyCustomGraphCardEditor
     return undefined;
   }
 
+  private _toNativeColorValue(color: string | undefined): string {
+    const normalized = this._normalizeColorToken(color);
+    const hex = this._normalizeHexColor(normalized);
+    if (hex) {
+      return hex;
+    }
+    const rgbHex = this._rgbCssColorToHex(normalized);
+    if (rgbHex) {
+      return rgbHex;
+    }
+    return "#000000";
+  }
+
+  private _normalizeHexColor(color: string | undefined): string | undefined {
+    const trimmed = color?.trim();
+    if (!trimmed) {
+      return undefined;
+    }
+    const shortHex = /^#([0-9a-f]{3})$/i.exec(trimmed);
+    if (shortHex) {
+      return `#${shortHex[1]
+        .split("")
+        .map((part) => `${part}${part}`)
+        .join("")}`.toLowerCase();
+    }
+    const fullHex = /^#([0-9a-f]{6})$/i.exec(trimmed);
+    return fullHex ? `#${fullHex[1].toLowerCase()}` : undefined;
+  }
+
+  private _rgbCssColorToHex(color: string | undefined): string | undefined {
+    const match = /^rgba?\(\s*([0-9.]+)(?:,|\s)\s*([0-9.]+)(?:,|\s)\s*([0-9.]+)/i.exec(
+      color?.trim() ?? ""
+    );
+    if (!match) {
+      return undefined;
+    }
+    const channels = match.slice(1, 4).map((part) => {
+      const value = Math.max(0, Math.min(255, Math.round(Number(part))));
+      return value.toString(16).padStart(2, "0");
+    });
+    return channels.every((part) => part.length === 2)
+      ? `#${channels.join("")}`
+      : undefined;
+  }
+
   private _renderColorPreview(
     colorVar: string | undefined,
     chartType: "bar" | "line" | "step"
@@ -5529,6 +5656,44 @@ export class EnergyCustomGraphCardEditor
       width: 100%;
     }
 
+    .color-text-control {
+      position: relative;
+      min-width: 0;
+    }
+
+    .color-text-control .color-value-input {
+      padding-inline-end: var(--ha-space-12, 48px);
+    }
+
+    .color-text-control .color-picker-input {
+      position: absolute;
+      inset-inline-end: var(--ha-space-2, 8px);
+      top: 50%;
+      transform: translateY(-50%);
+      box-sizing: border-box;
+      width: var(--ha-space-8, 32px);
+      height: var(--ha-space-8, 32px);
+      padding: 2px;
+      border: 1px solid var(--divider-color, rgba(0, 0, 0, 0.12));
+      border-radius: var(--ha-border-radius-sm, 6px);
+      background: var(--card-background-color, var(--primary-background-color));
+      cursor: pointer;
+    }
+
+    .color-picker-input::-webkit-color-swatch-wrapper {
+      padding: 0;
+    }
+
+    .color-picker-input::-webkit-color-swatch {
+      border: none;
+      border-radius: 4px;
+    }
+
+    .color-picker-input::-moz-color-swatch {
+      border: none;
+      border-radius: 4px;
+    }
+
     .editor-container {
       padding: var(--ha-space-4, 16px) var(--ha-space-1, 4px) var(--ha-space-4, 16px) 0;
       display: flex;
@@ -5562,6 +5727,24 @@ export class EnergyCustomGraphCardEditor
     .field label {
       font-size: 13px;
       color: var(--secondary-text-color);
+    }
+
+    .segmented-row {
+      display: grid;
+      grid-template-columns: minmax(72px, max-content) minmax(0, 1fr);
+      align-items: center;
+      gap: var(--ha-space-3, 12px);
+    }
+
+    .segmented-row-label {
+      color: var(--primary-text-color);
+      font-size: var(--ha-font-size-m, 14px);
+      line-height: var(--ha-line-height-normal, 1.4);
+    }
+
+    .segmented-row-control,
+    .segmented-only {
+      min-width: 0;
     }
 
     .field select,
@@ -5815,7 +5998,7 @@ export class EnergyCustomGraphCardEditor
       display: flex;
       flex-direction: column;
       gap: var(--ha-space-4, 16px);
-      padding-top: 16px;
+      padding-top: 0;
     }
 
     .group-card {
@@ -5933,6 +6116,7 @@ export class EnergyCustomGraphCardEditor
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: var(--ha-space-2, 8px) var(--ha-space-4, 16px);
+      align-items: start;
     }
 
     .compact-toggle {
@@ -5944,6 +6128,8 @@ export class EnergyCustomGraphCardEditor
       font-size: var(--ha-font-size-m, 14px);
       line-height: var(--ha-line-height-normal, 1.4);
       color: var(--primary-text-color);
+      width: 100%;
+      box-sizing: border-box;
     }
 
     .compact-toggle.disabled {
@@ -5959,9 +6145,27 @@ export class EnergyCustomGraphCardEditor
       flex: 0 0 auto;
     }
 
+    .toggle-with-hint {
+      display: flex;
+      flex-direction: column;
+      gap: var(--ha-space-1, 4px);
+      min-width: 0;
+      width: 100%;
+      align-self: start;
+    }
+
+    .toggle-with-hint .compact-toggle {
+      min-height: var(--ha-space-10, 40px);
+    }
+
     @media (max-width: 420px) {
       .toggle-grid {
         grid-template-columns: 1fr;
+      }
+
+      .segmented-row {
+        grid-template-columns: 1fr;
+        align-items: stretch;
       }
     }
 
