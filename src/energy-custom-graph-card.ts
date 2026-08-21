@@ -3445,6 +3445,9 @@ export class EnergyCustomGraphCard extends LitElement {
       return undefined;
     }
 
+    const context = contextOverride ?? this._getCalculationTimeContext(target);
+    const allowLastKnownFallback = context.period === "raw";
+
     type TermResolvedData = {
       term: EnergyCustomGraphCalculationTerm;
       data?: Map<
@@ -3494,7 +3497,7 @@ export class EnergyCustomGraphCard extends LitElement {
         if (!raw?.length) {
           if (!missingStatWarnings.has(term.statistic_id)) {
             console.warn(
-              `[energy-custom-graph-card] Calculation series "${seriesLabel}" references statistic "${term.statistic_id}" but no data was loaded. Missing values will be treated as zero.`
+              `[energy-custom-graph-card] Calculation series "${seriesLabel}" references statistic "${term.statistic_id}" but no data was loaded. Missing values will be rendered as empty.`
             );
             missingStatWarnings.add(term.statistic_id);
           }
@@ -3588,7 +3591,8 @@ export class EnergyCustomGraphCard extends LitElement {
         if (item.data) {
           const resolved = this._resolveCalculationTermValue(
             item,
-            timestamp
+            timestamp,
+            allowLastKnownFallback
           );
           if (resolved) {
             const resolvedStart = resolved.start ?? timestamp;
@@ -3601,14 +3605,15 @@ export class EnergyCustomGraphCard extends LitElement {
             }
             termValue = resolved.value;
           } else {
-            termValue = 0;
+            valid = false;
             const statId = item.term.statistic_id;
             if (statId && !missingValueWarnings.has(statId)) {
               console.warn(
-                `[energy-custom-graph-card] Missing value for statistic "${statId}" in calculation series "${seriesLabel}". Using 0 for this timestamp.`
+                `[energy-custom-graph-card] Missing value for statistic "${statId}" in calculation series "${seriesLabel}". The affected timestamp will be rendered as empty.`
               );
               missingValueWarnings.add(statId);
             }
+            return;
           }
         } else {
           termValue = item.constant ?? 0;
@@ -3661,7 +3666,6 @@ export class EnergyCustomGraphCard extends LitElement {
     if (timestamps.length) {
       timestamps.forEach(processTimestamp);
     } else if (constantOnly) {
-      const context = contextOverride ?? this._getCalculationTimeContext(target);
       if (context?.start) {
         const seen = new Set<number>();
         const addTimestamp = (ts: number | undefined | null) => {
@@ -3733,7 +3737,8 @@ export class EnergyCustomGraphCard extends LitElement {
       };
       term: EnergyCustomGraphCalculationTerm;
     },
-    timestamp: number
+    timestamp: number,
+    allowLastKnownFallback = false
   ): { value: number; start?: number; end?: number } | null {
     const direct = termData.data?.get(timestamp);
     if (direct && typeof direct.value === "number" && Number.isFinite(direct.value)) {
@@ -3747,6 +3752,10 @@ export class EnergyCustomGraphCard extends LitElement {
         start: direct.start,
         end: direct.end,
       };
+    }
+
+    if (!allowLastKnownFallback) {
+      return null;
     }
 
     const timeline = termData.timeline;

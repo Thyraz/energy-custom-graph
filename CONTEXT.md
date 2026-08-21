@@ -53,7 +53,7 @@ The statistic value field requested for a statistic series or calculation term, 
 _Avoid_: Entity type, data type
 
 **Calculation series**:
-A series computed from one or more terms.
+A series computed from one or more terms. A calculation series has a value at a time only when every required calculation term has a value at that time.
 _Avoid_: Computed series, calculated series
 
 **Calculation term**:
