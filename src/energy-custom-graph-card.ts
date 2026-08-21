@@ -664,17 +664,19 @@ export class EnergyCustomGraphCard extends LitElement {
       this._collectionPollHandle = undefined;
     }
 
-    const defaultKey = this.hass.config.version < "2026.4" ?
-      "_energy" :
-      ("_energy_" + this.hass.panelUrl);
-    const key = this._config.collection_key
-      ? `_${this._config.collection_key}`
-      : defaultKey;
     const connection = this.hass.connection as unknown;
-    const candidate =
+    const connectionRecord =
       typeof connection === "object" && connection !== null
-        ? ((connection as Record<string, unknown>)[key] as EnergyCollection | undefined)
+        ? (connection as Record<string, unknown>)
         : undefined;
+    const candidate = connectionRecord
+      ? this._getEnergyCollectionKeys().map((key) => connectionRecord[key]).find(
+          (item): item is EnergyCollection =>
+            typeof item === "object" &&
+            item !== null &&
+            typeof (item as EnergyCollection).subscribe === "function"
+        )
+      : undefined;
 
     if (candidate && typeof candidate.subscribe === "function") {
       if (this._collectionUnsub) {
@@ -762,6 +764,20 @@ export class EnergyCustomGraphCard extends LitElement {
       () => this._setupEnergyCollection(attempt + 1),
       200
     );
+  }
+
+  private _getEnergyCollectionKeys(): string[] {
+    if (this._config?.collection_key) {
+      return [`_${this._config.collection_key}`];
+    }
+
+    const panelUrl = this.hass?.panelUrl;
+    const keys = new Set<string>();
+    if (panelUrl) {
+      keys.add(`_energy_${panelUrl}`);
+    }
+    keys.add("_energy");
+    return Array.from(keys);
   }
 
   private _teardownEnergyCollection(): void {

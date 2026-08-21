@@ -416,7 +416,7 @@ export const buildSeries = ({
       }
     }
     colorValue = colorValue.trim();
-    const indicatorColor = stripAlpha(colorValue);
+    const tooltipIndicatorColor = stripAlpha(colorValue);
 
     const lineOpacityOverride =
       typeof seriesConfig.line_opacity === "number"
@@ -484,7 +484,7 @@ export const buildSeries = ({
 
     unitBySeries.set(id, unit);
     seriesById.set(id, seriesConfig);
-    indicatorColorBySeries.set(id, indicatorColor);
+    indicatorColorBySeries.set(id, tooltipIndicatorColor);
 
     let legendFill: string | undefined;
     let legendBorder: string | undefined;
@@ -649,7 +649,7 @@ export const buildSeries = ({
         id,
         name,
         color: legendFill,
-        indicatorColor,
+        indicatorColor: legendFill,
         fillColor: legendFill,
         borderColor: legendBorder,
         borderWidth: isLineLike ? 2 : 1,
