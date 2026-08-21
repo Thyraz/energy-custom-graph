@@ -170,7 +170,7 @@ export class EnergyCustomGraphCardEditor
   @state() private _expandedSeries = new Set<number>();
   @state() private _seriesOptionGroupsExpanded = new Map<string, boolean>();
   @state() private _seriesStyleMoreExpanded = new Set<number>();
-  @state() private _seriesVisibilityMoreExpanded = new Set<number>();
+  @state() private _seriesSourceMoreExpanded = new Set<number>();
   @state() private _expandedTermKeys = new Set<string>();
   @state() private _expandedHeaderTermKeys = new Set<number>();
   @state() private _axesExpanded = false;
@@ -206,7 +206,16 @@ export class EnergyCustomGraphCardEditor
     const needsEntityPicker = !customElements.get("ha-entity-picker");
     const needsExpansionPanel = !customElements.get("ha-expansion-panel");
     const needsButtonToggleGroup = !customElements.get("ha-button-toggle-group");
-    if (!needsEntityPicker && !needsExpansionPanel && !needsButtonToggleGroup) {
+    const needsNativeListElements =
+      !customElements.get("ha-button") ||
+      !customElements.get("ha-icon-button") ||
+      !customElements.get("ha-sortable");
+    if (
+      !needsEntityPicker &&
+      !needsExpansionPanel &&
+      !needsButtonToggleGroup &&
+      !needsNativeListElements
+    ) {
       return;
     }
 
@@ -218,7 +227,7 @@ export class EnergyCustomGraphCardEditor
           this._preloadCardEditor(helpers, { type: "entities", entities: [] })
         );
       }
-      if (needsExpansionPanel || needsButtonToggleGroup) {
+      if (needsExpansionPanel || needsButtonToggleGroup || needsNativeListElements) {
         preloaders.push(
           this._preloadCardEditor(helpers, {
             type: "tile",
@@ -455,6 +464,32 @@ export class EnergyCustomGraphCardEditor
     `;
   }
 
+  private _renderNativeAddButton(label: string, onClick: (ev: Event) => void) {
+    return html`
+      <ha-button
+        class="native-add-button"
+        size="s"
+        appearance="filled"
+        @click=${onClick}
+      >
+        <ha-icon slot="start" icon="mdi:plus"></ha-icon>
+        ${label}
+      </ha-button>
+    `;
+  }
+
+  private _renderDragHandle(handleClass: string, label: string) {
+    return html`
+      <span
+        class="drag-handle ${handleClass}"
+        title=${label}
+        @click=${(ev: Event) => ev.stopPropagation()}
+      >
+        <ha-icon icon="mdi:drag-horizontal-variant"></ha-icon>
+      </span>
+    `;
+  }
+
   private _normalizeSeriesIds(
     series: EnergyCustomGraphSeriesConfig[]
   ): EnergyCustomGraphSeriesConfig[] {
@@ -613,29 +648,32 @@ export class EnergyCustomGraphCardEditor
       onToggle: () => {
         this._seriesSectionExpanded = !expanded;
       },
-      actions: html`
-        <button
-          type="button"
-          class="icon-button strong"
-          title="Add series"
-          aria-label="Add series"
-          @click=${this._addSeries}
-        >
-          <ha-icon icon="mdi:plus"></ha-icon>
-        </button>
-      `,
       body: html`
         <div class="series-list">
           ${series.length
-            ? series.map((serie, index) => this._renderSeriesCard(serie, index))
+            ? html`
+                <ha-sortable
+                  handle-selector=".series-drag-handle"
+                  draggable-selector=".series-sortable-item"
+                  @item-moved=${this._handleSeriesMoved}
+                >
+                  <div class="native-sortable-list">
+                    ${series.map(
+                      (serie, index) => html`
+                        <div class="series-sortable-item">
+                          ${this._renderSeriesCard(serie, index)}
+                        </div>
+                      `
+                    )}
+                  </div>
+                </ha-sortable>
+              `
             : html`
                 <div class="empty-state">
                   <p class="hint">No series configured yet.</p>
-                  <button type="button" class="outlined" @click=${this._addSeries}>
-                    Add series
-                  </button>
                 </div>
               `}
+          ${this._renderNativeAddButton("Add series", () => this._addSeries())}
         </div>
       `,
       className: "editor-section series-section",
@@ -676,6 +714,7 @@ export class EnergyCustomGraphCardEditor
     onToggle,
     body,
     actions,
+    leading,
     className,
   }: {
     title: string;
@@ -685,6 +724,7 @@ export class EnergyCustomGraphCardEditor
     onToggle: () => void;
     body: unknown;
     actions?: unknown;
+    leading?: unknown;
     className?: string;
   }) {
     return html`
@@ -695,9 +735,13 @@ export class EnergyCustomGraphCardEditor
         @expanded-changed=${(ev: CustomEvent<{ expanded: boolean }>) =>
           this._handleExpansionChanged(ev, onToggle)}
       >
-        ${icon ? html`<ha-icon slot="leading-icon" icon=${icon}></ha-icon>` : nothing}
+        ${leading
+          ? html`<div slot="leading-icon" class="panel-leading">${leading}</div>`
+          : icon
+            ? html`<ha-icon slot="leading-icon" icon=${icon}></ha-icon>`
+            : nothing}
         <div slot="header" class="panel-heading">
-          <div class="panel-title">${title}</div>
+          <div class="panel-title" title=${title}>${title}</div>
           ${summary ? html`<div class="panel-summary">${summary}</div>` : nothing}
         </div>
         ${actions
@@ -1018,16 +1062,18 @@ export class EnergyCustomGraphCardEditor
   private _renderCompactToggle(
     label: string,
     checked: boolean,
-    onChange: (checked: boolean) => void
+    onChange: (checked: boolean) => void,
+    disabled = false
   ) {
     return html`
-      <div class="compact-toggle">
+      <div class="compact-toggle ${disabled ? "disabled" : ""}">
+        <span class="compact-toggle-label">${label}</span>
         <ha-switch
           .checked=${checked}
+          ?disabled=${disabled}
           @change=${(ev: Event) =>
             onChange((ev.target as HTMLInputElement).checked)}
         ></ha-switch>
-        <span>${label}</span>
       </div>
     `;
   }
@@ -1083,14 +1129,9 @@ export class EnergyCustomGraphCardEditor
       expanded,
       onToggle: () => this._toggleLegendExpanded(),
       body: html`
-          <div class="row">
-            <ha-switch
-              .checked=${showLegend}
-              @change=${(ev: Event) =>
-                this._updateBooleanConfig("hide_legend", !(ev.target as HTMLInputElement).checked)}
-            ></ha-switch>
-            <span>Show legend</span>
-          </div>
+          ${this._renderCompactToggle("Show legend", showLegend, (value) =>
+            this._updateBooleanConfig("hide_legend", !value)
+          )}
           ${hideLegend
             ? nothing
             : html`
@@ -1100,17 +1141,11 @@ export class EnergyCustomGraphCardEditor
                     this._setLegendSort(value)
                   )}
                 </div>
-                <div class="row">
-                  <ha-switch
-                    .checked=${cfg.expand_legend === true}
-                    @change=${(ev: Event) =>
-                      this._updateBooleanConfig(
-                        "expand_legend",
-                        (ev.target as HTMLInputElement).checked
-                      )}
-                  ></ha-switch>
-                  <span>Expand legend by default</span>
-                </div>
+                ${this._renderCompactToggle(
+                  "Expand legend by default",
+                  cfg.expand_legend === true,
+                  (value) => this._updateBooleanConfig("expand_legend", value)
+                )}
               `}
       `,
       className: "general-collapsible",
@@ -1215,17 +1250,9 @@ export class EnergyCustomGraphCardEditor
       expanded,
       onToggle: () => this._toggleTooltipExpanded(),
       body: html`
-          <div class="row">
-            <ha-switch
-              .checked=${showTooltip}
-              @change=${(ev: Event) =>
-                this._updateConfig(
-                  "show_tooltip",
-                  (ev.target as HTMLInputElement).checked
-                )}
-            ></ha-switch>
-            <span>Show tooltip</span>
-          </div>
+          ${this._renderCompactToggle("Show tooltip", showTooltip, (value) =>
+            this._updateConfig("show_tooltip", value)
+          )}
           ${showTooltip
             ? html`
                 <div class="toggle-grid" role="group" aria-label="Tooltip details">
@@ -1270,16 +1297,9 @@ export class EnergyCustomGraphCardEditor
     return html`
       <div class="subsection header-chip-section">
         <span class="subtitle">Header chip</span>
-          <div class="row">
-            <ha-switch
-              .checked=${enabled}
-              @change=${(ev: Event) =>
-                this._setHeaderChipEnabled(
-                  (ev.target as HTMLInputElement).checked
-                )}
-            ></ha-switch>
-            <span>Show header chip</span>
-          </div>
+          ${this._renderCompactToggle("Show header chip", enabled, (value) =>
+            this._setHeaderChipEnabled(value)
+          )}
           ${enabled && chip
             ? html`
                 <div class="compact-grid">
@@ -1458,14 +1478,28 @@ export class EnergyCustomGraphCardEditor
       })}
       <div class="terms-list">
         ${calculation.terms?.length
-          ? calculation.terms.map((term, index) =>
-              this._renderHeaderCalculationTerm(term, index)
-            )
+          ? html`
+              <ha-sortable
+                handle-selector=".header-term-drag-handle"
+                draggable-selector=".term-sortable-item"
+                @item-moved=${this._handleHeaderCalculationTermMoved}
+              >
+                <div class="native-sortable-list">
+                  ${calculation.terms.map(
+                    (term, index) => html`
+                      <div class="term-sortable-item">
+                        ${this._renderHeaderCalculationTerm(term, index)}
+                      </div>
+                    `
+                  )}
+                </div>
+              </ha-sortable>
+            `
           : html`<p class="hint">Add at least one term to build the header metric.</p>`}
+        ${this._renderNativeAddButton("Add term", () =>
+          this._addHeaderCalculationTerm()
+        )}
       </div>
-      <button type="button" class="outlined" @click=${this._addHeaderCalculationTerm}>
-        Add term
-      </button>
     `;
   }
 
@@ -1501,23 +1535,24 @@ export class EnergyCustomGraphCardEditor
     const descriptor = this._formatHeaderTermDescriptor(term);
     return this._renderExpansionPanel({
       title: this._formatOperation(operation),
-      icon: "mdi:function",
+      leading: this._renderDragHandle(
+        "header-term-drag-handle",
+        "Drag to reorder term"
+      ),
       summary: descriptor,
       expanded,
       onToggle: () => this._toggleHeaderTermExpanded(index),
       actions: html`
-          <button
-            type="button"
-            class="icon-button danger"
-            title="Remove term"
-            aria-label="Remove term"
+          <ha-icon-button
+            class="editor-action"
+            .label=${"Remove term"}
             @click=${(ev: Event) => {
               ev.stopPropagation();
               this._removeHeaderCalculationTerm(index);
             }}
           >
-            <ha-icon icon="mdi:close"></ha-icon>
-          </button>
+            <ha-icon icon="mdi:delete"></ha-icon>
+          </ha-icon-button>
       `,
       body: html`
         <div class="term-body column">
@@ -1921,17 +1956,9 @@ export class EnergyCustomGraphCardEditor
     const enabled = aggregation?.compute_current_hour === true;
     return html`
       <div class="section">
-        <div class="row">
-          <ha-switch
-            .checked=${enabled}
-            @change=${(ev: Event) =>
-              this._updateAggregationFlag(
-                "compute_current_hour",
-                (ev.target as HTMLInputElement).checked
-              )}
-          ></ha-switch>
-          <span>Compute current hour value</span>
-        </div>
+        ${this._renderCompactToggle("Compute current hour value", enabled, (value) =>
+          this._updateAggregationFlag("compute_current_hour", value)
+        )}
         ${this._renderEditorHelpHint(
           "Home Assistant publishes hourly aggregates after the hour completes; this adds a current-hour estimate from recent 5 minute statistics.",
           "info"
@@ -1984,14 +2011,19 @@ export class EnergyCustomGraphCardEditor
 
   private _renderSeriesCard(series: EnergyCustomGraphSeriesConfig, index: number) {
     const expanded = this._expandedSeries.has(index);
-    const seriesCount = this._config?.series?.length ?? 0;
-    const isFirst = index === 0;
-    const isLast = index === seriesCount - 1;
     const issue = this._getSeriesIssue(series);
 
     return this._renderExpansionPanel({
       title: this._formatSeriesTitle(series, index),
-      icon: this._getSeriesSourceIcon(series),
+      leading: html`
+        <span class="series-leading">
+          ${this._renderDragHandle(
+            "series-drag-handle",
+            "Drag to reorder series"
+          )}
+          <ha-icon icon=${this._getSeriesSourceIcon(series)}></ha-icon>
+        </span>
+      `,
       summary: html`
         <span class="series-summary">
           ${this._formatSeriesSummary(series)}
@@ -2002,62 +2034,26 @@ export class EnergyCustomGraphCardEditor
       onToggle: () => this._toggleSeriesExpanded(index),
       actions: html`
         <div class="header-actions">
-            <div class="reorder-buttons">
-              <button
-                type="button"
-                class="icon-button ${isFirst ? "disabled" : ""}"
-                ?disabled=${isFirst}
-                @click=${(ev: Event) => {
-                  if (!isFirst) {
-                    ev.stopPropagation();
-                    this._moveSeriesUp(index);
-                  }
-                }}
-                title="Move up"
-                aria-label="Move series up"
-              >
-                <ha-icon icon="mdi:chevron-up"></ha-icon>
-              </button>
-              <button
-                type="button"
-                class="icon-button ${isLast ? "disabled" : ""}"
-                ?disabled=${isLast}
-                @click=${(ev: Event) => {
-                  if (!isLast) {
-                    ev.stopPropagation();
-                    this._moveSeriesDown(index);
-                  }
-                }}
-                title="Move down"
-                aria-label="Move series down"
-              >
-                <ha-icon icon="mdi:chevron-down"></ha-icon>
-              </button>
-            </div>
-            <button
-              type="button"
-              class="icon-button"
-              title="Duplicate series"
-              aria-label="Duplicate series"
+            <ha-icon-button
+              class="editor-action"
+              .label=${"Duplicate series"}
               @click=${(ev: Event) => {
                 ev.stopPropagation();
                 this._duplicateSeries(index);
               }}
             >
               <ha-icon icon="mdi:content-duplicate"></ha-icon>
-            </button>
-            <button
-              type="button"
-              class="icon-button danger"
-              title="Delete series"
-              aria-label="Delete series"
+            </ha-icon-button>
+            <ha-icon-button
+              class="editor-action"
+              .label=${"Delete series"}
               @click=${(ev: Event) => {
                 ev.stopPropagation();
                 this._confirmRemoveSeries(index);
               }}
             >
-              <ha-icon icon="mdi:close"></ha-icon>
-            </button>
+              <ha-icon icon="mdi:delete"></ha-icon>
+            </ha-icon-button>
           </div>
       `,
       body: html`
@@ -2350,18 +2346,12 @@ export class EnergyCustomGraphCardEditor
 
         ${mode === "energy"
           ? html`
-              <div class="row">
-                <ha-switch
-                  .checked=${cfg.allow_compare !== false}
-                  ?disabled=${hasTimeOffset}
-                  @change=${(ev: Event) =>
-                    this._updateConfig(
-                      "allow_compare",
-                      (ev.target as HTMLInputElement).checked
-                    )}
-                ></ha-switch>
-                <span>Allow compare</span>
-              </div>
+              ${this._renderCompactToggle(
+                "Allow compare",
+                cfg.allow_compare !== false,
+                (value) => this._updateConfig("allow_compare", value),
+                hasTimeOffset
+              )}
               ${hasTimeOffset
                 ? this._renderEditorHelpHint(
                     "Series time offset disables the Energy date picker compare mode.",
@@ -2495,6 +2485,7 @@ export class EnergyCustomGraphCardEditor
             : source === "forecast"
               ? this._renderSeriesForecastContent(series, index)
               : this._renderSeriesStatisticContent(series, index)}
+          ${this._renderSeriesSourceMore(series, index)}
       </div>
     `;
   }
@@ -2576,7 +2567,7 @@ export class EnergyCustomGraphCardEditor
 
     return html`
       <div class="field">
-        <label>Time offset unit</label>
+        <label>Time offset</label>
         <select
           @change=${(ev: Event) =>
             this._updateSeriesTimeOffsetUnit(
@@ -2595,7 +2586,7 @@ export class EnergyCustomGraphCardEditor
       </div>
       ${timeOffsetUnit
         ? this._renderTextInput({
-            label: "Time offset value",
+            label: "Offset value",
             helper: "Negative values load past source data.",
             type: "number",
             step: "1",
@@ -2604,6 +2595,41 @@ export class EnergyCustomGraphCardEditor
           })
         : nothing}
     `;
+  }
+
+  private _renderSeriesSourceMore(
+    series: EnergyCustomGraphSeriesConfig,
+    index: number
+  ) {
+    const chartType = series.chart_type ?? "bar";
+    const showValueLabelPrecision =
+      chartType === "bar" &&
+      (series.show_value_labels === true ||
+        series.value_label_precision !== undefined);
+    if (!showValueLabelPrecision) {
+      return nothing;
+    }
+
+    const count = series.value_label_precision !== undefined ? 1 : 0;
+    const expanded = this._seriesSourceMoreExpanded.has(index) || count > 0;
+    return this._renderMoreBlock({
+      count,
+      expanded,
+      onToggle: () => this._toggleSeriesSourceMore(index, expanded),
+      body: this._renderTextInput({
+        label: "Value label precision",
+        type: "number",
+        step: "1",
+        min: "0",
+        helper: "Default 0, no unit.",
+        value:
+          series.value_label_precision !== undefined
+            ? String(series.value_label_precision)
+            : "",
+        onInput: (value) =>
+          this._updateSeriesNumber(index, "value_label_precision", value),
+      }),
+    });
   }
 
   private _renderSeriesForecastContent(series: EnergyCustomGraphSeriesConfig, index: number) {
@@ -2676,22 +2702,31 @@ export class EnergyCustomGraphCardEditor
       <div class="terms-section">
         <div class="terms-header">
           <span class="subtitle">Terms</span>
-          <button
-            type="button"
-            class="icon-button strong"
-            title="Add term"
-            aria-label="Add term"
-            @click=${() => this._addCalculationTerm(index)}
-          >
-            <ha-icon icon="mdi:plus"></ha-icon>
-          </button>
         </div>
         <div class="terms-list">
           ${calculation.terms?.length
-            ? calculation.terms.map((term, termIndex) =>
-                this._renderCalculationTerm(index, termIndex, term)
-              )
+            ? html`
+                <ha-sortable
+                  handle-selector=".series-term-drag-handle"
+                  draggable-selector=".term-sortable-item"
+                  @item-moved=${(ev: CustomEvent<{ oldIndex: number; newIndex: number }>) =>
+                    this._handleCalculationTermMoved(ev, index)}
+                >
+                  <div class="native-sortable-list">
+                    ${calculation.terms.map(
+                      (term, termIndex) => html`
+                        <div class="term-sortable-item">
+                          ${this._renderCalculationTerm(index, termIndex, term)}
+                        </div>
+                      `
+                    )}
+                  </div>
+                </ha-sortable>
+              `
             : html`<p class="hint">No terms configured yet.</p>`}
+          ${this._renderNativeAddButton("Add term", () =>
+            this._addCalculationTerm(index)
+          )}
         </div>
       </div>
     `;
@@ -2713,23 +2748,24 @@ export class EnergyCustomGraphCardEditor
         : "No input selected";
     return this._renderExpansionPanel({
       title: operationLabel,
-      icon: "mdi:function",
+      leading: this._renderDragHandle(
+        "series-term-drag-handle",
+        "Drag to reorder term"
+      ),
       summary: descriptor,
       expanded,
       onToggle: () => this._toggleTermExpanded(termKey),
       actions: html`
-          <button
-            type="button"
-            class="icon-button danger"
-            title="Remove term"
-            aria-label="Remove term"
+          <ha-icon-button
+            class="editor-action"
+            .label=${"Remove term"}
             @click=${(ev: Event) => {
               ev.stopPropagation();
               this._removeCalculationTerm(seriesIndex, termIndex);
             }}
           >
-            <ha-icon icon="mdi:close"></ha-icon>
-          </button>
+            <ha-icon icon="mdi:delete"></ha-icon>
+          </ha-icon-button>
       `,
       body: html`
         <div class="term-body column">
@@ -3061,14 +3097,9 @@ export class EnergyCustomGraphCardEditor
         })}
         ${isLineLike
           ? html`
-              <div class="row">
-                <ha-switch
-                  .checked=${series.fill === true}
-                  @change=${(ev: Event) =>
-                    this._updateSeries(index, "fill", (ev.target as HTMLInputElement).checked)}
-                ></ha-switch>
-                <span>Fill</span>
-              </div>
+              ${this._renderCompactToggle("Fill", series.fill === true, (value) =>
+                this._updateSeries(index, "fill", value)
+              )}
             `
           : nothing}
         ${this._renderSeriesStyleMore(series, index, fillActive)}
@@ -3116,76 +3147,71 @@ export class EnergyCustomGraphCardEditor
       comparePreviewSource !== undefined
         ? this._normalizeColorToken(comparePreviewSource)
         : undefined;
+    const compareColorControl = html`
+      <div class="color-row">
+        <div class="field">
+          <label>Compare series color</label>
+          <div class="color-select-wrapper">
+            ${this._renderColorPreview(comparePreviewColor, chartType)}
+            <select
+              .value=${compareMode}
+              @change=${(ev: Event) =>
+                this._handleCompareColorSelect(
+                  index,
+                  (ev.target as HTMLSelectElement).value
+                )}
+            >
+              <option
+                value=${COLOR_SELECT_INHERIT}
+                ?selected=${compareMode === COLOR_SELECT_INHERIT}
+              >
+                Inherit
+              </option>
+              ${ENERGY_COLOR_PRESETS.map(
+                (preset) =>
+                  html`<option
+                    value=${preset.value}
+                    ?selected=${compareMode === preset.value}
+                  >
+                    ${preset.label}
+                  </option>`
+              )}
+              <option
+                value=${COLOR_SELECT_CUSTOM}
+                ?selected=${compareMode === COLOR_SELECT_CUSTOM}
+              >
+                Custom
+              </option>
+            </select>
+          </div>
+        </div>
+      </div>
+      ${compareMode === COLOR_SELECT_CUSTOM
+        ? html`
+            <div class="color-row">
+              ${this._renderTextInput({
+                label: "Custom compare color",
+                value: compareCustomText ?? "",
+                onInput: (value) =>
+                  this._handleCompareCustomColorInput(index, value),
+              })}
+            </div>
+          `
+        : nothing}
+    `;
 
     return this._renderMoreBlock({
       count,
       expanded,
       onToggle: () => this._toggleSeriesStyleMore(index, expanded),
       body: html`
-        <div class="color-row">
-          <div class="field">
-            <label>Compare series color</label>
-            <div class="color-select-wrapper">
-              ${this._renderColorPreview(comparePreviewColor, chartType)}
-              <select
-                .value=${compareMode}
-                @change=${(ev: Event) =>
-                  this._handleCompareColorSelect(
-                    index,
-                    (ev.target as HTMLSelectElement).value
-                  )}
-              >
-                <option
-                  value=${COLOR_SELECT_INHERIT}
-                  ?selected=${compareMode === COLOR_SELECT_INHERIT}
-                >
-                  Inherit
-                </option>
-                ${ENERGY_COLOR_PRESETS.map(
-                  (preset) =>
-                    html`<option
-                      value=${preset.value}
-                      ?selected=${compareMode === preset.value}
-                    >
-                      ${preset.label}
-                    </option>`
-                )}
-                <option
-                  value=${COLOR_SELECT_CUSTOM}
-                  ?selected=${compareMode === COLOR_SELECT_CUSTOM}
-                >
-                  Custom
-                </option>
-              </select>
-            </div>
-          </div>
-        </div>
-        ${compareMode === COLOR_SELECT_CUSTOM
-          ? html`
-              <div class="color-row">
-                ${this._renderTextInput({
-                  label: "Custom compare color",
-                  value: compareCustomText ?? "",
-                  onInput: (value) =>
-                    this._handleCompareCustomColorInput(index, value),
-                })}
-              </div>
-            `
-          : nothing}
         ${fillActive
           ? html`
-              <div class="row">
-                <ha-switch
-                  .checked=${series.gradient_fill === true}
-                  @change=${(ev: Event) =>
-                    this._updateSeries(
-                      index,
-                      "gradient_fill",
-                      (ev.target as HTMLInputElement).checked
-                    )}
-                ></ha-switch>
-                <span>Gradient fill</span>
-              </div>
+              ${this._renderCompactToggle(
+                "Gradient fill",
+                series.gradient_fill === true,
+                (value) => this._updateSeries(index, "gradient_fill", value)
+              )}
             `
           : nothing}
         ${this._renderTextInput({
@@ -3219,6 +3245,7 @@ export class EnergyCustomGraphCardEditor
           onInput: (value) =>
             this._updateSeriesNumber(index, "line_opacity", value),
         })}
+        ${compareColorControl}
         ${isLineLike
           ? html`
               ${this._renderTextInput({
@@ -3293,35 +3320,8 @@ export class EnergyCustomGraphCardEditor
               )
             : nothing}
         </div>
-        ${showValueLabels ? this._renderSeriesVisibilityMore(series, index) : nothing}
       </div>
     `;
-  }
-
-  private _renderSeriesVisibilityMore(
-    series: EnergyCustomGraphSeriesConfig,
-    index: number
-  ) {
-    const count = series.value_label_precision !== undefined ? 1 : 0;
-    const expanded = this._seriesVisibilityMoreExpanded.has(index) || count > 0;
-    return this._renderMoreBlock({
-      count,
-      expanded,
-      onToggle: () => this._toggleSeriesVisibilityMore(index, expanded),
-      body: this._renderTextInput({
-        label: "Value label precision",
-        type: "number",
-        step: "1",
-        min: "0",
-        helper: "Default 0, no unit.",
-        value:
-          series.value_label_precision !== undefined
-            ? String(series.value_label_precision)
-            : "",
-        onInput: (value) =>
-          this._updateSeriesNumber(index, "value_label_precision", value),
-      }),
-    });
   }
 
   private _countSeriesStyleMoreFields(
@@ -3349,14 +3349,14 @@ export class EnergyCustomGraphCardEditor
     this._seriesStyleMoreExpanded = next;
   }
 
-  private _toggleSeriesVisibilityMore(index: number, expanded: boolean) {
-    const next = new Set(this._seriesVisibilityMoreExpanded);
+  private _toggleSeriesSourceMore(index: number, expanded: boolean) {
+    const next = new Set(this._seriesSourceMoreExpanded);
     if (expanded) {
       next.delete(index);
     } else {
       next.add(index);
     }
-    this._seriesVisibilityMoreExpanded = next;
+    this._seriesSourceMoreExpanded = next;
   }
 
   private _renderSeriesDisplayGroup(series: EnergyCustomGraphSeriesConfig, index: number) {
@@ -3527,56 +3527,33 @@ export class EnergyCustomGraphCardEditor
                 </div>
               `
             : nothing}
-          <div class="row">
-            <ha-switch
-              .checked=${series.show_in_legend !== false}
-              @change=${(ev: Event) =>
-                this._updateSeries(index, "show_in_legend", (ev.target as HTMLInputElement).checked)}
-            ></ha-switch>
-            <span>Show in legend</span>
-          </div>
-          <div class="row">
-            <ha-switch
-              .checked=${series.hidden_by_default === true}
-              @change=${(ev: Event) =>
-                this._updateSeries(index, "hidden_by_default", (ev.target as HTMLInputElement).checked)}
-            ></ha-switch>
-            <span>Hidden by default</span>
-          </div>
-          <div class="row">
-            <ha-switch
-              .checked=${series.show_in_chart !== false}
-              @change=${(ev: Event) =>
-                this._updateSeries(
-                  index,
-                  "show_in_chart",
-                  (ev.target as HTMLInputElement).checked
-                )}
-            ></ha-switch>
-            <span>Show in chart</span>
-          </div>
-          <div class="row">
-            <ha-switch
-              .checked=${series.show_in_tooltip !== false}
-              @change=${(ev: Event) =>
-                this._updateSeries(index, "show_in_tooltip", (ev.target as HTMLInputElement).checked)}
-            ></ha-switch>
-            <span>Show in tooltip</span>
-          </div>
+          ${this._renderCompactToggle(
+            "Show in legend",
+            series.show_in_legend !== false,
+            (value) => this._updateSeries(index, "show_in_legend", value)
+          )}
+          ${this._renderCompactToggle(
+            "Hidden by default",
+            series.hidden_by_default === true,
+            (value) => this._updateSeries(index, "hidden_by_default", value)
+          )}
+          ${this._renderCompactToggle(
+            "Show in chart",
+            series.show_in_chart !== false,
+            (value) => this._updateSeries(index, "show_in_chart", value)
+          )}
+          ${this._renderCompactToggle(
+            "Show in tooltip",
+            series.show_in_tooltip !== false,
+            (value) => this._updateSeries(index, "show_in_tooltip", value)
+          )}
           ${isBar
             ? html`
-                <div class="row">
-                  <ha-switch
-                    .checked=${series.show_value_labels === true}
-                    @change=${(ev: Event) =>
-                      this._updateSeries(
-                        index,
-                        "show_value_labels",
-                        (ev.target as HTMLInputElement).checked
-                      )}
-                  ></ha-switch>
-                  <span>Show value labels</span>
-                </div>
+                ${this._renderCompactToggle(
+                  "Show value labels",
+                  series.show_value_labels === true,
+                  (value) => this._updateSeries(index, "show_value_labels", value)
+                )}
                 ${series.show_value_labels === true
                   ? this._renderTextInput({
                       label: "Value label precision",
@@ -3600,30 +3577,18 @@ export class EnergyCustomGraphCardEditor
             : nothing}
           ${fillEnabled
             ? html`
-                <div class="row">
-                  <ha-switch
-                    .checked=${series.fill === true}
-                    @change=${(ev: Event) =>
-                      this._updateSeries(index, "fill", (ev.target as HTMLInputElement).checked)}
-                  ></ha-switch>
-                  <span>Fill area</span>
-                </div>
+                ${this._renderCompactToggle("Fill area", series.fill === true, (value) =>
+                  this._updateSeries(index, "fill", value)
+                )}
               `
             : nothing}
           ${fillActive
             ? html`
-                <div class="row">
-                  <ha-switch
-                    .checked=${series.gradient_fill === true}
-                    @change=${(ev: Event) =>
-                      this._updateSeries(
-                        index,
-                        "gradient_fill",
-                        (ev.target as HTMLInputElement).checked
-                      )}
-                  ></ha-switch>
-                  <span>Gradient fill</span>
-                </div>
+                ${this._renderCompactToggle(
+                  "Gradient fill",
+                  series.gradient_fill === true,
+                  (value) => this._updateSeries(index, "gradient_fill", value)
+                )}
               `
             : nothing}
           ${this._renderTextInput({
@@ -4012,6 +3977,28 @@ export class EnergyCustomGraphCardEditor
     this._expandedHeaderTermKeys = nextExpanded;
   }
 
+  private _moveHeaderCalculationTerm(oldIndex: number, newIndex: number) {
+    const metric = this._config?.header?.chip?.metric;
+    if (!metric || !("calculation" in metric)) {
+      return;
+    }
+    const terms = [...(metric.calculation.terms ?? [])];
+    if (!this._canMoveIndex(terms, oldIndex, newIndex)) {
+      return;
+    }
+
+    terms.splice(newIndex, 0, terms.splice(oldIndex, 1)[0]);
+    this._updateHeaderCalculation({
+      ...metric.calculation,
+      terms,
+    });
+    this._expandedHeaderTermKeys = new Set(
+      Array.from(this._expandedHeaderTermKeys).map((index) =>
+        this._remapMovedIndex(index, oldIndex, newIndex)
+      )
+    );
+  }
+
   private _setHeaderTermSource(
     index: number,
     source: "series" | "stack" | "entity_state" | "constant"
@@ -4104,38 +4091,39 @@ export class EnergyCustomGraphCardEditor
     this._setSeriesOptionGroupExpanded(index, "source", true);
   }
 
-  private _moveSeriesUp(index: number) {
-    if (index === 0) return;
+  private _handleSeriesMoved(
+    ev: CustomEvent<{ oldIndex: number; newIndex: number }>
+  ): void {
+    if (ev.target !== ev.currentTarget) {
+      return;
+    }
+    ev.stopPropagation();
+    this._moveSeries(ev.detail.oldIndex, ev.detail.newIndex);
+  }
 
+  private _moveSeries(oldIndex: number, newIndex: number) {
     const series = [...(this._config!.series ?? [])];
-    [series[index - 1], series[index]] = [series[index], series[index - 1]];
-    this._swapSeriesIndexState(index, index - 1);
+    if (!this._canMoveIndex(series, oldIndex, newIndex)) {
+      return;
+    }
 
+    series.splice(newIndex, 0, series.splice(oldIndex, 1)[0]);
+    this._moveSeriesIndexState(oldIndex, newIndex);
     this._updateConfig("series", series);
   }
 
-  private _moveSeriesDown(index: number) {
-    const series = [...(this._config!.series ?? [])];
-    if (index >= series.length - 1) return;
-
-    [series[index], series[index + 1]] = [series[index + 1], series[index]];
-    this._swapSeriesIndexState(index, index + 1);
-
-    this._updateConfig("series", series);
-  }
-
-  private _swapSeriesIndexState(left: number, right: number) {
-    const swapIndex = (value: number) =>
-      value === left ? right : value === right ? left : value;
+  private _moveSeriesIndexState(oldIndex: number, newIndex: number) {
+    const remapIndex = (value: number) =>
+      this._remapMovedIndex(value, oldIndex, newIndex);
 
     this._expandedSeries = new Set(
-      Array.from(this._expandedSeries).map(swapIndex)
+      Array.from(this._expandedSeries).map(remapIndex)
     );
     this._seriesStyleMoreExpanded = new Set(
-      Array.from(this._seriesStyleMoreExpanded).map(swapIndex)
+      Array.from(this._seriesStyleMoreExpanded).map(remapIndex)
     );
-    this._seriesVisibilityMoreExpanded = new Set(
-      Array.from(this._seriesVisibilityMoreExpanded).map(swapIndex)
+    this._seriesSourceMoreExpanded = new Set(
+      Array.from(this._seriesSourceMoreExpanded).map(remapIndex)
     );
 
     const nextOptionGroups = new Map<string, boolean>();
@@ -4145,7 +4133,7 @@ export class EnergyCustomGraphCardEditor
         return;
       }
       nextOptionGroups.set(
-        this._seriesOptionGroupKey(swapIndex(parsed.index), parsed.group),
+        this._seriesOptionGroupKey(remapIndex(parsed.index), parsed.group),
         expanded
       );
     });
@@ -4158,9 +4146,47 @@ export class EnergyCustomGraphCardEditor
       if (Number.isNaN(oldSeriesIndex)) {
         return;
       }
-      nextTermKeys.push(`${swapIndex(oldSeriesIndex)}-${termPart}`);
+      nextTermKeys.push(`${remapIndex(oldSeriesIndex)}-${termPart}`);
     });
     this._expandedTermKeys = new Set(nextTermKeys);
+  }
+
+  private _handleCalculationTermMoved(
+    ev: CustomEvent<{ oldIndex: number; newIndex: number }>,
+    seriesIndex: number
+  ): void {
+    ev.stopPropagation();
+    this._moveCalculationTerm(seriesIndex, ev.detail.oldIndex, ev.detail.newIndex);
+  }
+
+  private _handleHeaderCalculationTermMoved(
+    ev: CustomEvent<{ oldIndex: number; newIndex: number }>
+  ): void {
+    ev.stopPropagation();
+    this._moveHeaderCalculationTerm(ev.detail.oldIndex, ev.detail.newIndex);
+  }
+
+  private _canMoveIndex<T>(items: T[], oldIndex: number, newIndex: number): boolean {
+    return (
+      oldIndex !== newIndex &&
+      oldIndex >= 0 &&
+      newIndex >= 0 &&
+      oldIndex < items.length &&
+      newIndex < items.length
+    );
+  }
+
+  private _remapMovedIndex(value: number, oldIndex: number, newIndex: number): number {
+    if (value === oldIndex) {
+      return newIndex;
+    }
+    if (oldIndex < newIndex && value > oldIndex && value <= newIndex) {
+      return value - 1;
+    }
+    if (oldIndex > newIndex && value >= newIndex && value < oldIndex) {
+      return value + 1;
+    }
+    return value;
   }
 
   private _duplicateSeries(index: number) {
@@ -4229,8 +4255,8 @@ export class EnergyCustomGraphCardEditor
         .map((oldIndex) => (oldIndex > index ? oldIndex - 1 : oldIndex))
         .filter((newIndex) => newIndex >= 0 && newIndex < series.length)
     );
-    this._seriesVisibilityMoreExpanded = new Set(
-      Array.from(this._seriesVisibilityMoreExpanded)
+    this._seriesSourceMoreExpanded = new Set(
+      Array.from(this._seriesSourceMoreExpanded)
         .filter((oldIndex) => oldIndex !== index)
         .map((oldIndex) => (oldIndex > index ? oldIndex - 1 : oldIndex))
         .filter((newIndex) => newIndex >= 0 && newIndex < series.length)
@@ -4295,6 +4321,44 @@ export class EnergyCustomGraphCardEditor
       );
     });
     this._expandedTermKeys = new Set(nextKeys);
+  }
+
+  private _moveCalculationTerm(
+    seriesIndex: number,
+    oldIndex: number,
+    newIndex: number
+  ) {
+    const series = [...(this._config!.series ?? [])];
+    const target = { ...series[seriesIndex] };
+    const calculation = target.calculation;
+    if (!calculation?.terms) {
+      return;
+    }
+    const terms = [...calculation.terms];
+    if (!this._canMoveIndex(terms, oldIndex, newIndex)) {
+      return;
+    }
+
+    terms.splice(newIndex, 0, terms.splice(oldIndex, 1)[0]);
+    target.calculation = { ...calculation, terms };
+    series[seriesIndex] = target;
+    this._updateConfig("series", series);
+    this._expandedSeries = new Set(this._expandedSeries).add(seriesIndex);
+
+    const nextKeys = new Set<string>();
+    this._expandedTermKeys.forEach((key) => {
+      const [seriesPart, termPart] = key.split("-");
+      const oldSeriesIndex = Number(seriesPart);
+      const oldTermIndex = Number(termPart);
+      if (oldSeriesIndex !== seriesIndex || Number.isNaN(oldTermIndex)) {
+        nextKeys.add(key);
+        return;
+      }
+      nextKeys.add(
+        `${seriesIndex}-${this._remapMovedIndex(oldTermIndex, oldIndex, newIndex)}`
+      );
+    });
+    this._expandedTermKeys = nextKeys;
   }
 
   private _updateTerm(
@@ -4695,8 +4759,8 @@ export class EnergyCustomGraphCardEditor
         (index) => index >= 0 && index < series.length
       )
     );
-    this._seriesVisibilityMoreExpanded = new Set(
-      Array.from(this._seriesVisibilityMoreExpanded).filter(
+    this._seriesSourceMoreExpanded = new Set(
+      Array.from(this._seriesSourceMoreExpanded).filter(
         (index) => index >= 0 && index < series.length
       )
     );
@@ -5355,8 +5419,16 @@ export class EnergyCustomGraphCardEditor
       color: var(--secondary-text-color);
     }
 
+    ha-expansion-panel::part(summary) {
+      min-width: 0;
+    }
+
     ha-button-toggle-group {
       width: 100%;
+    }
+
+    ha-sortable {
+      display: block;
     }
 
     .panel-heading {
@@ -5364,6 +5436,7 @@ export class EnergyCustomGraphCardEditor
       flex-direction: column;
       gap: 2px;
       min-width: 0;
+      overflow: hidden;
     }
 
     .panel-title {
@@ -5371,6 +5444,10 @@ export class EnergyCustomGraphCardEditor
       font-size: var(--ha-font-size-l, 16px);
       font-weight: var(--ha-font-weight-medium, 500);
       line-height: var(--ha-line-height-condensed, 1.2);
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .panel-summary {
@@ -5383,6 +5460,44 @@ export class EnergyCustomGraphCardEditor
       display: flex;
       align-items: center;
       gap: var(--ha-space-1, 4px);
+    }
+
+    .panel-leading,
+    .series-leading {
+      display: flex;
+      align-items: center;
+      gap: var(--ha-space-2, 8px);
+      color: var(--secondary-text-color);
+    }
+
+    .series-leading > ha-icon {
+      --mdc-icon-size: 20px;
+    }
+
+    .drag-handle {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--secondary-text-color);
+      cursor: grab;
+      touch-action: none;
+    }
+
+    .drag-handle:active {
+      cursor: grabbing;
+    }
+
+    .drag-handle ha-icon {
+      --mdc-icon-size: 24px;
+    }
+
+    ha-icon-button.editor-action {
+      --ha-icon-button-size: var(--ha-space-9, 36px);
+      color: var(--secondary-text-color);
+    }
+
+    ha-icon-button.editor-action:hover {
+      color: var(--primary-text-color);
     }
 
     .panel-body {
@@ -5474,6 +5589,26 @@ export class EnergyCustomGraphCardEditor
       display: flex;
       flex-direction: column;
       gap: 12px;
+    }
+
+    .native-sortable-list {
+      display: flex;
+      flex-direction: column;
+      gap: var(--ha-space-2, 8px);
+    }
+
+    .series-sortable-item,
+    .term-sortable-item {
+      display: block;
+    }
+
+    .native-add-button {
+      align-self: flex-start;
+      margin-top: var(--ha-space-2, 8px);
+    }
+
+    .native-add-button ha-icon {
+      --mdc-icon-size: 20px;
     }
 
     .series-option-groups {
@@ -5661,6 +5796,9 @@ export class EnergyCustomGraphCardEditor
     }
 
     .aggregation-body {
+      display: flex;
+      flex-direction: column;
+      gap: var(--ha-space-4, 16px);
       padding-top: 16px;
     }
 
@@ -5777,17 +5915,38 @@ export class EnergyCustomGraphCardEditor
 
     .toggle-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-      gap: 8px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: var(--ha-space-2, 8px) var(--ha-space-4, 16px);
     }
 
     .compact-toggle {
       display: flex;
       align-items: center;
-      gap: 12px;
-      min-height: 32px;
-      font-size: 13px;
+      justify-content: space-between;
+      gap: var(--ha-space-4, 16px);
+      min-height: var(--ha-space-10, 40px);
+      font-size: var(--ha-font-size-m, 14px);
+      line-height: var(--ha-line-height-normal, 1.4);
       color: var(--primary-text-color);
+    }
+
+    .compact-toggle.disabled {
+      color: var(--disabled-text-color, var(--secondary-text-color));
+    }
+
+    .compact-toggle-label {
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .compact-toggle ha-switch {
+      flex: 0 0 auto;
+    }
+
+    @media (max-width: 420px) {
+      .toggle-grid {
+        grid-template-columns: 1fr;
+      }
     }
 
     .row.space-between {
