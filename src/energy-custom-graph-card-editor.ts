@@ -204,6 +204,7 @@ export class EnergyCustomGraphCardEditor
 
   private async _preloadEditorElements() {
     const needsEntityPicker = !customElements.get("ha-entity-picker");
+    const needsStateIcon = !customElements.get("ha-state-icon");
     const needsExpansionPanel = !customElements.get("ha-expansion-panel");
     const needsButtonToggleGroup = !customElements.get("ha-button-toggle-group");
     const needsNativeListElements =
@@ -212,6 +213,7 @@ export class EnergyCustomGraphCardEditor
       !customElements.get("ha-sortable");
     if (
       !needsEntityPicker &&
+      !needsStateIcon &&
       !needsExpansionPanel &&
       !needsButtonToggleGroup &&
       !needsNativeListElements
@@ -222,7 +224,7 @@ export class EnergyCustomGraphCardEditor
     try {
       const helpers = await (window as any).loadCardHelpers();
       const preloaders: Promise<void>[] = [];
-      if (needsEntityPicker) {
+      if (needsEntityPicker || needsStateIcon) {
         preloaders.push(
           this._preloadCardEditor(helpers, { type: "entities", entities: [] })
         );
@@ -597,7 +599,7 @@ export class EnergyCustomGraphCardEditor
     const expanded = this._headerExpanded;
     return this._renderEditorSection({
       title: "Card header",
-      icon: "mdi:card-text-outline",
+      icon: "mdi:credit-card",
       summary: this._formatCardHeaderSummary(cfg),
       expanded,
       onToggle: () => {
@@ -620,7 +622,7 @@ export class EnergyCustomGraphCardEditor
     const expanded = this._chartSettingsExpanded;
     return this._renderEditorSection({
       title: "Chart settings",
-      icon: "mdi:tune-variant",
+      icon: "mdi:cog",
       summary: this._formatChartSettingsSummary(cfg),
       expanded,
       onToggle: () => {
@@ -642,7 +644,7 @@ export class EnergyCustomGraphCardEditor
     const expanded = this._seriesSectionExpanded;
     return this._renderExpansionPanel({
       title: "Series",
-      icon: "mdi:chart-line-variant",
+      icon: "mdi:chart-box-multiple",
       summary: this._formatSeriesSectionSummary(series),
       expanded,
       onToggle: () => {
@@ -714,6 +716,7 @@ export class EnergyCustomGraphCardEditor
     onToggle,
     body,
     actions,
+    actionsSlot = "icons",
     leading,
     className,
   }: {
@@ -724,6 +727,7 @@ export class EnergyCustomGraphCardEditor
     onToggle: () => void;
     body: unknown;
     actions?: unknown;
+    actionsSlot?: "event" | "icons";
     leading?: unknown;
     className?: string;
   }) {
@@ -747,7 +751,7 @@ export class EnergyCustomGraphCardEditor
         ${actions
           ? html`
               <div
-                slot="icons"
+                slot=${actionsSlot}
                 class="panel-actions"
                 @click=${(ev: Event) => ev.stopPropagation()}
                 @keydown=${(ev: Event) => ev.stopPropagation()}
@@ -800,7 +804,7 @@ export class EnergyCustomGraphCardEditor
     );
     return this._renderExpansionPanel({
       title: "Aggregation",
-      icon: "mdi:chart-bar-stacked",
+      icon: "mdi:clock-fast",
       summary: aggregationSummary ?? "Automatic",
       expanded: aggregationExpanded,
       onToggle: () => this._toggleAggregationExpanded(),
@@ -1124,7 +1128,7 @@ export class EnergyCustomGraphCardEditor
     ];
     return this._renderExpansionPanel({
       title: "Legend",
-      icon: "mdi:format-list-bulleted-square",
+      icon: "mdi:list-box-outline",
       summary: this._formatLegendSummary(cfg),
       expanded,
       onToggle: () => this._toggleLegendExpanded(),
@@ -1166,7 +1170,7 @@ export class EnergyCustomGraphCardEditor
 
     return this._renderExpansionPanel({
       title: "Y Axes",
-      icon: "mdi:axis-arrow",
+      icon: "mdi:format-text-rotation-up",
       summary: axesSummary,
       expanded: axesExpanded,
       onToggle: () => this._toggleAxesExpanded(),
@@ -2021,7 +2025,7 @@ export class EnergyCustomGraphCardEditor
             "series-drag-handle",
             "Drag to reorder series"
           )}
-          <ha-icon icon=${this._getSeriesSourceIcon(series)}></ha-icon>
+          ${this._renderSeriesSourceIcon(series)}
         </span>
       `,
       summary: html`
@@ -2032,6 +2036,7 @@ export class EnergyCustomGraphCardEditor
       `,
       expanded,
       onToggle: () => this._toggleSeriesExpanded(index),
+      actionsSlot: "event",
       actions: html`
         <div class="header-actions">
             <ha-icon-button
@@ -2042,7 +2047,7 @@ export class EnergyCustomGraphCardEditor
                 this._duplicateSeries(index);
               }}
             >
-              <ha-icon icon="mdi:content-duplicate"></ha-icon>
+              <ha-icon icon="mdi:plus-box-multiple"></ha-icon>
             </ha-icon-button>
             <ha-icon-button
               class="editor-action"
@@ -2114,15 +2119,20 @@ export class EnergyCustomGraphCardEditor
     return Boolean(normalizeStatisticId(series.statistic_id));
   }
 
-  private _getSeriesSourceIcon(series: EnergyCustomGraphSeriesConfig): string {
+  private _renderSeriesSourceIcon(series: EnergyCustomGraphSeriesConfig) {
     const source = this._resolveSeriesSource(series);
     if (source === "calculation") {
-      return "mdi:function-variant";
+      return html`<ha-icon icon="mdi:calculator-variant"></ha-icon>`;
     }
     if (source === "forecast") {
-      return "mdi:weather-sunny";
+      return html`<ha-icon icon="mdi:solar-power-variant-outline"></ha-icon>`;
     }
-    return "mdi:database";
+    const statisticId = normalizeStatisticId(series.statistic_id);
+    const stateObj = statisticId ? this.hass?.states?.[statisticId] : undefined;
+    if (stateObj) {
+      return html`<ha-state-icon .stateObj=${stateObj}></ha-state-icon>`;
+    }
+    return html`<ha-icon icon="mdi:selection-remove"></ha-icon>`;
   }
 
   private _renderSeriesOptionGroup(
@@ -5437,6 +5447,7 @@ export class EnergyCustomGraphCardEditor
       gap: 2px;
       min-width: 0;
       overflow: hidden;
+      padding-block: var(--ha-space-2, 8px);
     }
 
     .panel-title {
@@ -5453,6 +5464,7 @@ export class EnergyCustomGraphCardEditor
     .panel-summary {
       color: var(--secondary-text-color);
       font-size: var(--ha-font-size-s, 13px);
+      font-weight: var(--ha-font-weight-normal, 400);
       line-height: var(--ha-line-height-condensed, 1.2);
     }
 
@@ -5471,6 +5483,10 @@ export class EnergyCustomGraphCardEditor
     }
 
     .series-leading > ha-icon {
+      --mdc-icon-size: 20px;
+    }
+
+    .series-leading > ha-state-icon {
       --mdc-icon-size: 20px;
     }
 
@@ -5517,7 +5533,7 @@ export class EnergyCustomGraphCardEditor
       padding: var(--ha-space-4, 16px) var(--ha-space-1, 4px) var(--ha-space-4, 16px) 0;
       display: flex;
       flex-direction: column;
-      gap: var(--ha-space-4, 16px);
+      gap: var(--ha-space-5, 20px);
     }
 
     .section {
