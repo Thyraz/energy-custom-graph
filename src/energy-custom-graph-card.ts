@@ -4239,6 +4239,7 @@ export class EnergyCustomGraphCard extends LitElement {
     const {
       series: mainSeries,
       legend,
+      legendSecondaryIds: mainLegendSecondaryIds,
       unitBySeries,
       seriesById,
       indicatorColorBySeries,
@@ -4265,6 +4266,9 @@ export class EnergyCustomGraphCard extends LitElement {
       combinedIndicatorColors.set(key, value)
     );
     const legendSecondaryIds = new Map<string, string[]>();
+    mainLegendSecondaryIds.forEach((ids, id) => {
+      legendSecondaryIds.set(id, [...ids]);
+    });
 
     const barStackBaseById = new Map<string, string>();
     const normalizedBarStacks = new Map<string, string>();
@@ -4484,8 +4488,13 @@ export class EnergyCustomGraphCard extends LitElement {
           (entry) => entry.id === (serie.id ?? baseId)
         )?.id;
         if (legendEntryId) {
+          const compareSecondaryIds =
+            compareResult.legendSecondaryIds.get(baseId) ?? [];
           const secondaryList = legendSecondaryIds.get(legendEntryId) ?? [];
-          secondaryList.push(compareId);
+          secondaryList.push(
+            compareId,
+            ...compareSecondaryIds.map((secondaryId) => `${secondaryId}--compare`)
+          );
           legendSecondaryIds.set(legendEntryId, secondaryList);
         }
       });
@@ -5841,6 +5850,7 @@ export class EnergyCustomGraphCard extends LitElement {
       borderColor?: string;
       borderWidth?: number;
       hidden?: boolean;
+      legendGroup?: string;
     }[],
     secondaryIds: Map<string, string[]>
   ): LegendOption | undefined {
@@ -5848,8 +5858,46 @@ export class EnergyCustomGraphCard extends LitElement {
       return undefined;
     }
 
+    const groupedEntries: typeof entries = [];
+    const groupedSecondaryIds = new Map<string, string[]>();
+    secondaryIds.forEach((ids, id) => {
+      groupedSecondaryIds.set(id, [...ids]);
+    });
+    const groupOwners = new Map<string, (typeof entries)[number]>();
+    const groupAllHidden = new Map<string, boolean>();
+
+    entries.forEach((entry) => {
+      const groupName =
+        typeof entry.legendGroup === "string" ? entry.legendGroup.trim() : "";
+      if (!groupName) {
+        groupedEntries.push(entry);
+        return;
+      }
+
+      const owner = groupOwners.get(groupName);
+      if (!owner) {
+        const groupedEntry = { ...entry, name: groupName };
+        groupOwners.set(groupName, groupedEntry);
+        groupAllHidden.set(groupName, entry.hidden === true);
+        groupedEntries.push(groupedEntry);
+        return;
+      }
+
+      const linkedIds = new Set(groupedSecondaryIds.get(owner.id) ?? []);
+      linkedIds.add(entry.id);
+      (groupedSecondaryIds.get(entry.id) ?? []).forEach((linkedId) => {
+        linkedIds.add(linkedId);
+      });
+      groupedSecondaryIds.set(owner.id, Array.from(linkedIds));
+
+      const allHidden =
+        (groupAllHidden.get(groupName) ?? true) && entry.hidden === true;
+      groupAllHidden.set(groupName, allHidden);
+      owner.hidden = allHidden;
+    });
+
     const sort = this._config?.legend_sort ?? "none";
-    const sortedEntries = [...entries];
+    const sortedEntries = [...groupedEntries];
     if (sort === "asc" || sort === "desc") {
       sortedEntries.sort((a, b) => {
         const compare = a.name.localeCompare(b.name);
@@ -5860,7 +5908,7 @@ export class EnergyCustomGraphCard extends LitElement {
     const data = sortedEntries.map((entry) => ({
       id: entry.id,
       name: entry.name,
-      secondaryIds: secondaryIds.get(entry.id) ?? [],
+      secondaryIds: groupedSecondaryIds.get(entry.id) ?? [],
       itemStyle:
         entry.indicatorColor || entry.color || entry.fillColor || entry.borderColor
           ? {
@@ -5875,7 +5923,7 @@ export class EnergyCustomGraphCard extends LitElement {
     sortedEntries.forEach((entry) => {
       const isVisible = entry.hidden ? false : true;
       selected[entry.id] = isVisible;
-      const linked = secondaryIds.get(entry.id);
+      const linked = groupedSecondaryIds.get(entry.id);
       linked?.forEach((secondaryId) => {
         selected[secondaryId] = isVisible;
       });

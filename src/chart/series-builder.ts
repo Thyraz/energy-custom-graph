@@ -37,7 +37,9 @@ export interface BuiltSeriesResult {
     borderColor?: string;
     borderWidth?: number;
     hidden?: boolean;
+    legendGroup?: string;
   }[];
+  legendSecondaryIds: Map<string, string[]>;
   unitBySeries: Map<string, string | null | undefined>;
   seriesById: Map<string, EnergyCustomGraphSeriesConfig>;
   indicatorColorBySeries: Map<string, string>;
@@ -285,6 +287,7 @@ export const buildSeries = ({
   const seriesById = new Map<string, EnergyCustomGraphSeriesConfig>();
   const indicatorColorBySeries = new Map<string, string>();
   const resolvedSeriesById = new Map<string, ResolvedSeriesData>();
+  const legendSecondaryIds = new Map<string, string[]>();
   const output: (LineSeriesOption | BarSeriesOption)[] = [];
 
   type LineSeriesMeta = {
@@ -654,6 +657,7 @@ export const buildSeries = ({
         borderColor: legendBorder,
         borderWidth: isLineLike ? 2 : 1,
         hidden: seriesConfig.hidden_by_default === true,
+        legendGroup: seriesConfig.legend_group?.trim() || undefined,
       });
     }
   });
@@ -847,11 +851,16 @@ export const buildSeries = ({
     };
 
     output.push(baseSeries, areaSeries);
+
+    const secondaryIds = legendSecondaryIds.get(sourceMeta.id) ?? [];
+    secondaryIds.push(baseId, fillId);
+    legendSecondaryIds.set(sourceMeta.id, secondaryIds);
   });
 
   return {
     series: output,
     legend,
+    legendSecondaryIds,
     unitBySeries,
     seriesById,
     indicatorColorBySeries,

@@ -82,6 +82,7 @@ export interface EnergyCustomGraphSeriesConfig {
   compare_color?: string;
   y_axis?: "left" | "right";
   show_in_legend?: boolean;
+  legend_group?: string;
   show_in_tooltip?: boolean;
   show_value_labels?: boolean;
   value_label_precision?: number;
