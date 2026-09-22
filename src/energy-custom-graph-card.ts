@@ -5264,6 +5264,36 @@ export class EnergyCustomGraphCard extends LitElement {
     return (timestamp: number) => timestamp + compareOffset;
   }
 
+  private _shouldApplyBarAlignment(): boolean {
+    const period = this._statisticsPeriod;
+    return (
+      this._config?.bar_alignment === "right" &&
+      period === "hour"
+    );
+  }
+
+  private _resolveBarAlignmentOffsetMs(buckets: number[]): number {
+    if (buckets.length < 2) {
+      return 0;
+    }
+
+    const gaps: number[] = [];
+    for (let index = 1; index < buckets.length; index += 1) {
+      const gap = buckets[index] - buckets[index - 1];
+      if (Number.isFinite(gap) && gap > 0) {
+        gaps.push(gap);
+      }
+    }
+
+    if (!gaps.length) {
+      return 0;
+    }
+
+    const averageGap =
+      gaps.reduce((sum, gap) => sum + gap, 0) / gaps.length;
+    return Math.max(Math.round(averageGap / 2), 0);
+  }
+
   private _applyBarStyling(
     series: SeriesOption[],
     predefinedBuckets?: number[],
@@ -5316,6 +5346,20 @@ export class EnergyCustomGraphCard extends LitElement {
     });
 
     const buckets = Array.from(bucketSet).sort((a, b) => a - b);
+    const rightAlignEnabled = this._shouldApplyBarAlignment();
+    const barAlignmentOffsetMs = rightAlignEnabled
+      ? this._resolveBarAlignmentOffsetMs(buckets)
+      : 0;
+    const alignBarTuple = (tuple: any[] | undefined) => {
+      if (!Array.isArray(tuple) || barAlignmentOffsetMs <= 0) {
+        return tuple;
+      }
+      const timestamp = Number(tuple[0]);
+      if (!Number.isFinite(timestamp)) {
+        return tuple;
+      }
+      return [timestamp + barAlignmentOffsetMs, tuple[1], timestamp];
+    };
 
     barSeries.forEach((serie) => {
       const baseItemStyle = {
@@ -5328,9 +5372,11 @@ export class EnergyCustomGraphCard extends LitElement {
           return;
         }
         const timestamp = Number(tuple[0]);
+        const alignedTuple = alignBarTuple(tuple);
         dataMap.set(timestamp, {
           ...item,
-          value: [timestamp, tuple[1]],
+          value: alignedTuple,
+          __energyCustomGraphRealTimestamp: timestamp,
           __energyCustomGraphRealValue: true,
           itemStyle: {
             ...baseItemStyle,
@@ -5345,7 +5391,8 @@ export class EnergyCustomGraphCard extends LitElement {
           return existing;
         }
         return {
-          value: [bucket, 0],
+          value: alignBarTuple([bucket, 0]),
+          __energyCustomGraphRealTimestamp: bucket,
           itemStyle: {
             ...baseItemStyle,
             borderWidth: 0,

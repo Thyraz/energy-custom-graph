@@ -205,6 +205,8 @@ export type EnergyCustomGraphRelativePeriod =
   | EnergyCustomGraphRelativeCalendarPeriod
   | EnergyCustomGraphRelativeRollingPeriod;
 
+export type EnergyCustomGraphBarAlignment = "center" | "right";
+
 export type EnergyCustomGraphTimespanConfig =
   | { mode: "energy" }
   | {
@@ -250,4 +252,5 @@ export interface EnergyCustomGraphCardConfig extends LovelaceCardConfig {
   show_unit?: boolean;
   aggregation?: EnergyCustomGraphAggregationConfig;
   show_stack_sums?: boolean;
+  bar_alignment?: EnergyCustomGraphBarAlignment;
 }
