@@ -49,6 +49,7 @@ import {
   attributeHistoryToStatistics,
   buildAttributeMetadata,
   buildAttributeStreamParams,
+  createZonedBucketing,
   fetchAttributeHistoryStates,
   getAttributeEntityIds,
   getDataKey,
@@ -2899,7 +2900,7 @@ export class EnergyCustomGraphCard extends LitElement {
       return {};
     }
     const { statisticIds, attributeKeys } = splitDataKeys(keys);
-    const [statistics, attributeStatistics] = await Promise.all([
+    const results = await Promise.allSettled([
       statisticIds.length
         ? this._withTimeout(
             fetchStatistics(
@@ -2929,7 +2930,47 @@ export class EnergyCustomGraphCard extends LitElement {
         contextDetails
       ),
     ]);
-    return { ...statistics, ...attributeStatistics };
+    return this._mergeSettledStatistics(
+      results,
+      [statisticIds.length > 0, attributeKeys.length > 0],
+      label,
+      contextDetails
+    );
+  }
+
+  /**
+   * Merges statistics and attribute results so a failing request does not
+   * discard series that loaded successfully. Throws only when every request
+   * failed.
+   */
+  private _mergeSettledStatistics(
+    results: PromiseSettledResult<Statistics>[],
+    requested: boolean[],
+    label: string,
+    contextDetails?: Record<string, unknown>
+  ): Statistics {
+    const merged: Statistics = {};
+    const failures: unknown[] = [];
+    let succeeded = false;
+    results.forEach((result, index) => {
+      if (result.status === "fulfilled") {
+        Object.assign(merged, result.value);
+        succeeded = succeeded || requested[index];
+      } else {
+        failures.push(result.reason);
+      }
+    });
+    if (failures.length && !succeeded) {
+      throw failures[0];
+    }
+    failures.forEach((error) => {
+      this._log("error", "Partial data request failed; showing loaded series", {
+        ...(contextDetails ?? {}),
+        label,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+    return merged;
   }
 
   private async _fetchAttributeStatistics(
@@ -2957,15 +2998,18 @@ export class EnergyCustomGraphCard extends LitElement {
     if (aggregation === "raw") {
       return attributeHistoryToStatistics(history, attributeKeys);
     }
+    // Match recorder statistics, which bucket days and longer periods in the
+    // Home Assistant time zone rather than the browser's.
+    const bucketing = createZonedBucketing(aggregation, this.hass.config?.time_zone) ?? {
+      align: (timestamp: number) =>
+        this._alignBucketStart(timestamp, aggregation).getTime(),
+      advance: (timestamp: number) =>
+        this._advanceBucket(new Date(timestamp), aggregation).getTime(),
+    };
     return attributeHistoryToStatistics(history, attributeKeys, {
       rangeStart: rangeStart.getTime(),
       rangeEnd: rangeEnd?.getTime() ?? null,
-      bucketing: {
-        align: (timestamp) =>
-          this._alignBucketStart(timestamp, aggregation).getTime(),
-        advance: (timestamp) =>
-          this._advanceBucket(new Date(timestamp), aggregation).getTime(),
-      },
+      bucketing,
     });
   }
 
@@ -2998,7 +3042,7 @@ export class EnergyCustomGraphCard extends LitElement {
       options.significant_changes_only = rawOptions.significant_changes_only;
     }
 
-    const [statistics, attributeStatistics] = await Promise.all([
+    const results = await Promise.allSettled([
       statisticIds.length
         ? this._withTimeout(
             fetchRawHistoryStates(
@@ -3027,7 +3071,12 @@ export class EnergyCustomGraphCard extends LitElement {
         { ...(contextDetails ?? {}), raw: true }
       ),
     ]);
-    return { ...statistics, ...attributeStatistics };
+    return this._mergeSettledStatistics(
+      results,
+      [statisticIds.length > 0, attributeKeys.length > 0],
+      "fetchRawHistoryStates",
+      { ...(contextDetails ?? {}), raw: true }
+    );
   }
 
   private _expandRawQueryWindow(

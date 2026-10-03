@@ -245,11 +245,13 @@ export const convertSeriesToCalculation = (
   series: EnergyCustomGraphSeriesConfig
 ): EnergyCustomGraphSeriesConfig => {
   const statisticId = normalizeStatisticId(series.statistic_id);
+  const attribute = series.attribute?.trim() || undefined;
   const initialTerms: EnergyCustomGraphCalculationTerm[] = statisticId
     ? [
         {
           operation: "add",
           statistic_id: statisticId,
+          ...(attribute ? { attribute } : {}),
           stat_type: series.stat_type,
         },
       ]
@@ -264,6 +266,7 @@ export const convertSeriesToCalculation = (
     },
   };
   delete next.statistic_id;
+  delete next.attribute;
   delete next.stat_type;
   delete next.pv_production_entity;
   return next;
@@ -286,8 +289,15 @@ export const convertSeriesToStatistic = (
   if (soleEntityTerm?.statistic_id) {
     next.statistic_id = soleEntityTerm.statistic_id.trim();
     next.stat_type = soleEntityTerm.stat_type;
+    const attribute = soleEntityTerm.attribute?.trim();
+    if (attribute) {
+      next.attribute = attribute;
+    } else {
+      delete next.attribute;
+    }
   } else if (!normalizeStatisticId(next.statistic_id)) {
     next.statistic_id = "";
+    delete next.attribute;
     delete next.stat_type;
   }
   return next;
@@ -301,6 +311,7 @@ export const cleanSeriesForForecast = (
     source: "forecast",
   };
   delete next.statistic_id;
+  delete next.attribute;
   delete next.stat_type;
   delete next.calculation;
   delete next.time_offset;

@@ -1,7 +1,12 @@
 import type { HomeAssistant } from "custom-card-helpers";
 import { normalizeStateValue } from "./history";
 import type { HistoryStates } from "./history";
-import type { Statistics, StatisticValue, StatisticsMetaData } from "./statistics";
+import type {
+  Statistics,
+  StatisticsPeriod,
+  StatisticValue,
+  StatisticsMetaData,
+} from "./statistics";
 
 // Entity IDs and statistic IDs never contain "@", so it safely separates
 // the entity ID from the attribute name in internal data keys.
@@ -247,6 +252,136 @@ const toBucketStatistics = (
   }
 
   return values;
+};
+
+const MINUTE_MS = 60 * 1000;
+const HOUR_MS = 60 * MINUTE_MS;
+
+const zonedFormatters = new Map<string, Intl.DateTimeFormat | null>();
+
+const getZonedFormatter = (timeZone: string): Intl.DateTimeFormat | null => {
+  if (!zonedFormatters.has(timeZone)) {
+    let formatter: Intl.DateTimeFormat | null = null;
+    try {
+      formatter = new Intl.DateTimeFormat("en-US", {
+        timeZone,
+        hourCycle: "h23",
+        year: "numeric",
+        month: "numeric",
+        day: "numeric",
+        hour: "numeric",
+        minute: "numeric",
+        second: "numeric",
+      });
+    } catch (_error) {
+      formatter = null;
+    }
+    zonedFormatters.set(timeZone, formatter);
+  }
+  return zonedFormatters.get(timeZone) ?? null;
+};
+
+interface ZonedParts {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  second: number;
+}
+
+const getZonedParts = (formatter: Intl.DateTimeFormat, timestamp: number): ZonedParts => {
+  const parts: Record<string, number> = {};
+  formatter.formatToParts(new Date(timestamp)).forEach((part) => {
+    if (part.type !== "literal") {
+      parts[part.type] = Number(part.value);
+    }
+  });
+  return {
+    year: parts.year,
+    month: parts.month - 1,
+    day: parts.day,
+    hour: parts.hour % 24,
+    minute: parts.minute,
+    second: parts.second,
+  };
+};
+
+const getZonedOffset = (formatter: Intl.DateTimeFormat, timestamp: number): number => {
+  const p = getZonedParts(formatter, timestamp);
+  const asUtc = Date.UTC(p.year, p.month, p.day, p.hour, p.minute, p.second);
+  return asUtc - Math.floor(timestamp / 1000) * 1000;
+};
+
+// Converts a wall-clock midnight in the given time zone to a UTC timestamp.
+const zonedMidnightToUtc = (
+  formatter: Intl.DateTimeFormat,
+  year: number,
+  month: number,
+  day: number
+): number => {
+  const wall = Date.UTC(year, month, day);
+  const firstOffset = getZonedOffset(formatter, wall);
+  let utc = wall - firstOffset;
+  const secondOffset = getZonedOffset(formatter, utc);
+  if (secondOffset !== firstOffset) {
+    utc = wall - secondOffset;
+  }
+  return utc;
+};
+
+/**
+ * Returns bucketing that matches the recorder's long-term statistics periods:
+ * 5-minute and hourly buckets are UTC aligned, day and longer buckets follow
+ * the given (Home Assistant server) time zone. Returns undefined when the time
+ * zone is unknown so callers can fall back to browser-local bucketing.
+ */
+export const createZonedBucketing = (
+  period: StatisticsPeriod,
+  timeZone: string | undefined
+): AttributeBucketing | undefined => {
+  if (period === "5minute" || period === "hour") {
+    const size = period === "5minute" ? 5 * MINUTE_MS : HOUR_MS;
+    return {
+      align: (timestamp) => Math.floor(timestamp / size) * size,
+      advance: (timestamp) => timestamp + size,
+    };
+  }
+  const formatter = timeZone ? getZonedFormatter(timeZone) : null;
+  if (!formatter) {
+    return undefined;
+  }
+  const align = (timestamp: number): number => {
+    const p = getZonedParts(formatter, timestamp);
+    switch (period) {
+      case "week": {
+        // Recorder weeks start on Monday.
+        const weekday = new Date(Date.UTC(p.year, p.month, p.day)).getUTCDay();
+        return zonedMidnightToUtc(formatter, p.year, p.month, p.day - ((weekday + 6) % 7));
+      }
+      case "month":
+        return zonedMidnightToUtc(formatter, p.year, p.month, 1);
+      case "year":
+        return zonedMidnightToUtc(formatter, p.year, 0, 1);
+      default:
+        return zonedMidnightToUtc(formatter, p.year, p.month, p.day);
+    }
+  };
+  const advance = (timestamp: number): number => {
+    // Use noon to avoid landing on the previous day around DST changes.
+    const p = getZonedParts(formatter, align(timestamp) + 12 * HOUR_MS);
+    switch (period) {
+      case "week":
+        return zonedMidnightToUtc(formatter, p.year, p.month, p.day + 7);
+      case "month":
+        return zonedMidnightToUtc(formatter, p.year, p.month + 1, 1);
+      case "year":
+        return zonedMidnightToUtc(formatter, p.year + 1, 0, 1);
+      default:
+        return zonedMidnightToUtc(formatter, p.year, p.month, p.day + 1);
+    }
+  };
+  return { align, advance };
 };
 
 /**
