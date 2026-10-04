@@ -9,6 +9,7 @@ import type {
   EnergyCustomGraphCalculationTerm,
   EnergyCustomGraphCardConfig,
   EnergyCustomGraphChartType,
+  EnergyCustomGraphColorThreshold,
   EnergyCustomGraphSeriesConfig,
   EnergyCustomGraphStatisticType,
   EnergyCustomGraphTimespanConfig,
@@ -3376,6 +3377,7 @@ export class EnergyCustomGraphCardEditor
             this._updateSeriesNumber(index, "line_opacity", value),
         })}
         ${compareColorControl}
+        ${this._renderColorThresholds(series, index)}
         ${isLineLike
           ? html`
               ${this._renderTextInput({
@@ -3461,11 +3463,122 @@ export class EnergyCustomGraphCardEditor
     `;
   }
 
+  private _renderColorThresholds(
+    series: EnergyCustomGraphSeriesConfig,
+    index: number
+  ) {
+    const thresholds = Array.isArray(series.color_thresholds)
+      ? series.color_thresholds
+      : [];
+    return html`
+      <div class="field color-thresholds">
+        <label>Color thresholds</label>
+        <span class="hint">
+          Values at or above a threshold use its color. Values below the lowest
+          threshold use the series color.
+        </span>
+        ${thresholds.map(
+          (threshold, thresholdIndex) => html`
+            <div class="color-threshold-row">
+              ${this._renderTextInput({
+                label: "From value",
+                type: "number",
+                step: "any",
+                value:
+                  typeof threshold?.value === "number" &&
+                  Number.isFinite(threshold.value)
+                    ? String(threshold.value)
+                    : "",
+                onInput: (value) => {
+                  const parsed = value === "" ? undefined : Number(value);
+                  this._updateColorThreshold(index, thresholdIndex, {
+                    value:
+                      parsed !== undefined && Number.isFinite(parsed)
+                        ? parsed
+                        : undefined,
+                  });
+                },
+              })}
+              ${this._renderColorTextInput({
+                label: "Color",
+                value: typeof threshold?.color === "string" ? threshold.color : "",
+                onInput: (value) =>
+                  this._updateColorThreshold(index, thresholdIndex, {
+                    color: value.trim() || undefined,
+                  }),
+              })}
+              <ha-icon-button
+                class="editor-action"
+                .label=${"Remove threshold"}
+                @click=${() => this._removeColorThreshold(index, thresholdIndex)}
+              >
+                <ha-icon icon="mdi:delete"></ha-icon>
+              </ha-icon-button>
+            </div>
+          `
+        )}
+        ${this._renderNativeAddButton("Add threshold", () =>
+          this._addColorThreshold(index)
+        )}
+      </div>
+    `;
+  }
+
+  private _addColorThreshold(index: number) {
+    const current = this._config?.series?.[index]?.color_thresholds ?? [];
+    const lastValue = current.reduce<number | undefined>(
+      (max, threshold) =>
+        typeof threshold?.value === "number" && Number.isFinite(threshold.value)
+          ? Math.max(max ?? threshold.value, threshold.value)
+          : max,
+      undefined
+    );
+    this._updateSeries(index, "color_thresholds", [
+      ...current,
+      {
+        value: lastValue !== undefined ? lastValue + 1 : 0,
+        color: "#ff9800",
+      },
+    ]);
+  }
+
+  private _updateColorThreshold(
+    index: number,
+    thresholdIndex: number,
+    patch: Partial<EnergyCustomGraphColorThreshold>
+  ) {
+    const current = [...(this._config?.series?.[index]?.color_thresholds ?? [])];
+    if (thresholdIndex < 0 || thresholdIndex >= current.length) {
+      return;
+    }
+    const next = { ...current[thresholdIndex], ...patch };
+    (Object.keys(patch) as (keyof EnergyCustomGraphColorThreshold)[]).forEach(
+      (key) => {
+        if (next[key] === undefined) {
+          delete next[key];
+        }
+      }
+    );
+    current[thresholdIndex] = next;
+    this._updateSeries(index, "color_thresholds", current);
+  }
+
+  private _removeColorThreshold(index: number, thresholdIndex: number) {
+    const current = [...(this._config?.series?.[index]?.color_thresholds ?? [])];
+    current.splice(thresholdIndex, 1);
+    this._updateSeries(
+      index,
+      "color_thresholds",
+      current.length ? current : undefined
+    );
+  }
+
   private _countSeriesStyleMoreFields(
     series: EnergyCustomGraphSeriesConfig
   ): number {
     return [
       series.compare_color,
+      series.color_thresholds?.length ? true : undefined,
       series.gradient_fill === true ? true : undefined,
       series.fill_opacity,
       series.fill_to_series,
@@ -6349,6 +6462,17 @@ export class EnergyCustomGraphCardEditor
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
       gap: 12px;
+    }
+
+    .color-thresholds {
+      gap: 8px;
+    }
+
+    .color-threshold-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr) auto;
+      align-items: end;
+      gap: 8px;
     }
 
     .nested-collapsible {

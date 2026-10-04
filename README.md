@@ -17,6 +17,7 @@ I know the `Statistics graph card` also supports the energy date picker nowadays
 - Override the energy date pickers default aggregation periods, to e.g. display hourly instead of daily bars when viewing a monthly report.
 - Per-series control over aggregation type, chart type (bar, line or step), stacking, color, unit, scaling and offsets.
 - Optional fill-between-rendering for line series to fill the space e.g. between min / max line-charts
+- Per-series color thresholds to color lines, areas and bars by value (e.g. green / yellow / red price levels)
 - Optional manual timespan selection (fixed ranges or relative day/week/month/year offsets) when you don't want to use the energy date picker.
 - Support for calculated series, so you can e.g. add and subtract sensor values as a computed signal
 - Quick access to colors from the HA energy color palette and native styles so mixed dashboards look consistent.
@@ -279,6 +280,7 @@ Metric sources and calculation terms support `multiply`, `add`, `clip_min`, and 
 | `hidden_by_default` | boolean | `false` | Whether the series is initially hidden when the chart loads. The series can still be toggled via the legend. |
 | `color` | string | next in palette | Specific color (supports `#rrggbb`, `rgb()` or CSS variables). |
 | `compare_color` | string | inherit | Optional color for compare series. Defaults to the base series color with reduced opacity. |
+| `color_thresholds` | list | – | Color the series by value. Each entry has a `value` and a `color`; values at or above a threshold use its color. See below. |
 | `line_opacity` | number | style default | Override stroke opacity (0–1). Defaults to 0.85 for line charts and 1.0 for bar outlines. |
 | `line_width` | number | `1.5` | Line thickness in pixels (line charts only). |
 | `line_style` | `"solid"`, `"dashed"`, `"dotted"` | `"solid"` | Line pattern style (line charts only). |
@@ -292,6 +294,39 @@ Metric sources and calculation terms support `multiply`, `add`, `clip_min`, and 
 | `clip_min` | number | – | Values will be set to this value if they are smaller. |
 | `clip_max` | number | – | Values will be set to this value if they are larger. |
 | `pv_production_entity` | string | – | (Forecast only) Sensor entity you configured as PV production in the Energy dashboard. Leave unset to sum all configured forecasts. |
+
+#### Color thresholds
+
+`color_thresholds` colors a series by its value instead of using one color for the whole series. Each entry sets the color from its `value` upwards, until the next higher threshold. Values below the lowest threshold use the series `color`. The order of the entries does not matter.
+
+```yaml
+series:
+  - statistic_id: sensor.electricity_price
+    name: Price
+    stat_type: mean
+    chart_type: line
+    fill: true
+    color: "#1d4877"          # below 0.12
+    color_thresholds:
+      - value: 0.12           # 0.12 up to 0.20
+        color: "#3b913f"
+      - value: 0.20           # 0.20 up to 0.25
+        color: "#f9a825"
+      - value: 0.25           # 0.25 and above
+        color: "#c62828"
+```
+
+- Thresholds are compared with the final series value, after `multiply`, `add`, `clip_min` and `clip_max`.
+- Line and step series change color exactly where the line crosses a threshold. With `fill: true` the area is colored in the same bands. With `gradient_fill: true` the area keeps the series color gradient and only the line uses the thresholds.
+- Bar series color each bar by its value.
+- A threshold `color` accepts the same formats as the series `color`, including CSS variables.
+- `line_opacity` and `fill_opacity` still apply.
+- The legend shows the series `color`. The tooltip marker shows the color of the hovered value.
+- Compare series use the thresholds too, unless `compare_color` is set.
+- For stacked line series the color bands follow the Y axis, so they match the stacked height, not the series' own value.
+- `fill_to_series` areas keep the series color.
+
+Line and step series use an ECharts piecewise `visualMap` for this.
 
 #### Series time offset
 

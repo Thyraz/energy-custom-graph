@@ -87,6 +87,10 @@ import type {
 import {
   BAR_MAX_WIDTH,
   buildSeries,
+  ECHARTS_DEFAULT_AREA_OPACITY,
+  resolveThresholdColor,
+  type ColorThresholdPiece,
+  type ResolvedColorThresholds,
   type ResolvedSeriesData,
 } from "./chart/series-builder";
 import type {
@@ -236,6 +240,9 @@ export class EnergyCustomGraphCard extends LitElement {
   private _energyCompareEnd?: Date;
   private _unitsBySeries: Map<string, string | null | undefined> = new Map();
   private _indicatorColorBySeries: Map<string, string> = new Map();
+  private _colorThresholdsBySeries: Map<string, ResolvedColorThresholds> =
+    new Map();
+  private _visualMapCount = 0;
   private _collectionUnsub?: () => void;
   private _collectionPollHandle?: number;
   private _autoRefreshTimeout?: number;
@@ -4466,6 +4473,8 @@ export class EnergyCustomGraphCard extends LitElement {
       seriesById,
       indicatorColorBySeries,
       resolvedSeriesById,
+      colorThresholdsBySeries,
+      visualMapPiecesBySeries,
     } = buildSeries({
       hass: this.hass,
       statistics: mainSeriesInputs.statistics,
@@ -4487,6 +4496,8 @@ export class EnergyCustomGraphCard extends LitElement {
     indicatorColorBySeries.forEach((value, key) =>
       combinedIndicatorColors.set(key, value)
     );
+    const combinedColorThresholds = new Map(colorThresholdsBySeries);
+    const combinedVisualMapPieces = new Map(visualMapPiecesBySeries);
     const legendSecondaryIds = new Map<string, string[]>();
 
     const barStackBaseById = new Map<string, string>();
@@ -4653,6 +4664,19 @@ export class EnergyCustomGraphCard extends LitElement {
           cloned.data = (cloned.data as any[] | undefined)?.map(mapEntry);
         }
 
+        // compare_color replaces color thresholds on compare series.
+        const compareThresholds =
+          compareResult.colorThresholdsBySeries.get(baseId);
+        if (compareThresholds && !compareColor) {
+          combinedColorThresholds.set(compareId, compareThresholds);
+          const pieces = compareResult.visualMapPiecesBySeries.get(baseId);
+          if (pieces) {
+            combinedVisualMapPieces.set(compareId, pieces);
+          }
+        } else if (compareThresholds && cloned.type === "bar") {
+          cloned.data = EnergyCustomGraphCard._stripItemColors(cloned.data);
+        }
+
         if (cloned.type === "bar") {
           let baseKey = barStackBaseById.get(baseId);
           if (!baseKey) {
@@ -4767,6 +4791,7 @@ export class EnergyCustomGraphCard extends LitElement {
 
     this._unitsBySeries = new Map();
     this._indicatorColorBySeries = new Map(combinedIndicatorColors);
+    this._colorThresholdsBySeries = combinedColorThresholds;
     combinedSeries.forEach((item) => {
       const axisIndex = item.yAxisIndex ?? 0;
       const axisUnit =
@@ -4895,6 +4920,14 @@ export class EnergyCustomGraphCard extends LitElement {
       options.legend = legendOption;
     }
 
+    const visualMap = this._buildColorThresholdVisualMaps(
+      combinedSeries,
+      combinedVisualMapPieces
+    );
+    if (visualMap) {
+      options.visualMap = visualMap;
+    }
+
     let hasExistingChartData = Array.isArray(this._chartData) && this._chartData.length > 0;
     const rangeChanged =
       !this._lastRenderedRange ||
@@ -4933,6 +4966,63 @@ export class EnergyCustomGraphCard extends LitElement {
 
     this._chartData = combinedSeries;
     this._lastRenderedRange = { start: currentStart, end: currentEnd };
+  }
+
+  private _buildColorThresholdVisualMaps(
+    series: SeriesOption[],
+    piecesBySeries: Map<string, ColorThresholdPiece[]>
+  ): Record<string, unknown>[] | undefined {
+    const visualMaps: Record<string, unknown>[] = [];
+    series.forEach((serie) => {
+      const pieces =
+        serie.type === "line" && serie.id
+          ? piecesBySeries.get(serie.id)
+          : undefined;
+      if (!pieces?.length) {
+        return;
+      }
+      // Target by id: ha-chart-base uses replaceMerge, which keeps series
+      // matched by id at their old index, so array positions can be stale.
+      visualMaps.push({
+        type: "piecewise",
+        show: false,
+        dimension: 1,
+        seriesIndex: null,
+        seriesId: serie.id,
+        pieces,
+      });
+    });
+
+    // ha-chart-base merges options, so visualMap components from an earlier
+    // render stay active. Overwrite surplus ones with maps targeting no series.
+    const count = Math.max(visualMaps.length, this._visualMapCount);
+    while (visualMaps.length < count) {
+      visualMaps.push({
+        type: "piecewise",
+        show: false,
+        dimension: 1,
+        seriesIndex: -1,
+        seriesId: null,
+        pieces: [{ gte: 0, color: "transparent" }],
+      });
+    }
+    this._visualMapCount = count;
+    return visualMaps.length ? visualMaps : undefined;
+  }
+
+  private static _stripItemColors(
+    data: SeriesOption["data"]
+  ): SeriesOption["data"] {
+    if (!Array.isArray(data)) {
+      return data;
+    }
+    return data.map((entry) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        return entry;
+      }
+      const { itemStyle, emphasis, ...rest } = entry as Record<string, any>;
+      return rest;
+    });
   }
 
   private _buildAggregationXAxisOptions(
@@ -5810,16 +5900,29 @@ export class EnergyCustomGraphCard extends LitElement {
           itemStyle: emphasisItemStyle,
         } as Record<string, any>;
       } else {
+        // Threshold lines keep line_opacity in lineStyle.opacity instead of
+        // the color alpha, so combine with it rather than replace it.
+        const lineOpacity = (serie.lineStyle as any)?.opacity;
         serie.lineStyle = {
           ...(serie.lineStyle ?? {}),
-          opacity: baseOpacity,
+          opacity:
+            typeof lineOpacity === "number"
+              ? lineOpacity * baseOpacity
+              : baseOpacity,
         };
         serie.itemStyle = {
           ...(serie.itemStyle ?? {}),
           opacity: baseOpacity,
         };
         if (serie.areaStyle) {
-          const currentOpacity = (serie.areaStyle as any).opacity ?? baseOpacity / 2;
+          const areaStyle = serie.areaStyle as any;
+          // Threshold areas carry fill_opacity in opacity (scaled by the
+          // ECharts default), others in the color alpha.
+          const currentOpacity =
+            areaStyle.color == null && typeof areaStyle.opacity === "number"
+              ? (areaStyle.opacity / ECHARTS_DEFAULT_AREA_OPACITY) *
+                (baseOpacity / 2)
+              : areaStyle.opacity ?? baseOpacity / 2;
           serie.areaStyle = {
             ...(serie.areaStyle ?? {}),
             opacity: currentOpacity * 0.6,
@@ -6909,7 +7012,11 @@ export class EnergyCustomGraphCard extends LitElement {
       const unitLabel = unit ? ` ${unit}` : "";
       const seriesName =
         typeof item.seriesName === "string" ? item.seriesName : "";
+      const colorThresholds = this._colorThresholdsBySeries.get(seriesKey);
       const markerColor =
+        (colorThresholds
+          ? resolveThresholdColor(colorThresholds, value)
+          : undefined) ??
         this._indicatorColorBySeries.get(seriesKey) ??
         (typeof item.color === "string" ? item.color : undefined);
       groupData[groupKey].lines.push({
