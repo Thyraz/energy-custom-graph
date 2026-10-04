@@ -10,6 +10,7 @@ I know the `Statistics graph card` also supports the energy date picker nowadays
 - This card has an full-featured graphical editor, so almost all settings can be done through the UI.
 - Displayed timespan sync with the energy date picker (`energy-date-selection`).
 - Supports any entity that exposes long-term statistics, as well as the short-term 'raw' history.
+- Can graph numeric entity attributes (e.g. a thermostat's `current_temperature`), aggregated from recorder history.
 - Solar forecast entities that are used in the energy dashboard can also be shown in the charts. 
 - Allows to compute and display 'live' values for the current running hour before HA provides the final aggregation.
 - Uses Home Assistant's bundled ECharts runtime – no extra framework needs to be loaded.
@@ -263,7 +264,8 @@ Metric sources and calculation terms support `multiply`, `add`, `clip_min`, and 
 | `name` | string | entity name | Display name shown in tooltip and legend. |
 | `source` | `"statistic"`, `"calculation"`, `"forecast"` | inferred | Data source type. When omitted the card can auto-detect the source based on the other fields for `statistic` and `calculation` signals. Use `forecast` to plot solar forecasts configured in the Energy dashboard. |
 | `statistic_id` | string | – | Entity with long term statistics (e.g. `sensor.entity_id`). Required unless series uses a `calculation` instead. |
-| `stat_type` | `"change"`, `"sum"`, `"mean"`, `"min"`, `"max"`, `"state"` | `"change"` | Statistic type to display for this entity. Not used when `calculation` is provided, as each subseries has it's own setting there. |
+| `attribute` | string | – | Read values from this entity attribute instead of the entity state. See [Entity attribute series](#entity-attribute-series). |
+| `stat_type` | `"change"`, `"sum"`, `"mean"`, `"min"`, `"max"`, `"state"` | `"change"` (`"mean"` with `attribute`) | Statistic type to display for this entity. Not used when `calculation` is provided, as each subseries has it's own setting there. |
 | `time_offset` | object | – | Fetch this statistic or calculation series from a shifted source timespan and display it in the visible timespan. See below. |
 | `calculation` | object | – | Build a computed series from multiple statistics / terms (see below). |
 | `chart_type` | `"bar"`, `"line"`, `"step"` | `"bar"` | Chart type. |
@@ -314,6 +316,31 @@ Series time offset only works with aggregated recorder statistics. It cannot be 
 
 The Home Assistant energy date picker's compare feature is not supported for charts that configure a time offset and will be ignored.
 
+#### Entity attribute series
+
+Set `attribute` next to `statistic_id` to plot a numeric attribute of an entity, for example the current temperature of a climate entity. Home Assistant does not keep long-term statistics for attributes, so the card reads them from raw history (with attributes) and aggregates them itself:
+
+- With the `raw` aggregation interval every attribute change is one point.
+- With the `5minute`, `hour`, `day`, `week`, `month` or `year` aggregation interval, the card computes each interval like the recorder: `mean` is time-weighted, `min` / `max` are the extremes, `state` / `sum` are the last value, and `change` is the last value minus the value at the start of the interval.
+
+```yaml
+series:
+  - statistic_id: climate.living_room
+    attribute: current_temperature
+    name: Living room
+    stat_type: mean
+    chart_type: line
+```
+
+Notes:
+
+- Attribute series are limited by the recorder's history retention (`purge_keep_days`, default 10 days). Older timespans have no data.
+- Attributes carry no unit; set `y_axes[].unit` if you want one shown.
+- Attribute changes are always requested with `significant_changes_only: false`, independent of `raw_options`.
+- Numeric strings and booleans (`on/off`, `true/false`) are converted like entity states. Non-numeric values render as gaps.
+- `attribute` also works in calculation terms.
+- With `time_offset`, attribute series load raw history from the source timespan and aggregate it the same way.
+
 #### Calculated series
 
 Configure `calculation` instead of `statistic_id` to compute a series from multiple entity statistics. Terms are processed sequentially, starting with the `initial_value` (default `0`).
@@ -335,6 +362,7 @@ Each term accepts the following options:
 | `operation` | `"add"`, `"subtract"`, `"multiply"`, `"divide"` | `"add"` | Operation applied in this step of the calculation. |
 | `constant` | number | – | Constant number to use in this term. Use alternatively to providing a `statistic_id`. All keys below in this section are ignored in this case. |
 | `statistic_id` | string | – | Entity with long term statistics (e.g. `sensor.entity_id`). Do not use in combination with setting `constant` in the same term. |
+| `attribute` | string | – | Read values from this entity attribute instead of the entity state. See [Entity attribute series](#entity-attribute-series). |
 | `stat_type` | `"change"`, `"sum"`, `"mean"`, `"min"`, `"max"`, `"state"` | inherit | Statistic type to display for this entity. |
 | `multiply` | number | `1` | Apply a multiplier to each series value. |
 | `add` | number | `0` | Apply an additive offset after multiplication. |

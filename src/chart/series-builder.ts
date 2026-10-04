@@ -11,6 +11,7 @@ import type {
   StatisticsMetaData,
   StatisticValue,
 } from "../data/statistics";
+import { DEFAULT_ATTRIBUTE_STAT_TYPE, getDataKey } from "../data/attributes";
 
 interface SeriesBuildParams {
   hass: HomeAssistant;
@@ -321,7 +322,9 @@ export const buildSeries = ({
     }
 
     const statisticId =
-      source === "statistic" ? seriesConfig.statistic_id?.trim() : undefined;
+      source === "statistic"
+        ? getDataKey(seriesConfig.statistic_id, seriesConfig.attribute) || undefined
+        : undefined;
     const calculationKey = source === "calculation" ? getCalculationKey(index) : undefined;
     const forecastKey = source === "forecast" ? getForecastKey(index) : undefined;
     let raw: StatisticValue[] | undefined;
@@ -374,7 +377,11 @@ export const buildSeries = ({
     const meta = statisticId
       ? metadata?.[statisticId]
       : undefined;
-    const statType = seriesConfig.stat_type ?? "change";
+    const statType =
+      seriesConfig.stat_type ??
+      (statisticId && seriesConfig.attribute?.trim()
+        ? DEFAULT_ATTRIBUTE_STAT_TYPE
+        : "change");
     const chartType = seriesConfig.chart_type ?? "bar";
     const isLine = chartType === "line";
     const isStep = chartType === "step";

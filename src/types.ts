@@ -40,6 +40,7 @@ export interface EnergyCustomGraphHeaderMetricTransform {
 
 export interface EnergyCustomGraphCalculationTerm {
   statistic_id?: string;
+  attribute?: string;
   stat_type?: EnergyCustomGraphStatisticType;
   multiply?: number;
   add?: number;
@@ -73,6 +74,7 @@ export interface EnergyCustomGraphSeriesConfig {
   id?: string;
   source?: EnergyCustomGraphSeriesSource;
   statistic_id?: string;
+  attribute?: string;
   name?: string;
   stat_type?: EnergyCustomGraphStatisticType;
   chart_type?: EnergyCustomGraphChartType;
