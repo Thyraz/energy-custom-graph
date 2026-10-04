@@ -314,6 +314,9 @@ const getZonedOffset = (formatter: Intl.DateTimeFormat, timestamp: number): numb
 };
 
 // Converts a wall-clock midnight in the given time zone to a UTC timestamp.
+// Resolves like Python's zoneinfo with fold=0, as the recorder does: an
+// ambiguous midnight maps to its first occurrence and a nonexistent midnight
+// (DST starting at 00:00) uses the offset in effect before the transition.
 const zonedMidnightToUtc = (
   formatter: Intl.DateTimeFormat,
   year: number,
@@ -321,13 +324,19 @@ const zonedMidnightToUtc = (
   day: number
 ): number => {
   const wall = Date.UTC(year, month, day);
-  const firstOffset = getZonedOffset(formatter, wall);
-  let utc = wall - firstOffset;
-  const secondOffset = getZonedOffset(formatter, utc);
-  if (secondOffset !== firstOffset) {
-    utc = wall - secondOffset;
+  // Offsets span UTC-12 to UTC+14, so these probes fall before and after
+  // the local midnight, and at most one transition lies between them.
+  const offsetBefore = getZonedOffset(formatter, wall - 14 * HOUR_MS);
+  const offsetAfter = getZonedOffset(formatter, wall + 14 * HOUR_MS);
+  const candidateBefore = wall - offsetBefore;
+  if (getZonedOffset(formatter, candidateBefore) === offsetBefore) {
+    return candidateBefore;
   }
-  return utc;
+  const candidateAfter = wall - offsetAfter;
+  if (getZonedOffset(formatter, candidateAfter) === offsetAfter) {
+    return candidateAfter;
+  }
+  return candidateBefore;
 };
 
 /**

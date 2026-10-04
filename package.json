@@ -23,11 +23,13 @@
     "build": "parcel build --target module",
     "build:all": "parcel build",
     "debug": "parcel build --target debug",
-    "watch": "parcel watch --target debug"
+    "watch": "parcel watch --target debug",
+    "test": "node --import tsx --test test/*.test.ts"
   },
   "devDependencies": {
     "@parcel/transformer-inline-string": "^2.10.0",
     "parcel": "^2.10.0",
+    "tsx": "^4.23.15",
     "typescript": "^5.3.3"
   },
   "dependencies": {
@@ -40,4 +42,3 @@
     "memoize-one": "^6.0.0"
   }
 }
-
