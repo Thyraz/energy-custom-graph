@@ -86,7 +86,7 @@ const LINE_GRADIENT_STRONG_ALPHA = 0.75;
 const DEFAULT_LINE_OPACITY = 0.85;
 const DEFAULT_BAR_BORDER_OPACITY = 1.0;
 // ECharts multiplies line areas by this opacity unless areaStyle sets one.
-const ECHARTS_DEFAULT_AREA_OPACITY = 0.7;
+export const ECHARTS_DEFAULT_AREA_OPACITY = 0.7;
 
 const getCalculationKey = (index: number) => `calculation_${index}`;
 const getForecastKey = (index: number) => `forecast_${index}`;
@@ -365,6 +365,16 @@ const buildThresholdPieces = (
         : { gte: threshold.value, color: stripAlpha(threshold.color) }
     );
   });
+  // ECharts line gradients need at least one closed piece; with only
+  // open-ended pieces the line renderer throws. Split the last piece.
+  if (thresholds.length === 1) {
+    const last = pieces.pop() as ColorThresholdPiece;
+    const split = last.gte! + Math.max(Math.abs(last.gte!), 1);
+    pieces.push(
+      { gte: last.gte, lt: split, color: last.color },
+      { gte: split, color: last.color }
+    );
+  }
   return pieces;
 };
 

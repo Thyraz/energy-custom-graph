@@ -75,6 +75,7 @@ import type {
 import {
   BAR_MAX_WIDTH,
   buildSeries,
+  ECHARTS_DEFAULT_AREA_OPACITY,
   resolveThresholdColor,
   type ColorThresholdPiece,
   type ResolvedColorThresholds,
@@ -4749,7 +4750,7 @@ export class EnergyCustomGraphCard extends LitElement {
     piecesBySeries: Map<string, ColorThresholdPiece[]>
   ): Record<string, unknown>[] | undefined {
     const visualMaps: Record<string, unknown>[] = [];
-    series.forEach((serie, seriesIndex) => {
+    series.forEach((serie) => {
       const pieces =
         serie.type === "line" && serie.id
           ? piecesBySeries.get(serie.id)
@@ -4757,11 +4758,14 @@ export class EnergyCustomGraphCard extends LitElement {
       if (!pieces?.length) {
         return;
       }
+      // Target by id: ha-chart-base uses replaceMerge, which keeps series
+      // matched by id at their old index, so array positions can be stale.
       visualMaps.push({
         type: "piecewise",
         show: false,
         dimension: 1,
-        seriesIndex,
+        seriesIndex: null,
+        seriesId: serie.id,
         pieces,
       });
     });
@@ -4774,7 +4778,8 @@ export class EnergyCustomGraphCard extends LitElement {
         type: "piecewise",
         show: false,
         dimension: 1,
-        seriesIndex: [],
+        seriesIndex: -1,
+        seriesId: null,
         pieces: [{ gte: 0, color: "transparent" }],
       });
     }
@@ -5672,16 +5677,29 @@ export class EnergyCustomGraphCard extends LitElement {
           itemStyle: emphasisItemStyle,
         } as Record<string, any>;
       } else {
+        // Threshold lines keep line_opacity in lineStyle.opacity instead of
+        // the color alpha, so combine with it rather than replace it.
+        const lineOpacity = (serie.lineStyle as any)?.opacity;
         serie.lineStyle = {
           ...(serie.lineStyle ?? {}),
-          opacity: baseOpacity,
+          opacity:
+            typeof lineOpacity === "number"
+              ? lineOpacity * baseOpacity
+              : baseOpacity,
         };
         serie.itemStyle = {
           ...(serie.itemStyle ?? {}),
           opacity: baseOpacity,
         };
         if (serie.areaStyle) {
-          const currentOpacity = (serie.areaStyle as any).opacity ?? baseOpacity / 2;
+          const areaStyle = serie.areaStyle as any;
+          // Threshold areas carry fill_opacity in opacity (scaled by the
+          // ECharts default), others in the color alpha.
+          const currentOpacity =
+            areaStyle.color == null && typeof areaStyle.opacity === "number"
+              ? (areaStyle.opacity / ECHARTS_DEFAULT_AREA_OPACITY) *
+                (baseOpacity / 2)
+              : areaStyle.opacity ?? baseOpacity / 2;
           serie.areaStyle = {
             ...(serie.areaStyle ?? {}),
             opacity: currentOpacity * 0.6,
