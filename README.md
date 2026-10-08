@@ -435,7 +435,7 @@ Set `fill_to_series` on a line series to fill the area between this and the targ
 - When the upper series drops below the lower one, the card sets the fill to zero and logs a warning.
 - The fill_opacity used is the one configured on the upper series (or the default if unspecified).
 - `gradient_fill` only applies to normal line/step area fills, not to `fill_to_series`.
-- Series with the same `legend_group` share one legend toggle. Generated fill areas follow the visibility of their source series.
+- Series with the same `legend_group` share one legend toggle. Generated fill areas follow the visibility of their source series. Series with `show_in_legend: false` still join their group; only their own legend entry is hidden.
 
 ### `y_axes` options
 
