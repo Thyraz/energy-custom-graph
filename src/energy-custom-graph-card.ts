@@ -44,6 +44,18 @@ import {
 import type { FetchRawHistoryOptions, HistoryStreamMessage } from "./data/history";
 import type { HistoryStates } from "./data/history";
 import {
+  DEFAULT_ATTRIBUTE_STAT_TYPE,
+  type HistoryWsParams,
+  attributeHistoryToStatistics,
+  buildAttributeMetadata,
+  buildAttributeStreamParams,
+  createZonedBucketing,
+  fetchAttributeHistoryStates,
+  getAttributeEntityIds,
+  getDataKey,
+  splitDataKeys,
+} from "./data/attributes";
+import {
   fetchEnergyPreferences,
   fetchEnergySolarForecasts,
   type EnergySolarForecasts,
@@ -75,6 +87,10 @@ import type {
 import {
   BAR_MAX_WIDTH,
   buildSeries,
+  ECHARTS_DEFAULT_AREA_OPACITY,
+  resolveThresholdColor,
+  type ColorThresholdPiece,
+  type ResolvedColorThresholds,
   type ResolvedSeriesData,
 } from "./chart/series-builder";
 import type {
@@ -224,6 +240,9 @@ export class EnergyCustomGraphCard extends LitElement {
   private _energyCompareEnd?: Date;
   private _unitsBySeries: Map<string, string | null | undefined> = new Map();
   private _indicatorColorBySeries: Map<string, string> = new Map();
+  private _colorThresholdsBySeries: Map<string, ResolvedColorThresholds> =
+    new Map();
+  private _visualMapCount = 0;
   private _collectionUnsub?: () => void;
   private _collectionPollHandle?: number;
   private _autoRefreshTimeout?: number;
@@ -1318,11 +1337,13 @@ export class EnergyCustomGraphCard extends LitElement {
       return;
     }
 
-    const statisticIds =
-      target === "compare" ? this._lastStatisticIdsCompare : this._lastStatisticIds;
+    // Attribute series are aggregated client-side and already include the current hour.
+    const statisticIds = splitDataKeys(
+      (target === "compare" ? this._lastStatisticIdsCompare : this._lastStatisticIds) ?? []
+    ).statisticIds;
     const statTypes =
       target === "compare" ? this._lastStatTypesCompare : this._lastStatTypes;
-    if (!statisticIds || !statisticIds.length) {
+    if (!statisticIds.length) {
       return;
     }
 
@@ -2010,7 +2031,7 @@ export class EnergyCustomGraphCard extends LitElement {
         series.statistic_id.trim() &&
         (isCompare || !this._getStatisticSeriesTimeOffset(series))
       ) {
-        const id = series.statistic_id.trim();
+        const id = getDataKey(series.statistic_id, series.attribute);
         statisticIdSet.add(id);
         statTypeSet.add(defaultStatType);
       }
@@ -2022,7 +2043,7 @@ export class EnergyCustomGraphCard extends LitElement {
           const termStatType =
             term.stat_type ?? defaultStatType ?? EnergyCustomGraphCard.DEFAULT_STAT_TYPE;
           if (term.statistic_id && term.statistic_id.trim()) {
-            statisticIdSet.add(term.statistic_id.trim());
+            statisticIdSet.add(getDataKey(term.statistic_id, term.attribute));
             statTypeSet.add(termStatType);
           }
         });
@@ -2131,17 +2152,19 @@ export class EnergyCustomGraphCard extends LitElement {
     let lastError: unknown;
 
     try {
-      const metadata: Record<string, StatisticsMetaData> = {};
+      const metadata: Record<string, StatisticsMetaData> =
+        this._buildAttributeMetadata(statisticIds);
+      const metadataIds = splitDataKeys(statisticIds).statisticIds;
 
-      if (statisticIds.length) {
+      if (metadataIds.length) {
         try {
           const metadataArray = await this._withTimeout(
-            getStatisticMetadata(this.hass, statisticIds),
+            getStatisticMetadata(this.hass, metadataIds),
             FETCH_TIMEOUT_MS,
             "getStatisticMetadata",
             {
               ...requestDetails,
-              stats: statisticIds.length,
+              stats: metadataIds.length,
             }
           );
           metadataArray.forEach((item) => {
@@ -2217,22 +2240,16 @@ export class EnergyCustomGraphCard extends LitElement {
                 );
               }
             } else {
-              const fetched = await this._withTimeout(
-                fetchStatistics(
-                  this.hass,
-                  periodStart,
-                  periodEnd,
-                  statisticIds,
-                  aggregation,
-                  undefined,
-                  statTypes
-                ),
-                FETCH_TIMEOUT_MS,
+              const fetched = await this._fetchPeriodStatistics(
+                periodStart,
+                periodEnd,
+                statisticIds,
+                aggregation,
+                statTypes,
                 `fetchStatistics:${aggregation}`,
                 {
                   ...requestDetails,
                   aggregation,
-                  stats: statisticIds.length,
                 }
               );
               statistics = fetched;
@@ -2488,7 +2505,7 @@ export class EnergyCustomGraphCard extends LitElement {
       series.stat_type ?? EnergyCustomGraphCard.DEFAULT_STAT_TYPE;
     return (calculation.terms ?? [])
       .map((term) => ({
-        statisticId: term.statistic_id?.trim() ?? "",
+        statisticId: getDataKey(term.statistic_id, term.attribute),
         statType:
           term.stat_type ??
           defaultStatType ??
@@ -2508,7 +2525,7 @@ export class EnergyCustomGraphCard extends LitElement {
     const groups = new Map<string, ShiftedSeriesFetchGroup>();
 
     this._config.series.forEach((series, index) => {
-      const statisticId = series.statistic_id?.trim();
+      const statisticId = getDataKey(series.statistic_id, series.attribute);
       const statisticOffset = this._getStatisticSeriesTimeOffset(series);
       if (statisticOffset && statisticId) {
         const group = this._getShiftedFetchGroup(
@@ -2603,8 +2620,11 @@ export class EnergyCustomGraphCard extends LitElement {
       )
     );
 
+    Object.assign(metadata, this._buildAttributeMetadata(allStatisticIds));
     try {
-      const missingMetadataIds = allStatisticIds.filter((id) => !metadata[id]);
+      const missingMetadataIds = splitDataKeys(allStatisticIds).statisticIds.filter(
+        (id) => !metadata[id]
+      );
       if (missingMetadataIds.length) {
         const metadataArray = await this._withTimeout(
           getStatisticMetadata(this.hass, missingMetadataIds),
@@ -2686,17 +2706,12 @@ export class EnergyCustomGraphCard extends LitElement {
         }
 
         try {
-          const fetched = await this._withTimeout(
-            fetchStatistics(
-              this.hass,
-              group.sourceStart,
-              group.sourceEnd,
-              statisticIds,
-              aggregation,
-              undefined,
-              statTypes
-            ),
-            FETCH_TIMEOUT_MS,
+          const fetched = await this._fetchPeriodStatistics(
+            group.sourceStart,
+            group.sourceEnd,
+            statisticIds,
+            aggregation,
+            statTypes,
             `fetchStatistics:timeOffset:${aggregation}`,
             {
               ...parentDetails,
@@ -2704,7 +2719,6 @@ export class EnergyCustomGraphCard extends LitElement {
               sourceStart: group.sourceStart.toISOString(),
               sourceEnd: group.sourceEnd?.toISOString() ?? null,
               aggregation,
-              stats: statisticIds.length,
             }
           );
           if (!isCurrentFetch()) {
@@ -2822,7 +2836,7 @@ export class EnergyCustomGraphCard extends LitElement {
     });
     const configSeries = (this._config?.series ?? []).map((series, index) => {
       const offset = this._getStatisticSeriesTimeOffset(series);
-      const statisticId = series.statistic_id?.trim();
+      const statisticId = getDataKey(series.statistic_id, series.attribute);
       if (!offset || !statisticId) {
         return series;
       }
@@ -2847,6 +2861,10 @@ export class EnergyCustomGraphCard extends LitElement {
       return {
         ...series,
         statistic_id: shiftedStatisticId,
+        attribute: undefined,
+        stat_type:
+          series.stat_type ??
+          (series.attribute?.trim() ? DEFAULT_ATTRIBUTE_STAT_TYPE : undefined),
         name,
       };
     });
@@ -2860,16 +2878,159 @@ export class EnergyCustomGraphCard extends LitElement {
     };
   }
 
+  private _buildAttributeMetadata(
+    keys: string[]
+  ): Record<string, StatisticsMetaData> {
+    const metadata: Record<string, StatisticsMetaData> = {};
+    if (!this.hass) {
+      return metadata;
+    }
+    splitDataKeys(keys).attributeKeys.forEach((key) => {
+      const item = buildAttributeMetadata(this.hass!, key);
+      if (item) {
+        metadata[key] = item;
+      }
+    });
+    return metadata;
+  }
+
+  private async _fetchPeriodStatistics(
+    start: Date,
+    end: Date | undefined,
+    keys: string[],
+    aggregation: StatisticsPeriod,
+    statTypes: EnergyCustomGraphStatisticType[] | undefined,
+    label: string,
+    contextDetails?: Record<string, unknown>
+  ): Promise<Statistics> {
+    if (!this.hass) {
+      return {};
+    }
+    const { statisticIds, attributeKeys } = splitDataKeys(keys);
+    const results = await Promise.allSettled([
+      statisticIds.length
+        ? this._withTimeout(
+            fetchStatistics(
+              this.hass,
+              start,
+              end,
+              statisticIds,
+              aggregation,
+              undefined,
+              statTypes
+            ),
+            FETCH_TIMEOUT_MS,
+            label,
+            {
+              ...(contextDetails ?? {}),
+              stats: statisticIds.length,
+            }
+          )
+        : Promise.resolve({} as Statistics),
+      this._fetchAttributeStatistics(
+        start,
+        end,
+        start,
+        end,
+        attributeKeys,
+        aggregation,
+        contextDetails
+      ),
+    ]);
+    return this._mergeSettledStatistics(
+      results,
+      [statisticIds.length > 0, attributeKeys.length > 0],
+      label,
+      contextDetails
+    );
+  }
+
+  /**
+   * Merges statistics and attribute results so a failing request does not
+   * discard series that loaded successfully. Throws only when every request
+   * failed.
+   */
+  private _mergeSettledStatistics(
+    results: PromiseSettledResult<Statistics>[],
+    requested: boolean[],
+    label: string,
+    contextDetails?: Record<string, unknown>
+  ): Statistics {
+    const merged: Statistics = {};
+    const failures: unknown[] = [];
+    let succeeded = false;
+    results.forEach((result, index) => {
+      if (result.status === "fulfilled") {
+        Object.assign(merged, result.value);
+        succeeded = succeeded || requested[index];
+      } else {
+        failures.push(result.reason);
+      }
+    });
+    if (failures.length && !succeeded) {
+      throw failures[0];
+    }
+    failures.forEach((error) => {
+      this._log("error", "Partial data request failed; showing loaded series", {
+        ...(contextDetails ?? {}),
+        label,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+    return merged;
+  }
+
+  private async _fetchAttributeStatistics(
+    rangeStart: Date,
+    rangeEnd: Date | undefined,
+    queryStart: Date,
+    queryEnd: Date | undefined,
+    attributeKeys: string[],
+    aggregation: StatisticsPeriod | "raw",
+    contextDetails?: Record<string, unknown>
+  ): Promise<Statistics> {
+    if (!this.hass || !attributeKeys.length) {
+      return {};
+    }
+    const entityIds = getAttributeEntityIds(attributeKeys);
+    const history = await this._withTimeout(
+      fetchAttributeHistoryStates(this.hass, queryStart, queryEnd, entityIds),
+      FETCH_TIMEOUT_MS,
+      "fetchAttributeHistoryStates",
+      {
+        ...(contextDetails ?? {}),
+        attributes: attributeKeys.length,
+      }
+    );
+    if (aggregation === "raw") {
+      return attributeHistoryToStatistics(history, attributeKeys);
+    }
+    // Match recorder statistics, which bucket days and longer periods in the
+    // Home Assistant time zone rather than the browser's.
+    const bucketing = createZonedBucketing(aggregation, this.hass.config?.time_zone) ?? {
+      align: (timestamp: number) =>
+        this._alignBucketStart(timestamp, aggregation).getTime(),
+      advance: (timestamp: number) =>
+        this._advanceBucket(new Date(timestamp), aggregation).getTime(),
+    };
+    return attributeHistoryToStatistics(history, attributeKeys, {
+      rangeStart: rangeStart.getTime(),
+      rangeEnd: rangeEnd?.getTime() ?? null,
+      bucketing,
+    });
+  }
+
   private async _fetchRawStatistics(
     start: Date,
     end: Date | undefined,
-    statisticIds: string[],
+    keys: string[],
     contextDetails?: Record<string, unknown>,
     incrementalFrom?: number
   ): Promise<Statistics> {
-    if (!this._config || !this.hass || !statisticIds.length) {
+    if (!this._config || !this.hass || !keys.length) {
       return {};
     }
+    const { statisticIds, attributeKeys } = splitDataKeys(keys);
 
     const baseStart = incrementalFrom
       ? new Date(Math.max(start.getTime(), incrementalFrom))
@@ -2888,23 +3049,41 @@ export class EnergyCustomGraphCard extends LitElement {
       options.significant_changes_only = rawOptions.significant_changes_only;
     }
 
-    const history = await this._withTimeout(
-      fetchRawHistoryStates(
-        this.hass,
+    const results = await Promise.allSettled([
+      statisticIds.length
+        ? this._withTimeout(
+            fetchRawHistoryStates(
+              this.hass,
+              queryStart,
+              queryEnd,
+              statisticIds,
+              options
+            ),
+            FETCH_TIMEOUT_MS,
+            "fetchRawHistoryStates",
+            {
+              ...(contextDetails ?? {}),
+              raw: true,
+              stats: statisticIds.length,
+            }
+          ).then((history) => historyStatesToStatistics(history))
+        : Promise.resolve({} as Statistics),
+      this._fetchAttributeStatistics(
+        baseStart,
+        end,
         queryStart,
         queryEnd,
-        statisticIds,
-        options
+        attributeKeys,
+        "raw",
+        { ...(contextDetails ?? {}), raw: true }
       ),
-      FETCH_TIMEOUT_MS,
+    ]);
+    return this._mergeSettledStatistics(
+      results,
+      [statisticIds.length > 0, attributeKeys.length > 0],
       "fetchRawHistoryStates",
-      {
-        ...(contextDetails ?? {}),
-        raw: true,
-        stats: statisticIds.length,
-      }
+      { ...(contextDetails ?? {}), raw: true }
     );
-    return historyStatesToStatistics(history);
   }
 
   private _expandRawQueryWindow(
@@ -3227,10 +3406,11 @@ export class EnergyCustomGraphCard extends LitElement {
       startMs = Math.max(lastEnd - RAW_DELTA_OVERLAP_MS, fallbackStart);
     }
 
+    const { statisticIds: entityIds, attributeKeys } = splitDataKeys(statisticIds);
     const rawOptions = this._config?.aggregation?.raw_options;
-    const params: Record<string, unknown> = {
+    const params: HistoryWsParams = {
       type: "history/stream",
-      entity_ids: statisticIds,
+      entity_ids: entityIds,
       start_time: new Date(startMs).toISOString(),
       minimal_response: true,
       no_attributes: true,
@@ -3239,17 +3419,59 @@ export class EnergyCustomGraphCard extends LitElement {
       params.significant_changes_only = rawOptions.significant_changes_only;
     }
 
-    const subscription = this.hass.connection
-      .subscribeMessage<HistoryStreamMessage>((message) => {
-        this._handleRawStreamMessage(target, message);
-      }, params)
-      .then((unsub) => {
+    const connection = this.hass.connection;
+    const subscribe = (
+      streamParams: HistoryWsParams,
+      convert: (states: HistoryStates) => Statistics
+    ) =>
+      connection.subscribeMessage<HistoryStreamMessage>((message) => {
+        this._handleRawStreamMessage(target, message, convert);
+      }, streamParams);
+
+    // Attribute series need attributes on every state, so they use a separate
+    // stream to keep the regular entity stream minimal.
+    const pending: Promise<UnsubscribeFunc>[] = [];
+    if (entityIds.length) {
+      pending.push(subscribe(params, historyStatesToStatistics));
+    }
+    if (attributeKeys.length) {
+      pending.push(
+        subscribe(
+          buildAttributeStreamParams(
+            getAttributeEntityIds(attributeKeys),
+            new Date(startMs)
+          ),
+          (states) => attributeHistoryToStatistics(states, attributeKeys)
+        )
+      );
+    }
+
+    const subscription = Promise.all(
+      pending.map((promise) =>
+        promise.then(
+          (unsub) => ({ unsub }),
+          (error: unknown) => ({ error })
+        )
+      )
+    )
+      .then(async (results) => {
+        const unsubs = results
+          .map((result) => ("unsub" in result ? result.unsub : undefined))
+          .filter((unsub): unsub is UnsubscribeFunc => typeof unsub === "function");
+        const failed = results.find((result) => "error" in result);
+        if (failed && "error" in failed) {
+          await Promise.all(unsubs.map((unsub) => unsub()));
+          throw failed.error;
+        }
         this._log("debug", "Subscribed to RAW history stream", {
           target,
           start: new Date(startMs).toISOString(),
-          stats: statisticIds.length,
+          stats: entityIds.length,
+          attributes: attributeKeys.length,
         });
-        return unsub;
+        return async () => {
+          await Promise.all(unsubs.map((unsub) => unsub()));
+        };
       })
       .catch((error) => {
         this._log("error", "Failed to subscribe to RAW history stream", {
@@ -3274,20 +3496,25 @@ export class EnergyCustomGraphCard extends LitElement {
 
   private _handleRawStreamMessage(
     target: "main" | "compare",
-    message: HistoryStreamMessage
+    message: HistoryStreamMessage,
+    convert: (states: HistoryStates) => Statistics = historyStatesToStatistics
   ): void {
     if (!message?.states || !Object.keys(message.states).length) {
       return;
     }
-    this._applyRawStreamStates(target, message.states);
+    this._applyRawStreamStates(target, message.states, convert);
   }
 
-  private _applyRawStreamStates(target: "main" | "compare", states: HistoryStates): void {
+  private _applyRawStreamStates(
+    target: "main" | "compare",
+    states: HistoryStates,
+    convert: (states: HistoryStates) => Statistics = historyStatesToStatistics
+  ): void {
     if (!this._shouldUseRawStream(target)) {
       return;
     }
 
-    const statsPatch = historyStatesToStatistics(states);
+    const statsPatch = convert(states);
     const hasValues = Object.values(statsPatch).some((entries) => entries?.length);
     if (!hasValues) {
       return;
@@ -3483,11 +3710,14 @@ export class EnergyCustomGraphCard extends LitElement {
       const addition = term.add ?? 0;
 
       if (term.statistic_id) {
-        const raw = statistics?.[term.statistic_id];
+        const dataKey = getDataKey(term.statistic_id, term.attribute);
+        const raw = statistics?.[dataKey];
         const statKey =
           term.stat_type ??
           series.stat_type ??
-          EnergyCustomGraphCard.DEFAULT_STAT_TYPE;
+          (term.attribute?.trim()
+            ? DEFAULT_ATTRIBUTE_STAT_TYPE
+            : EnergyCustomGraphCard.DEFAULT_STAT_TYPE);
         const map = new Map<
           number,
           { value: number | null; start?: number; end?: number }
@@ -3495,11 +3725,11 @@ export class EnergyCustomGraphCard extends LitElement {
         const timeline: NonNullable<TermResolvedData["timeline"]> = [];
 
         if (!raw?.length) {
-          if (!missingStatWarnings.has(term.statistic_id)) {
+          if (!missingStatWarnings.has(dataKey)) {
             console.warn(
-              `[energy-custom-graph-card] Calculation series "${seriesLabel}" references statistic "${term.statistic_id}" but no data was loaded. Missing values will be rendered as empty.`
+              `[energy-custom-graph-card] Calculation series "${seriesLabel}" references statistic "${dataKey}" but no data was loaded. Missing values will be rendered as empty.`
             );
-            missingStatWarnings.add(term.statistic_id);
+            missingStatWarnings.add(dataKey);
           }
         } else {
           raw.forEach((entry) => {
@@ -3541,7 +3771,7 @@ export class EnergyCustomGraphCard extends LitElement {
           data: map,
           timeline: timeline.length ? timeline : undefined,
           unit:
-            metadata?.[term.statistic_id]?.statistics_unit_of_measurement ??
+            metadata?.[dataKey]?.statistics_unit_of_measurement ??
             undefined,
         });
       } else {
@@ -3606,7 +3836,7 @@ export class EnergyCustomGraphCard extends LitElement {
             termValue = resolved.value;
           } else {
             valid = false;
-            const statId = item.term.statistic_id;
+            const statId = getDataKey(item.term.statistic_id, item.term.attribute);
             if (statId && !missingValueWarnings.has(statId)) {
               console.warn(
                 `[energy-custom-graph-card] Missing value for statistic "${statId}" in calculation series "${seriesLabel}". The affected timestamp will be rendered as empty.`
@@ -4244,6 +4474,8 @@ export class EnergyCustomGraphCard extends LitElement {
       seriesById,
       indicatorColorBySeries,
       resolvedSeriesById,
+      colorThresholdsBySeries,
+      visualMapPiecesBySeries,
     } = buildSeries({
       hass: this.hass,
       statistics: mainSeriesInputs.statistics,
@@ -4265,6 +4497,8 @@ export class EnergyCustomGraphCard extends LitElement {
     indicatorColorBySeries.forEach((value, key) =>
       combinedIndicatorColors.set(key, value)
     );
+    const combinedColorThresholds = new Map(colorThresholdsBySeries);
+    const combinedVisualMapPieces = new Map(visualMapPiecesBySeries);
     const legendSecondaryIds = new Map<string, string[]>();
     mainLegendSecondaryIds.forEach((ids, id) => {
       legendSecondaryIds.set(id, [...ids]);
@@ -4434,6 +4668,19 @@ export class EnergyCustomGraphCard extends LitElement {
           cloned.data = (cloned.data as any[] | undefined)?.map(mapEntry);
         }
 
+        // compare_color replaces color thresholds on compare series.
+        const compareThresholds =
+          compareResult.colorThresholdsBySeries.get(baseId);
+        if (compareThresholds && !compareColor) {
+          combinedColorThresholds.set(compareId, compareThresholds);
+          const pieces = compareResult.visualMapPiecesBySeries.get(baseId);
+          if (pieces) {
+            combinedVisualMapPieces.set(compareId, pieces);
+          }
+        } else if (compareThresholds && cloned.type === "bar") {
+          cloned.data = EnergyCustomGraphCard._stripItemColors(cloned.data);
+        }
+
         if (cloned.type === "bar") {
           let baseKey = barStackBaseById.get(baseId);
           if (!baseKey) {
@@ -4553,6 +4800,7 @@ export class EnergyCustomGraphCard extends LitElement {
 
     this._unitsBySeries = new Map();
     this._indicatorColorBySeries = new Map(combinedIndicatorColors);
+    this._colorThresholdsBySeries = combinedColorThresholds;
     combinedSeries.forEach((item) => {
       const axisIndex = item.yAxisIndex ?? 0;
       const axisUnit =
@@ -4681,6 +4929,14 @@ export class EnergyCustomGraphCard extends LitElement {
       options.legend = legendOption;
     }
 
+    const visualMap = this._buildColorThresholdVisualMaps(
+      combinedSeries,
+      combinedVisualMapPieces
+    );
+    if (visualMap) {
+      options.visualMap = visualMap;
+    }
+
     let hasExistingChartData = Array.isArray(this._chartData) && this._chartData.length > 0;
     const rangeChanged =
       !this._lastRenderedRange ||
@@ -4719,6 +4975,63 @@ export class EnergyCustomGraphCard extends LitElement {
 
     this._chartData = combinedSeries;
     this._lastRenderedRange = { start: currentStart, end: currentEnd };
+  }
+
+  private _buildColorThresholdVisualMaps(
+    series: SeriesOption[],
+    piecesBySeries: Map<string, ColorThresholdPiece[]>
+  ): Record<string, unknown>[] | undefined {
+    const visualMaps: Record<string, unknown>[] = [];
+    series.forEach((serie) => {
+      const pieces =
+        serie.type === "line" && serie.id
+          ? piecesBySeries.get(serie.id)
+          : undefined;
+      if (!pieces?.length) {
+        return;
+      }
+      // Target by id: ha-chart-base uses replaceMerge, which keeps series
+      // matched by id at their old index, so array positions can be stale.
+      visualMaps.push({
+        type: "piecewise",
+        show: false,
+        dimension: 1,
+        seriesIndex: null,
+        seriesId: serie.id,
+        pieces,
+      });
+    });
+
+    // ha-chart-base merges options, so visualMap components from an earlier
+    // render stay active. Overwrite surplus ones with maps targeting no series.
+    const count = Math.max(visualMaps.length, this._visualMapCount);
+    while (visualMaps.length < count) {
+      visualMaps.push({
+        type: "piecewise",
+        show: false,
+        dimension: 1,
+        seriesIndex: -1,
+        seriesId: null,
+        pieces: [{ gte: 0, color: "transparent" }],
+      });
+    }
+    this._visualMapCount = count;
+    return visualMaps.length ? visualMaps : undefined;
+  }
+
+  private static _stripItemColors(
+    data: SeriesOption["data"]
+  ): SeriesOption["data"] {
+    if (!Array.isArray(data)) {
+      return data;
+    }
+    return data.map((entry) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        return entry;
+      }
+      const { itemStyle, emphasis, ...rest } = entry as Record<string, any>;
+      return rest;
+    });
   }
 
   private _buildAggregationXAxisOptions(
@@ -5596,16 +5909,29 @@ export class EnergyCustomGraphCard extends LitElement {
           itemStyle: emphasisItemStyle,
         } as Record<string, any>;
       } else {
+        // Threshold lines keep line_opacity in lineStyle.opacity instead of
+        // the color alpha, so combine with it rather than replace it.
+        const lineOpacity = (serie.lineStyle as any)?.opacity;
         serie.lineStyle = {
           ...(serie.lineStyle ?? {}),
-          opacity: baseOpacity,
+          opacity:
+            typeof lineOpacity === "number"
+              ? lineOpacity * baseOpacity
+              : baseOpacity,
         };
         serie.itemStyle = {
           ...(serie.itemStyle ?? {}),
           opacity: baseOpacity,
         };
         if (serie.areaStyle) {
-          const currentOpacity = (serie.areaStyle as any).opacity ?? baseOpacity / 2;
+          const areaStyle = serie.areaStyle as any;
+          // Threshold areas carry fill_opacity in opacity (scaled by the
+          // ECharts default), others in the color alpha.
+          const currentOpacity =
+            areaStyle.color == null && typeof areaStyle.opacity === "number"
+              ? (areaStyle.opacity / ECHARTS_DEFAULT_AREA_OPACITY) *
+                (baseOpacity / 2)
+              : areaStyle.opacity ?? baseOpacity / 2;
           serie.areaStyle = {
             ...(serie.areaStyle ?? {}),
             opacity: currentOpacity * 0.6,
@@ -6734,7 +7060,11 @@ export class EnergyCustomGraphCard extends LitElement {
       const unitLabel = unit ? ` ${unit}` : "";
       const seriesName =
         typeof item.seriesName === "string" ? item.seriesName : "";
+      const colorThresholds = this._colorThresholdsBySeries.get(seriesKey);
       const markerColor =
+        (colorThresholds
+          ? resolveThresholdColor(colorThresholds, value)
+          : undefined) ??
         this._indicatorColorBySeries.get(seriesKey) ??
         (typeof item.color === "string" ? item.color : undefined);
       groupData[groupKey].lines.push({

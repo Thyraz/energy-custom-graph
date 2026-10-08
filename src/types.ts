@@ -40,6 +40,7 @@ export interface EnergyCustomGraphHeaderMetricTransform {
 
 export interface EnergyCustomGraphCalculationTerm {
   statistic_id?: string;
+  attribute?: string;
   stat_type?: EnergyCustomGraphStatisticType;
   multiply?: number;
   add?: number;
@@ -69,10 +70,16 @@ export interface EnergyCustomGraphTimeOffsetConfig {
   unit: EnergyCustomGraphTimeOffsetUnit;
 }
 
+export interface EnergyCustomGraphColorThreshold {
+  value: number;
+  color: string;
+}
+
 export interface EnergyCustomGraphSeriesConfig {
   id?: string;
   source?: EnergyCustomGraphSeriesSource;
   statistic_id?: string;
+  attribute?: string;
   name?: string;
   stat_type?: EnergyCustomGraphStatisticType;
   chart_type?: EnergyCustomGraphChartType;
@@ -80,6 +87,7 @@ export interface EnergyCustomGraphSeriesConfig {
   stack?: string;
   color?: string;
   compare_color?: string;
+  color_thresholds?: EnergyCustomGraphColorThreshold[];
   y_axis?: "left" | "right";
   show_in_legend?: boolean;
   legend_group?: string;
