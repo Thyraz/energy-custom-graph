@@ -4469,6 +4469,7 @@ export class EnergyCustomGraphCard extends LitElement {
     const {
       series: mainSeries,
       legend,
+      legendSecondaryIds: mainLegendSecondaryIds,
       unitBySeries,
       seriesById,
       indicatorColorBySeries,
@@ -4499,6 +4500,18 @@ export class EnergyCustomGraphCard extends LitElement {
     const combinedColorThresholds = new Map(colorThresholdsBySeries);
     const combinedVisualMapPieces = new Map(visualMapPiecesBySeries);
     const legendSecondaryIds = new Map<string, string[]>();
+    mainLegendSecondaryIds.forEach((ids, id) => {
+      legendSecondaryIds.set(id, [...ids]);
+    });
+    // Compare ids are registered even while compare is off, so enabling it later inherits hidden state
+    legend.forEach((entry) => {
+      const ids = legendSecondaryIds.get(entry.id) ?? [];
+      legendSecondaryIds.set(entry.id, [
+        ...ids,
+        `${entry.id}--compare`,
+        ...ids.map((secondaryId) => `${secondaryId}--compare`),
+      ]);
+    });
 
     const barStackBaseById = new Map<string, string>();
     const normalizedBarStacks = new Map<string, string>();
@@ -4725,15 +4738,6 @@ export class EnergyCustomGraphCard extends LitElement {
 
         if (baseConfig) {
           combinedSeriesById.set(compareId, baseConfig);
-        }
-
-        const legendEntryId = legend.find(
-          (entry) => entry.id === (serie.id ?? baseId)
-        )?.id;
-        if (legendEntryId) {
-          const secondaryList = legendSecondaryIds.get(legendEntryId) ?? [];
-          secondaryList.push(compareId);
-          legendSecondaryIds.set(legendEntryId, secondaryList);
         }
       });
       compareSeries = compareSeriesTemp;
@@ -6167,6 +6171,8 @@ export class EnergyCustomGraphCard extends LitElement {
       borderColor?: string;
       borderWidth?: number;
       hidden?: boolean;
+      legendGroup?: string;
+      showInLegend?: boolean;
     }[],
     secondaryIds: Map<string, string[]>
   ): LegendOption | undefined {
@@ -6174,8 +6180,75 @@ export class EnergyCustomGraphCard extends LitElement {
       return undefined;
     }
 
+    const groupedEntries: typeof entries = [];
+    const groupedSecondaryIds = new Map<string, string[]>();
+    secondaryIds.forEach((ids, id) => {
+      groupedSecondaryIds.set(id, [...ids]);
+    });
+    const groupOwners = new Map<string, (typeof entries)[number]>();
+    const groupAllHidden = new Map<string, boolean>();
+    // Members seen before the group's first listed entry
+    const pendingMembers = new Map<string, (typeof entries)[number][]>();
+
+    const linkMember = (
+      owner: (typeof entries)[number],
+      member: (typeof entries)[number]
+    ) => {
+      const linkedIds = new Set(groupedSecondaryIds.get(owner.id) ?? []);
+      linkedIds.add(member.id);
+      (groupedSecondaryIds.get(member.id) ?? []).forEach((linkedId) => {
+        linkedIds.add(linkedId);
+      });
+      groupedSecondaryIds.set(owner.id, Array.from(linkedIds));
+    };
+
+    entries.forEach((entry) => {
+      const groupName =
+        typeof entry.legendGroup === "string" ? entry.legendGroup.trim() : "";
+      const listed = entry.showInLegend !== false;
+      if (!groupName) {
+        if (listed) {
+          groupedEntries.push(entry);
+        }
+        return;
+      }
+
+      groupAllHidden.set(
+        groupName,
+        (groupAllHidden.get(groupName) ?? true) && entry.hidden === true
+      );
+
+      const owner = groupOwners.get(groupName);
+      if (!owner) {
+        if (!listed) {
+          const pending = pendingMembers.get(groupName) ?? [];
+          pending.push(entry);
+          pendingMembers.set(groupName, pending);
+          return;
+        }
+        const groupedEntry = { ...entry, name: groupName };
+        groupOwners.set(groupName, groupedEntry);
+        groupedEntries.push(groupedEntry);
+        pendingMembers.get(groupName)?.forEach((member) => {
+          linkMember(groupedEntry, member);
+        });
+        pendingMembers.delete(groupName);
+        return;
+      }
+
+      linkMember(owner, entry);
+    });
+
+    groupOwners.forEach((owner, groupName) => {
+      owner.hidden = groupAllHidden.get(groupName) === true;
+    });
+
+    if (!groupedEntries.length) {
+      return undefined;
+    }
+
     const sort = this._config?.legend_sort ?? "none";
-    const sortedEntries = [...entries];
+    const sortedEntries = [...groupedEntries];
     if (sort === "asc" || sort === "desc") {
       sortedEntries.sort((a, b) => {
         const compare = a.name.localeCompare(b.name);
@@ -6186,7 +6259,7 @@ export class EnergyCustomGraphCard extends LitElement {
     const data = sortedEntries.map((entry) => ({
       id: entry.id,
       name: entry.name,
-      secondaryIds: secondaryIds.get(entry.id) ?? [],
+      secondaryIds: groupedSecondaryIds.get(entry.id) ?? [],
       itemStyle:
         entry.indicatorColor || entry.color || entry.fillColor || entry.borderColor
           ? {
@@ -6201,7 +6274,7 @@ export class EnergyCustomGraphCard extends LitElement {
     sortedEntries.forEach((entry) => {
       const isVisible = entry.hidden ? false : true;
       selected[entry.id] = isVisible;
-      const linked = secondaryIds.get(entry.id);
+      const linked = groupedSecondaryIds.get(entry.id);
       linked?.forEach((secondaryId) => {
         selected[secondaryId] = isVisible;
       });

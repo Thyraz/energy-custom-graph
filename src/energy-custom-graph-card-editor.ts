@@ -2353,6 +2353,9 @@ export class EnergyCustomGraphCardEditor
       hidden.push("Tooltip");
     }
     const parts = hidden.length ? [`Hidden: ${hidden.join(", ")}`] : ["Visible"];
+    if (series.legend_group?.trim()) {
+      parts.push(`Legend group: ${series.legend_group.trim()}`);
+    }
     if (series.hidden_by_default === true) {
       parts.push("Hidden by default");
     }
@@ -3459,6 +3462,15 @@ export class EnergyCustomGraphCardEditor
               `
             : nothing}
         </div>
+        ${this._renderTextInput({
+          label: "Legend group",
+          helper: "Series with the same group share one legend toggle.",
+          value: series.legend_group ?? "",
+          onInput: (value) => {
+            const trimmed = value.trim();
+            this._updateSeries(index, "legend_group", trimmed || undefined);
+          },
+        })}
       </div>
     `;
   }

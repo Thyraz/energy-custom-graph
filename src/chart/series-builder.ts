@@ -39,7 +39,10 @@ export interface BuiltSeriesResult {
     borderColor?: string;
     borderWidth?: number;
     hidden?: boolean;
+    legendGroup?: string;
+    showInLegend?: boolean;
   }[];
+  legendSecondaryIds: Map<string, string[]>;
   unitBySeries: Map<string, string | null | undefined>;
   seriesById: Map<string, EnergyCustomGraphSeriesConfig>;
   indicatorColorBySeries: Map<string, string>;
@@ -399,6 +402,7 @@ export const buildSeries = ({
   const seriesById = new Map<string, EnergyCustomGraphSeriesConfig>();
   const indicatorColorBySeries = new Map<string, string>();
   const resolvedSeriesById = new Map<string, ResolvedSeriesData>();
+  const legendSecondaryIds = new Map<string, string[]>();
   const colorThresholdsBySeries = new Map<string, ResolvedColorThresholds>();
   const visualMapPiecesBySeries = new Map<string, ColorThresholdPiece[]>();
   const output: (LineSeriesOption | BarSeriesOption)[] = [];
@@ -805,19 +809,19 @@ export const buildSeries = ({
       legendBorder = borderColor;
     }
 
-    // Only add to legend if show_in_legend is not explicitly false
-    if (seriesConfig.show_in_legend !== false) {
-      legend.push({
-        id,
-        name,
-        color: legendFill,
-        indicatorColor: legendFill,
-        fillColor: legendFill,
-        borderColor: legendBorder,
-        borderWidth: isLineLike ? 2 : 1,
-        hidden: seriesConfig.hidden_by_default === true,
-      });
-    }
+    // show_in_legend: false only hides the entry; the series can still belong to a legend_group
+    legend.push({
+      id,
+      name,
+      color: legendFill,
+      indicatorColor: legendFill,
+      fillColor: legendFill,
+      borderColor: legendBorder,
+      borderWidth: isLineLike ? 2 : 1,
+      hidden: seriesConfig.hidden_by_default === true,
+      legendGroup: seriesConfig.legend_group?.trim() || undefined,
+      showInLegend: seriesConfig.show_in_legend !== false,
+    });
   });
 
   fillRequests.forEach(({ sourceName, targetName }) => {
@@ -914,6 +918,14 @@ export const buildSeries = ({
       fillData.push([bucket, diff]);
     });
 
+    // Register ids even without a band, so a band appearing later inherits the hidden state
+    const stackId = `__energy_fill_${sourceMeta.id}`;
+    const baseId = `${sourceMeta.id}__fill_base`;
+    const fillId = `${sourceMeta.id}__fill_area`;
+    const secondaryIds = legendSecondaryIds.get(sourceMeta.id) ?? [];
+    secondaryIds.push(baseId, fillId);
+    legendSecondaryIds.set(sourceMeta.id, secondaryIds);
+
     if (!fillData.some(([, value]) => typeof value === "number" && value > 0)) {
       return;
     }
@@ -924,10 +936,6 @@ export const buildSeries = ({
         `fill_to_series for "${sourceName}" encountered values below "${targetName}". Negative differences were clamped to zero.`
       );
     }
-
-    const stackId = `__energy_fill_${sourceMeta.id}`;
-    const baseId = `${sourceMeta.id}__fill_base`;
-    const fillId = `${sourceMeta.id}__fill_area`;
 
     const defaultLineZ = 2;
     const sourceLineZ =
@@ -1014,6 +1022,7 @@ export const buildSeries = ({
   return {
     series: output,
     legend,
+    legendSecondaryIds,
     unitBySeries,
     seriesById,
     indicatorColorBySeries,

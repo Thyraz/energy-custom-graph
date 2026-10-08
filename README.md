@@ -273,6 +273,7 @@ Metric sources and calculation terms support `multiply`, `add`, `clip_min`, and 
 | `stack` | string | – | Stack key for combining series. Series with identical keys will get stacked on top of each other. |
 | `y_axis` | `"left"`, `"right"` | `"left"` | Axis assignment. |
 | `show_in_legend` | boolean | `true` | Whether to display this series in the legend. If `false`, the series remains visible in the chart but has no legend entry. |
+| `legend_group` | string | – | Optional label shared by series with the same value. They use one legend toggle and are shown or hidden together. |
 | `show_in_tooltip` | boolean | `true` | Controls whether the series appears in the tooltip. Set to `false` to keep the graph visible while hiding numbers from the hover tooltip. |
 | `show_value_labels` | boolean | `false` | For unstacked bar charts only: show static value labels at the outer end of each non-zero bar. Ignored for stacked bars. |
 | `value_label_precision` | number | `0` | Decimal places for value labels. Units are not shown in value labels. |
@@ -434,6 +435,7 @@ Set `fill_to_series` on a line series to fill the area between this and the targ
 - When the upper series drops below the lower one, the card sets the fill to zero and logs a warning.
 - The fill_opacity used is the one configured on the upper series (or the default if unspecified).
 - `gradient_fill` only applies to normal line/step area fills, not to `fill_to_series`.
+- Series with the same `legend_group` share one legend toggle. Generated fill areas follow the visibility of their source series. Series with `show_in_legend: false` still join their group; only their own legend entry is hidden.
 
 ### `y_axes` options
 
@@ -569,11 +571,13 @@ title: Outdoor temperature band
 series:
   - statistic_id: sensor.outdoor_temperature
     name: Max temperature
+    legend_group: Min/Max temperature
     stat_type: max
     chart_type: line
     fill_to_series: Min temperature
   - statistic_id: sensor.outdoor_temperature
     name: Min temperature
+    legend_group: Min/Max temperature
     stat_type: min
     chart_type: line
 ```
