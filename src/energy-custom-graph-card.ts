@@ -5265,33 +5265,15 @@ export class EnergyCustomGraphCard extends LitElement {
   }
 
   private _shouldApplyBarAlignment(): boolean {
-    const period = this._statisticsPeriod;
     return (
       this._config?.bar_alignment === "right" &&
-      period === "hour"
+      this._statisticsPeriod === "hour"
     );
   }
 
-  private _resolveBarAlignmentOffsetMs(buckets: number[]): number {
-    if (buckets.length < 2) {
-      return 0;
-    }
-
-    const gaps: number[] = [];
-    for (let index = 1; index < buckets.length; index += 1) {
-      const gap = buckets[index] - buckets[index - 1];
-      if (Number.isFinite(gap) && gap > 0) {
-        gaps.push(gap);
-      }
-    }
-
-    if (!gaps.length) {
-      return 0;
-    }
-
-    const averageGap =
-      gaps.reduce((sum, gap) => sum + gap, 0) / gaps.length;
-    return Math.max(Math.round(averageGap / 2), 0);
+  // Half of the hourly bucket, so the bar starts after the hour marker.
+  private _resolveBarAlignmentOffsetMs(): number {
+    return 30 * 60 * 1000;
   }
 
   private _applyBarStyling(
@@ -5348,7 +5330,7 @@ export class EnergyCustomGraphCard extends LitElement {
     const buckets = Array.from(bucketSet).sort((a, b) => a - b);
     const rightAlignEnabled = this._shouldApplyBarAlignment();
     const barAlignmentOffsetMs = rightAlignEnabled
-      ? this._resolveBarAlignmentOffsetMs(buckets)
+      ? this._resolveBarAlignmentOffsetMs()
       : 0;
     const alignBarTuple = (tuple: any[] | undefined) => {
       if (!Array.isArray(tuple) || barAlignmentOffsetMs <= 0) {
