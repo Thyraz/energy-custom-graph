@@ -9,6 +9,7 @@ import type {
   EnergyCustomGraphCalculationTerm,
   EnergyCustomGraphCardConfig,
   EnergyCustomGraphChartType,
+  EnergyCustomGraphColorThreshold,
   EnergyCustomGraphSeriesConfig,
   EnergyCustomGraphStatisticType,
   EnergyCustomGraphTimespanConfig,
@@ -26,6 +27,10 @@ import type {
 } from "./types";
 import { DEFAULT_COLORS } from "./chart/series-builder";
 import { fetchEnergyPreferences } from "./data/energy";
+import {
+  DEFAULT_ATTRIBUTE_STAT_TYPE,
+  getNumericAttributeNames,
+} from "./data/attributes";
 import {
   getStatisticLabel,
   getStatisticMetadata,
@@ -1102,17 +1107,36 @@ export class EnergyCustomGraphCardEditor
         if (!normalizeStatisticId(term.statistic_id)) {
           continue;
         }
-        const issue = this._getStatisticIssue(
-          term.statistic_id,
-          term.stat_type ?? series.stat_type
-        );
+        const issue = term.attribute?.trim()
+          ? this._getAttributeIssue(term.statistic_id)
+          : this._getStatisticIssue(
+              term.statistic_id,
+              term.stat_type ?? series.stat_type
+            );
         if (issue) {
           return issue;
         }
       }
       return undefined;
     }
+    if (series.attribute?.trim()) {
+      return this._getAttributeIssue(series.statistic_id);
+    }
     return this._getStatisticIssue(series.statistic_id, series.stat_type);
+  }
+
+  // Attribute series read recorder history, so statistic metadata and stat type
+  // support do not apply; only the entity itself must exist.
+  private _getAttributeIssue(statisticId: string | undefined): EditorIssue | undefined {
+    const id = normalizeStatisticId(statisticId);
+    if (!id || this.hass?.states?.[id]) {
+      return undefined;
+    }
+    return {
+      severity: "warning",
+      cause: "Unknown entity",
+      action: "Check the ID",
+    };
   }
 
   private _renderEditorHelpHint(
@@ -2416,7 +2440,9 @@ export class EnergyCustomGraphCardEditor
       return "No entity selected";
     }
     const metadata = this._getStatisticMetadata(id);
-    return getStatisticLabel(this.hass, id, metadata);
+    const label = getStatisticLabel(this.hass, id, metadata);
+    const attribute = series.attribute?.trim();
+    return attribute ? `${label} · ${attribute}` : label;
   }
 
   private _formatChartType(type: EnergyCustomGraphChartType): string {
@@ -2605,11 +2631,16 @@ export class EnergyCustomGraphCardEditor
       return html`<p>Loading...</p>`;
     }
     const id = normalizeStatisticId(series.statistic_id);
+    const attribute = series.attribute?.trim() || undefined;
     const resolution = this._resolveStatisticSource(id);
-    const issue = this._getStatisticIssue(id, series.stat_type);
+    const issue = attribute
+      ? this._getAttributeIssue(id)
+      : this._getStatisticIssue(id, series.stat_type);
     const metadata = resolution.metadata;
-    const statTypeDisabled = !metadata;
-    const current = series.stat_type ?? selectDefaultStatisticType(metadata) ?? "";
+    const statTypeDisabled = !metadata && !attribute;
+    const current = attribute
+      ? series.stat_type ?? DEFAULT_ATTRIBUTE_STAT_TYPE
+      : series.stat_type ?? selectDefaultStatisticType(metadata) ?? "";
 
     return html`
       <ha-entity-picker
@@ -2620,6 +2651,9 @@ export class EnergyCustomGraphCardEditor
         @value-changed=${(ev: CustomEvent) =>
           this._handleSeriesStatisticChanged(index, ev.detail.value || undefined)}
       ></ha-entity-picker>
+      ${this._renderAttributeField(id, attribute, (value) =>
+        this._handleSeriesAttributeChanged(index, value)
+      )}
       <div class="field">
         <label>Statistic type</label>
         <select
@@ -2636,7 +2670,8 @@ export class EnergyCustomGraphCardEditor
           </option>
           ${STAT_TYPE_OPTIONS.map(
             (option) => {
-              const supported = isStatisticTypeSupported(metadata, option.value);
+              const supported =
+                !!attribute || isStatisticTypeSupported(metadata, option.value);
               return html`<option
                 value=${option.value}
                 ?selected=${current === option.value}
@@ -2855,7 +2890,9 @@ export class EnergyCustomGraphCardEditor
     const expanded = this._expandedTermKeys.has(termKey);
     const operationLabel = this._formatOperation(operation);
     const descriptor = term.statistic_id && term.statistic_id.trim().length
-      ? term.statistic_id.trim()
+      ? term.attribute?.trim()
+        ? `${term.statistic_id.trim()} · ${term.attribute.trim()}`
+        : term.statistic_id.trim()
       : term.constant !== undefined
         ? `Constant: ${term.constant}`
         : "No input selected";
@@ -2934,11 +2971,16 @@ export class EnergyCustomGraphCardEditor
       { value: "constant", label: "Constant" },
     ];
     const id = normalizeStatisticId(term.statistic_id);
+    const attribute = term.attribute?.trim() || undefined;
     const resolution = this._resolveStatisticSource(id);
-    const issue = this._getStatisticIssue(id, term.stat_type);
+    const issue = attribute
+      ? this._getAttributeIssue(id)
+      : this._getStatisticIssue(id, term.stat_type);
     const metadata = resolution.metadata;
-    const statTypeDisabled = !metadata;
-    const current = term.stat_type ?? selectDefaultStatisticType(metadata) ?? "";
+    const statTypeDisabled = !metadata && !attribute;
+    const current = attribute
+      ? term.stat_type ?? DEFAULT_ATTRIBUTE_STAT_TYPE
+      : term.stat_type ?? selectDefaultStatisticType(metadata) ?? "";
     return html`
       <div class="field full-width">
         <label>Input type</label>
@@ -2956,6 +2998,9 @@ export class EnergyCustomGraphCardEditor
               @value-changed=${(ev: CustomEvent) =>
                 this._handleTermStatisticChanged(seriesIndex, termIndex, ev.detail.value || undefined)}
             ></ha-entity-picker>
+            ${this._renderAttributeField(id, attribute, (value) =>
+              this._handleTermAttributeChanged(seriesIndex, termIndex, value)
+            )}
             <div class="field">
               <label>Statistic type</label>
               <select
@@ -2973,7 +3018,8 @@ export class EnergyCustomGraphCardEditor
                 </option>
                 ${STAT_TYPE_OPTIONS.map(
                   (option) => {
-                    const supported = isStatisticTypeSupported(metadata, option.value);
+                    const supported =
+                      !!attribute || isStatisticTypeSupported(metadata, option.value);
                     return html`<option
                       value=${option.value}
                       ?selected=${current === option.value}
@@ -3089,6 +3135,7 @@ export class EnergyCustomGraphCardEditor
         }
       } else {
         draft.statistic_id = undefined;
+        draft.attribute = undefined;
         draft.stat_type = undefined;
         draft.multiply = undefined;
         draft.add = undefined;
@@ -3362,6 +3409,7 @@ export class EnergyCustomGraphCardEditor
             this._updateSeriesNumber(index, "line_opacity", value),
         })}
         ${compareColorControl}
+        ${this._renderColorThresholds(series, index)}
         ${isLineLike
           ? html`
               ${this._renderTextInput({
@@ -3447,11 +3495,122 @@ export class EnergyCustomGraphCardEditor
     `;
   }
 
+  private _renderColorThresholds(
+    series: EnergyCustomGraphSeriesConfig,
+    index: number
+  ) {
+    const thresholds = Array.isArray(series.color_thresholds)
+      ? series.color_thresholds
+      : [];
+    return html`
+      <div class="field color-thresholds">
+        <label>Color thresholds</label>
+        <span class="hint">
+          Values at or above a threshold use its color. Values below the lowest
+          threshold use the series color.
+        </span>
+        ${thresholds.map(
+          (threshold, thresholdIndex) => html`
+            <div class="color-threshold-row">
+              ${this._renderTextInput({
+                label: "From value",
+                type: "number",
+                step: "any",
+                value:
+                  typeof threshold?.value === "number" &&
+                  Number.isFinite(threshold.value)
+                    ? String(threshold.value)
+                    : "",
+                onInput: (value) => {
+                  const parsed = value === "" ? undefined : Number(value);
+                  this._updateColorThreshold(index, thresholdIndex, {
+                    value:
+                      parsed !== undefined && Number.isFinite(parsed)
+                        ? parsed
+                        : undefined,
+                  });
+                },
+              })}
+              ${this._renderColorTextInput({
+                label: "Color",
+                value: typeof threshold?.color === "string" ? threshold.color : "",
+                onInput: (value) =>
+                  this._updateColorThreshold(index, thresholdIndex, {
+                    color: value.trim() || undefined,
+                  }),
+              })}
+              <ha-icon-button
+                class="editor-action"
+                .label=${"Remove threshold"}
+                @click=${() => this._removeColorThreshold(index, thresholdIndex)}
+              >
+                <ha-icon icon="mdi:delete"></ha-icon>
+              </ha-icon-button>
+            </div>
+          `
+        )}
+        ${this._renderNativeAddButton("Add threshold", () =>
+          this._addColorThreshold(index)
+        )}
+      </div>
+    `;
+  }
+
+  private _addColorThreshold(index: number) {
+    const current = this._config?.series?.[index]?.color_thresholds ?? [];
+    const lastValue = current.reduce<number | undefined>(
+      (max, threshold) =>
+        typeof threshold?.value === "number" && Number.isFinite(threshold.value)
+          ? Math.max(max ?? threshold.value, threshold.value)
+          : max,
+      undefined
+    );
+    this._updateSeries(index, "color_thresholds", [
+      ...current,
+      {
+        value: lastValue !== undefined ? lastValue + 1 : 0,
+        color: "#ff9800",
+      },
+    ]);
+  }
+
+  private _updateColorThreshold(
+    index: number,
+    thresholdIndex: number,
+    patch: Partial<EnergyCustomGraphColorThreshold>
+  ) {
+    const current = [...(this._config?.series?.[index]?.color_thresholds ?? [])];
+    if (thresholdIndex < 0 || thresholdIndex >= current.length) {
+      return;
+    }
+    const next = { ...current[thresholdIndex], ...patch };
+    (Object.keys(patch) as (keyof EnergyCustomGraphColorThreshold)[]).forEach(
+      (key) => {
+        if (next[key] === undefined) {
+          delete next[key];
+        }
+      }
+    );
+    current[thresholdIndex] = next;
+    this._updateSeries(index, "color_thresholds", current);
+  }
+
+  private _removeColorThreshold(index: number, thresholdIndex: number) {
+    const current = [...(this._config?.series?.[index]?.color_thresholds ?? [])];
+    current.splice(thresholdIndex, 1);
+    this._updateSeries(
+      index,
+      "color_thresholds",
+      current.length ? current : undefined
+    );
+  }
+
   private _countSeriesStyleMoreFields(
     series: EnergyCustomGraphSeriesConfig
   ): number {
     return [
       series.compare_color,
+      series.color_thresholds?.length ? true : undefined,
       series.gradient_fill === true ? true : undefined,
       series.fill_opacity,
       series.fill_to_series,
@@ -4493,6 +4652,7 @@ export class EnergyCustomGraphCardEditor
     this._mutateTerm(seriesIndex, termIndex, (draft) => {
       if (key === "constant" && value !== undefined && value !== "") {
         draft.statistic_id = undefined;
+        draft.attribute = undefined;
         draft.stat_type = undefined;
         draft.multiply = undefined;
         draft.add = undefined;
@@ -4579,20 +4739,136 @@ export class EnergyCustomGraphCardEditor
     const series = [...(this._config!.series ?? [])];
     const current = { ...series[index] };
     current.statistic_id = statisticId || undefined;
-    delete current.stat_type;
+    const keepAttribute = this._entityHasAttribute(statisticId, current.attribute);
+    if (!keepAttribute) {
+      delete current.attribute;
+      delete current.stat_type;
+    }
     series[index] = current;
     this._updateConfig("series", series);
     this._expandedSeries = new Set(this._expandedSeries).add(index);
     this._setSeriesOptionGroupExpanded(index, "source", true);
-    if (statisticId) {
+    if (statisticId && !keepAttribute) {
       void this._autoSelectSeriesStatisticType(index, statisticId);
+    }
+  }
+
+  private _entityHasAttribute(
+    entityId: string | undefined,
+    attribute: string | undefined
+  ): boolean {
+    const name = attribute?.trim();
+    if (!entityId || !name) {
+      return false;
+    }
+    return getNumericAttributeNames(this.hass, entityId).includes(name);
+  }
+
+  private _renderAttributeField(
+    entityId: string | undefined,
+    attribute: string | undefined,
+    onChange: (attribute: string | undefined) => void
+  ) {
+    const names = getNumericAttributeNames(this.hass, entityId);
+    if (attribute && !names.includes(attribute)) {
+      names.unshift(attribute);
+    }
+    if (!attribute && !names.length) {
+      return nothing;
+    }
+    const stateObj = entityId ? this.hass?.states?.[entityId] : undefined;
+    const formatter = (this.hass as unknown as {
+      formatEntityAttributeName?: (stateObj: unknown, attribute: string) => string;
+    } | undefined)?.formatEntityAttributeName;
+    const formatName = (name: string) => {
+      if (!stateObj || typeof formatter !== "function") {
+        return name;
+      }
+      try {
+        const formatted = formatter(stateObj, name);
+        return formatted && formatted !== name ? `${formatted} (${name})` : name;
+      } catch (_error) {
+        return name;
+      }
+    };
+    return html`
+      <div class="field">
+        <label>Attribute</label>
+        <select
+          @change=${(ev: Event) =>
+            onChange((ev.target as HTMLSelectElement).value || undefined)}
+        >
+          <option value="" ?selected=${!attribute}>None (entity state)</option>
+          ${names.map(
+            (name) =>
+              html`<option value=${name} ?selected=${attribute === name}>
+                ${formatName(name)}
+              </option>`
+          )}
+        </select>
+        ${attribute
+          ? this._renderEditorHelpHint(
+              "Attribute values are read from recorder history and aggregated by the card. Statistics are not used.",
+              "info"
+            )
+          : nothing}
+      </div>
+    `;
+  }
+
+  private _handleSeriesAttributeChanged(index: number, attribute: string | undefined) {
+    const current = this._config?.series?.[index];
+    if (!current) {
+      return;
+    }
+    const next = { ...current };
+    if (attribute) {
+      if (!next.attribute) {
+        next.stat_type = DEFAULT_ATTRIBUTE_STAT_TYPE;
+      }
+      next.attribute = attribute;
+    } else {
+      delete next.attribute;
+      delete next.stat_type;
+    }
+    this._replaceSeries(index, next);
+    const statisticId = normalizeStatisticId(next.statistic_id);
+    if (!attribute && statisticId) {
+      void this._autoSelectSeriesStatisticType(index, statisticId);
+    }
+  }
+
+  private _handleTermAttributeChanged(
+    seriesIndex: number,
+    termIndex: number,
+    attribute: string | undefined
+  ) {
+    let statisticId: string | undefined;
+    this._mutateTerm(seriesIndex, termIndex, (draft) => {
+      if (attribute) {
+        if (!draft.attribute) {
+          draft.stat_type = DEFAULT_ATTRIBUTE_STAT_TYPE;
+        }
+        draft.attribute = attribute;
+      } else {
+        delete draft.attribute;
+        delete draft.stat_type;
+      }
+      statisticId = normalizeStatisticId(draft.statistic_id);
+    });
+    if (!attribute && statisticId) {
+      void this._autoSelectTermStatisticType(seriesIndex, termIndex, statisticId);
     }
   }
 
   private async _autoSelectSeriesStatisticType(index: number, statisticId: string) {
     await this._ensureStatisticMetadata([statisticId]);
     const current = this._config?.series?.[index];
-    if (!current || normalizeStatisticId(current.statistic_id) !== statisticId) {
+    if (
+      !current ||
+      current.attribute ||
+      normalizeStatisticId(current.statistic_id) !== statisticId
+    ) {
       return;
     }
     const metadata = this._getStatisticMetadata(statisticId);
@@ -4609,12 +4885,17 @@ export class EnergyCustomGraphCardEditor
     rawStatisticId: string | undefined
   ) {
     const statisticId = normalizeStatisticId(rawStatisticId);
+    let keepAttribute = false;
     this._mutateTerm(seriesIndex, termIndex, (draft) => {
       draft.statistic_id = statisticId || undefined;
       draft.constant = undefined;
-      delete draft.stat_type;
+      keepAttribute = this._entityHasAttribute(statisticId, draft.attribute);
+      if (!keepAttribute) {
+        delete draft.attribute;
+        delete draft.stat_type;
+      }
     });
-    if (statisticId) {
+    if (statisticId && !keepAttribute) {
       void this._autoSelectTermStatisticType(seriesIndex, termIndex, statisticId);
     }
   }
@@ -4626,7 +4907,11 @@ export class EnergyCustomGraphCardEditor
   ) {
     await this._ensureStatisticMetadata([statisticId]);
     const term = this._config?.series?.[seriesIndex]?.calculation?.terms?.[termIndex];
-    if (!term || normalizeStatisticId(term.statistic_id) !== statisticId) {
+    if (
+      !term ||
+      term.attribute ||
+      normalizeStatisticId(term.statistic_id) !== statisticId
+    ) {
       return;
     }
     const metadata = this._getStatisticMetadata(statisticId);
@@ -6209,6 +6494,17 @@ export class EnergyCustomGraphCardEditor
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
       gap: 12px;
+    }
+
+    .color-thresholds {
+      gap: 8px;
+    }
+
+    .color-threshold-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr) auto;
+      align-items: end;
+      gap: 8px;
     }
 
     .nested-collapsible {

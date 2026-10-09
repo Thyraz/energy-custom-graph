@@ -10,12 +10,14 @@ I know the `Statistics graph card` also supports the energy date picker nowadays
 - This card has an full-featured graphical editor, so almost all settings can be done through the UI.
 - Displayed timespan sync with the energy date picker (`energy-date-selection`).
 - Supports any entity that exposes long-term statistics, as well as the short-term 'raw' history.
+- Can graph numeric entity attributes (e.g. a thermostat's `current_temperature`), aggregated from recorder history.
 - Solar forecast entities that are used in the energy dashboard can also be shown in the charts. 
 - Allows to compute and display 'live' values for the current running hour before HA provides the final aggregation.
 - Uses Home Assistant's bundled ECharts runtime – no extra framework needs to be loaded.
 - Override the energy date pickers default aggregation periods, to e.g. display hourly instead of daily bars when viewing a monthly report.
 - Per-series control over aggregation type, chart type (bar, line or step), stacking, color, unit, scaling and offsets.
 - Optional fill-between-rendering for line series to fill the space e.g. between min / max line-charts
+- Per-series color thresholds to color lines, areas and bars by value (e.g. green / yellow / red price levels)
 - Optional manual timespan selection (fixed ranges or relative day/week/month/year offsets) when you don't want to use the energy date picker.
 - Support for calculated series, so you can e.g. add and subtract sensor values as a computed signal
 - Quick access to colors from the HA energy color palette and native styles so mixed dashboards look consistent.
@@ -264,7 +266,8 @@ Metric sources and calculation terms support `multiply`, `add`, `clip_min`, and 
 | `name` | string | entity name | Display name shown in tooltip and legend. |
 | `source` | `"statistic"`, `"calculation"`, `"forecast"` | inferred | Data source type. When omitted the card can auto-detect the source based on the other fields for `statistic` and `calculation` signals. Use `forecast` to plot solar forecasts configured in the Energy dashboard. |
 | `statistic_id` | string | – | Entity with long term statistics (e.g. `sensor.entity_id`). Required unless series uses a `calculation` instead. |
-| `stat_type` | `"change"`, `"sum"`, `"mean"`, `"min"`, `"max"`, `"state"` | `"change"` | Statistic type to display for this entity. Not used when `calculation` is provided, as each subseries has it's own setting there. |
+| `attribute` | string | – | Read values from this entity attribute instead of the entity state. See [Entity attribute series](#entity-attribute-series). |
+| `stat_type` | `"change"`, `"sum"`, `"mean"`, `"min"`, `"max"`, `"state"` | `"change"` (`"mean"` with `attribute`) | Statistic type to display for this entity. Not used when `calculation` is provided, as each subseries has it's own setting there. |
 | `time_offset` | object | – | Fetch this statistic or calculation series from a shifted source timespan and display it in the visible timespan. See below. |
 | `calculation` | object | – | Build a computed series from multiple statistics / terms (see below). |
 | `chart_type` | `"bar"`, `"line"`, `"step"` | `"bar"` | Chart type. |
@@ -278,6 +281,7 @@ Metric sources and calculation terms support `multiply`, `add`, `clip_min`, and 
 | `hidden_by_default` | boolean | `false` | Whether the series is initially hidden when the chart loads. The series can still be toggled via the legend. |
 | `color` | string | next in palette | Specific color (supports `#rrggbb`, `rgb()` or CSS variables). |
 | `compare_color` | string | inherit | Optional color for compare series. Defaults to the base series color with reduced opacity. |
+| `color_thresholds` | list | – | Color the series by value. Each entry has a `value` and a `color`; values at or above a threshold use its color. See below. |
 | `line_opacity` | number | style default | Override stroke opacity (0–1). Defaults to 0.85 for line charts and 1.0 for bar outlines. |
 | `line_width` | number | `1.5` | Line thickness in pixels (line charts only). |
 | `line_style` | `"solid"`, `"dashed"`, `"dotted"` | `"solid"` | Line pattern style (line charts only). |
@@ -291,6 +295,39 @@ Metric sources and calculation terms support `multiply`, `add`, `clip_min`, and 
 | `clip_min` | number | – | Values will be set to this value if they are smaller. |
 | `clip_max` | number | – | Values will be set to this value if they are larger. |
 | `pv_production_entity` | string | – | (Forecast only) Sensor entity you configured as PV production in the Energy dashboard. Leave unset to sum all configured forecasts. |
+
+#### Color thresholds
+
+`color_thresholds` colors a series by its value instead of using one color for the whole series. Each entry sets the color from its `value` upwards, until the next higher threshold. Values below the lowest threshold use the series `color`. The order of the entries does not matter.
+
+```yaml
+series:
+  - statistic_id: sensor.electricity_price
+    name: Price
+    stat_type: mean
+    chart_type: line
+    fill: true
+    color: "#1d4877"          # below 0.12
+    color_thresholds:
+      - value: 0.12           # 0.12 up to 0.20
+        color: "#3b913f"
+      - value: 0.20           # 0.20 up to 0.25
+        color: "#f9a825"
+      - value: 0.25           # 0.25 and above
+        color: "#c62828"
+```
+
+- Thresholds are compared with the final series value, after `multiply`, `add`, `clip_min` and `clip_max`.
+- Line and step series change color exactly where the line crosses a threshold. With `fill: true` the area is colored in the same bands. With `gradient_fill: true` the area keeps the series color gradient and only the line uses the thresholds.
+- Bar series color each bar by its value.
+- A threshold `color` accepts the same formats as the series `color`, including CSS variables.
+- `line_opacity` and `fill_opacity` still apply.
+- The legend shows the series `color`. The tooltip marker shows the color of the hovered value.
+- Compare series use the thresholds too, unless `compare_color` is set.
+- For stacked line series the color bands follow the Y axis, so they match the stacked height, not the series' own value.
+- `fill_to_series` areas keep the series color.
+
+Line and step series use an ECharts piecewise `visualMap` for this.
 
 #### Series time offset
 
@@ -315,6 +352,31 @@ Series time offset only works with aggregated recorder statistics. It cannot be 
 
 The Home Assistant energy date picker's compare feature is not supported for charts that configure a time offset and will be ignored.
 
+#### Entity attribute series
+
+Set `attribute` next to `statistic_id` to plot a numeric attribute of an entity, for example the current temperature of a climate entity. Home Assistant does not keep long-term statistics for attributes, so the card reads them from raw history (with attributes) and aggregates them itself:
+
+- With the `raw` aggregation interval every attribute change is one point.
+- With the `5minute`, `hour`, `day`, `week`, `month` or `year` aggregation interval, the card computes each interval like the recorder: `mean` is time-weighted, `min` / `max` are the extremes, `state` / `sum` are the last value, and `change` is the last value minus the value at the start of the interval.
+
+```yaml
+series:
+  - statistic_id: climate.living_room
+    attribute: current_temperature
+    name: Living room
+    stat_type: mean
+    chart_type: line
+```
+
+Notes:
+
+- Attribute series are limited by the recorder's history retention (`purge_keep_days`, default 10 days). Older timespans have no data.
+- Attributes carry no unit; set `y_axes[].unit` if you want one shown.
+- Attribute changes are always requested with `significant_changes_only: false`, independent of `raw_options`.
+- Numeric strings and booleans (`on/off`, `true/false`) are converted like entity states. Non-numeric values render as gaps.
+- `attribute` also works in calculation terms.
+- With `time_offset`, attribute series load raw history from the source timespan and aggregate it the same way.
+
 #### Calculated series
 
 Configure `calculation` instead of `statistic_id` to compute a series from multiple entity statistics. Terms are processed sequentially, starting with the `initial_value` (default `0`).
@@ -336,6 +398,7 @@ Each term accepts the following options:
 | `operation` | `"add"`, `"subtract"`, `"multiply"`, `"divide"` | `"add"` | Operation applied in this step of the calculation. |
 | `constant` | number | – | Constant number to use in this term. Use alternatively to providing a `statistic_id`. All keys below in this section are ignored in this case. |
 | `statistic_id` | string | – | Entity with long term statistics (e.g. `sensor.entity_id`). Do not use in combination with setting `constant` in the same term. |
+| `attribute` | string | – | Read values from this entity attribute instead of the entity state. See [Entity attribute series](#entity-attribute-series). |
 | `stat_type` | `"change"`, `"sum"`, `"mean"`, `"min"`, `"max"`, `"state"` | inherit | Statistic type to display for this entity. |
 | `multiply` | number | `1` | Apply a multiplier to each series value. |
 | `add` | number | `0` | Apply an additive offset after multiplication. |

@@ -4,6 +4,7 @@ import type {
 } from "../types/echarts";
 import type { HomeAssistant } from "custom-card-helpers";
 import type {
+  EnergyCustomGraphColorThreshold,
   EnergyCustomGraphSeriesConfig,
 } from "../types";
 import type {
@@ -11,6 +12,7 @@ import type {
   StatisticsMetaData,
   StatisticValue,
 } from "../data/statistics";
+import { DEFAULT_ATTRIBUTE_STAT_TYPE, getDataKey } from "../data/attributes";
 
 interface SeriesBuildParams {
   hass: HomeAssistant;
@@ -42,6 +44,19 @@ export interface BuiltSeriesResult {
   seriesById: Map<string, EnergyCustomGraphSeriesConfig>;
   indicatorColorBySeries: Map<string, string>;
   resolvedSeriesById: Map<string, ResolvedSeriesData>;
+  colorThresholdsBySeries: Map<string, ResolvedColorThresholds>;
+  visualMapPiecesBySeries: Map<string, ColorThresholdPiece[]>;
+}
+
+export interface ResolvedColorThresholds {
+  baseColor: string;
+  thresholds: EnergyCustomGraphColorThreshold[];
+}
+
+export interface ColorThresholdPiece {
+  gte?: number;
+  lt?: number;
+  color: string;
 }
 
 export interface ResolvedSeriesData {
@@ -71,6 +86,8 @@ const LINE_AREA_ALPHA = 0.15;
 const LINE_GRADIENT_STRONG_ALPHA = 0.75;
 const DEFAULT_LINE_OPACITY = 0.85;
 const DEFAULT_BAR_BORDER_OPACITY = 1.0;
+// ECharts multiplies line areas by this opacity unless areaStyle sets one.
+export const ECHARTS_DEFAULT_AREA_OPACITY = 0.7;
 
 const getCalculationKey = (index: number) => `calculation_${index}`;
 const getForecastKey = (index: number) => `forecast_${index}`;
@@ -265,6 +282,103 @@ const buildZeroAwareGradientFill = (
   };
 };
 
+const resolveColorToken = (
+  colorToken: string,
+  computedStyle: CSSStyleDeclaration
+): string => {
+  let colorValue = colorToken;
+  if (colorToken.startsWith("#") || colorToken.startsWith("rgb")) {
+    colorValue = colorToken;
+  } else if (colorToken.startsWith("var(")) {
+    const extracted = colorToken.slice(4, -1).trim();
+    const resolved = computedStyle.getPropertyValue(extracted)?.trim();
+    if (resolved) {
+      colorValue = resolved;
+    }
+  } else {
+    const resolved = computedStyle.getPropertyValue(colorToken)?.trim();
+    if (resolved) {
+      colorValue = resolved;
+    }
+  }
+  return colorValue.trim();
+};
+
+const resolveColorThresholds = (
+  thresholds: EnergyCustomGraphSeriesConfig["color_thresholds"],
+  baseColor: string,
+  computedStyle: CSSStyleDeclaration
+): ResolvedColorThresholds | undefined => {
+  if (!Array.isArray(thresholds)) {
+    return undefined;
+  }
+  const byValue = new Map<number, string>();
+  thresholds.forEach((threshold) => {
+    const value =
+      typeof threshold?.value === "string"
+        ? Number(threshold.value)
+        : threshold?.value;
+    const color =
+      typeof threshold?.color === "string" ? threshold.color.trim() : "";
+    if (typeof value !== "number" || !Number.isFinite(value) || !color) {
+      return;
+    }
+    byValue.set(value, resolveColorToken(color, computedStyle));
+  });
+  if (!byValue.size) {
+    return undefined;
+  }
+  return {
+    baseColor,
+    thresholds: Array.from(byValue.entries())
+      .sort(([a], [b]) => a - b)
+      .map(([value, color]) => ({ value, color })),
+  };
+};
+
+/** Returns the color for a value: the last threshold at or below it, else the base color. */
+export const resolveThresholdColor = (
+  resolved: ResolvedColorThresholds,
+  value: number
+): string => {
+  let color = resolved.baseColor;
+  for (const threshold of resolved.thresholds) {
+    if (value < threshold.value) {
+      break;
+    }
+    color = threshold.color;
+  }
+  return color;
+};
+
+const buildThresholdPieces = (
+  resolved: ResolvedColorThresholds
+): ColorThresholdPiece[] => {
+  const { thresholds } = resolved;
+  const pieces: ColorThresholdPiece[] = [
+    { lt: thresholds[0].value, color: stripAlpha(resolved.baseColor) },
+  ];
+  thresholds.forEach((threshold, index) => {
+    const next = thresholds[index + 1];
+    pieces.push(
+      next
+        ? { gte: threshold.value, lt: next.value, color: stripAlpha(threshold.color) }
+        : { gte: threshold.value, color: stripAlpha(threshold.color) }
+    );
+  });
+  // ECharts line gradients need at least one closed piece; with only
+  // open-ended pieces the line renderer throws. Split the last piece.
+  if (thresholds.length === 1) {
+    const last = pieces.pop() as ColorThresholdPiece;
+    const split = last.gte! + Math.max(Math.abs(last.gte!), 1);
+    pieces.push(
+      { gte: last.gte, lt: split, color: last.color },
+      { gte: split, color: last.color }
+    );
+  }
+  return pieces;
+};
+
 export const buildSeries = ({
   hass,
   statistics,
@@ -285,6 +399,8 @@ export const buildSeries = ({
   const seriesById = new Map<string, EnergyCustomGraphSeriesConfig>();
   const indicatorColorBySeries = new Map<string, string>();
   const resolvedSeriesById = new Map<string, ResolvedSeriesData>();
+  const colorThresholdsBySeries = new Map<string, ResolvedColorThresholds>();
+  const visualMapPiecesBySeries = new Map<string, ColorThresholdPiece[]>();
   const output: (LineSeriesOption | BarSeriesOption)[] = [];
 
   type LineSeriesMeta = {
@@ -321,7 +437,9 @@ export const buildSeries = ({
     }
 
     const statisticId =
-      source === "statistic" ? seriesConfig.statistic_id?.trim() : undefined;
+      source === "statistic"
+        ? getDataKey(seriesConfig.statistic_id, seriesConfig.attribute) || undefined
+        : undefined;
     const calculationKey = source === "calculation" ? getCalculationKey(index) : undefined;
     const forecastKey = source === "forecast" ? getForecastKey(index) : undefined;
     let raw: StatisticValue[] | undefined;
@@ -374,7 +492,11 @@ export const buildSeries = ({
     const meta = statisticId
       ? metadata?.[statisticId]
       : undefined;
-    const statType = seriesConfig.stat_type ?? "change";
+    const statType =
+      seriesConfig.stat_type ??
+      (statisticId && seriesConfig.attribute?.trim()
+        ? DEFAULT_ATTRIBUTE_STAT_TYPE
+        : "change");
     const chartType = seriesConfig.chart_type ?? "bar";
     const isLine = chartType === "line";
     const isStep = chartType === "step";
@@ -400,22 +522,7 @@ export const buildSeries = ({
       palette[index % palette.length] ??
       DEFAULT_COLORS[index % DEFAULT_COLORS.length];
 
-    let colorValue = colorToken;
-    if (colorToken.startsWith("#") || colorToken.startsWith("rgb")) {
-      colorValue = colorToken;
-    } else if (colorToken.startsWith("var(")) {
-      const extracted = colorToken.slice(4, -1).trim();
-      const resolved = computedStyle.getPropertyValue(extracted)?.trim();
-      if (resolved) {
-        colorValue = resolved;
-      }
-    } else {
-      const resolved = computedStyle.getPropertyValue(colorToken)?.trim();
-      if (resolved) {
-        colorValue = resolved;
-      }
-    }
-    colorValue = colorValue.trim();
+    const colorValue = resolveColorToken(colorToken, computedStyle);
     const tooltipIndicatorColor = stripAlpha(colorValue);
 
     const lineOpacityOverride =
@@ -486,6 +593,15 @@ export const buildSeries = ({
     seriesById.set(id, seriesConfig);
     indicatorColorBySeries.set(id, tooltipIndicatorColor);
 
+    const colorThresholds = resolveColorThresholds(
+      seriesConfig.color_thresholds,
+      colorValue,
+      computedStyle
+    );
+    if (colorThresholds) {
+      colorThresholdsBySeries.set(id, colorThresholds);
+    }
+
     let legendFill: string | undefined;
     let legendBorder: string | undefined;
 
@@ -531,11 +647,21 @@ export const buildSeries = ({
             borderColor: lineHoverColor,
           },
         },
-        lineStyle: {
-          width: lineWidth,
-          color: lineColor,
-          type: lineStyleType,
-        },
+        // null clears values merged in from a previous render with or
+        // without color thresholds, as ha-chart-base merges series by id.
+        lineStyle: colorThresholds
+          ? {
+              width: lineWidth,
+              color: null,
+              type: lineStyleType,
+              opacity: resolvedLineOpacity,
+            }
+          : {
+              width: lineWidth,
+              color: lineColor,
+              type: lineStyleType,
+              opacity: null,
+            },
         itemStyle: { ...lineItemStyle },
         color: lineColor,
       };
@@ -549,10 +675,21 @@ export const buildSeries = ({
         lineSeries.step = "end";
       }
       if (shouldFill) {
-        lineSeries.areaStyle = {
-          ...(lineSeries.areaStyle ?? {}),
-          color: gradientFill ?? fillColor,
-        };
+        // Explicit line and area colors take precedence over the visualMap
+        // gradient in ECharts, so threshold series use opacity instead.
+        lineSeries.areaStyle =
+          colorThresholds && !gradientFill
+            ? {
+                color: null,
+                opacity: fillOpacity * ECHARTS_DEFAULT_AREA_OPACITY,
+              }
+            : {
+                color: gradientFill ?? fillColor,
+                opacity: null,
+              };
+      }
+      if (colorThresholds) {
+        visualMapPiecesBySeries.set(id, buildThresholdPieces(colorThresholds));
       }
       output.push(lineSeries);
 
@@ -602,12 +739,37 @@ export const buildSeries = ({
           : DEFAULT_BAR_BORDER_OPACITY;
       const borderColor = applyAlpha(colorValue, borderOpacity);
 
+      // Bar items get their colors directly: the card writes a color into
+      // every bar item, which ECharts applies after visualMap colors.
+      const barData = colorThresholds
+        ? dataPoints.map(([date, value]) => {
+            if (value === null) {
+              return [date, value];
+            }
+            const color = resolveThresholdColor(colorThresholds, value);
+            const itemBorderColor = applyAlpha(color, borderOpacity);
+            return {
+              value: [date, value],
+              itemStyle: {
+                color: applyAlpha(color, fillOpacity),
+                borderColor: itemBorderColor,
+              },
+              emphasis: {
+                itemStyle: {
+                  color: applyAlpha(color, Math.min(1, fillOpacity + 0.2)),
+                  borderColor: itemBorderColor,
+                },
+              },
+            };
+          })
+        : dataPoints;
+
       const barSeries: BarSeriesOption = {
         id,
         name,
         type: "bar",
         stack: seriesConfig.stack,
-        data: dataPoints,
+        data: barData,
         yAxisIndex: seriesConfig.y_axis === "right" ? 1 : 0,
         z: index,
         emphasis: {
@@ -856,5 +1018,7 @@ export const buildSeries = ({
     seriesById,
     indicatorColorBySeries,
     resolvedSeriesById,
+    colorThresholdsBySeries,
+    visualMapPiecesBySeries,
   };
 };
