@@ -6686,18 +6686,31 @@ export class EnergyCustomGraphCard extends LitElement {
     let firstCompareOriginal: number | undefined;
 
     items.forEach((item, index) => {
+      const seriesId =
+        typeof item.seriesId === "string" ? item.seriesId : undefined;
+      const seriesName =
+        typeof item.seriesName === "string" ? item.seriesName : "";
       const seriesKey =
-        (typeof item.seriesId === "string" ? item.seriesId : undefined) ??
-        (typeof item.seriesName === "string" ? item.seriesName : undefined) ??
+        seriesId ??
+        (seriesName !== "" ? seriesName : undefined) ??
         (typeof item.seriesIndex === "number" ? String(item.seriesIndex) : undefined) ??
         String(index);
+      const isCompare =
+        (typeof seriesId === "string" && seriesId.endsWith("--compare")) ||
+        (seriesName.endsWith(" (Compare)") && !seriesId) ||
+        seriesName.endsWith("--compare");
+      const dedupeKey = `${isCompare ? "compare" : "main"}::${seriesKey}`;
 
-      if (rendered.has(seriesKey)) {
+      if (rendered.has(dedupeKey)) {
         return;
       }
-      rendered.add(seriesKey);
+      rendered.add(dedupeKey);
 
-      const seriesConfig = this._seriesConfigById.get(seriesKey);
+      const configKey =
+        isCompare && typeof seriesKey === "string" && seriesKey.endsWith("--compare")
+          ? seriesKey.slice(0, -"--compare".length)
+          : seriesKey;
+      const seriesConfig = this._seriesConfigById.get(configKey);
       if (seriesConfig?.show_in_tooltip === false) {
         return;
       }
@@ -6711,7 +6724,6 @@ export class EnergyCustomGraphCard extends LitElement {
         return;
       }
 
-      const isCompare = seriesKey.endsWith("--compare");
       const groupKey: "main" | "compare" = isCompare ? "compare" : "main";
 
       if (isCompare) {
@@ -6731,8 +6743,6 @@ export class EnergyCustomGraphCard extends LitElement {
         maximumFractionDigits: precision,
       });
       const unitLabel = unit ? ` ${unit}` : "";
-      const seriesName =
-        typeof item.seriesName === "string" ? item.seriesName : "";
       const markerColor =
         this._indicatorColorBySeries.get(seriesKey) ??
         (typeof item.color === "string" ? item.color : undefined);
