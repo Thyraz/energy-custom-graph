@@ -4395,6 +4395,7 @@ export class EnergyCustomGraphCard extends LitElement {
           return {
             ...(entry as Record<string, unknown>),
             value: newTuple,
+            __energyCustomGraphCompareOriginalTimestamp: originalTs,
           };
         }
         return entry;
@@ -5303,6 +5304,9 @@ export class EnergyCustomGraphCard extends LitElement {
           bucketSet.add(timestamp);
           return {
             value: [timestamp, entry[1]],
+            ...(entry.length > 2
+              ? { __energyCustomGraphCompareOriginalTimestamp: Number(entry[2]) }
+              : {}),
           };
         }
         if (entry && typeof entry === "object" && "value" in entry) {
@@ -5315,6 +5319,15 @@ export class EnergyCustomGraphCard extends LitElement {
             return {
               ...(entry as Record<string, unknown>),
               value: [timestamp, tuple[1]],
+              ...(tuple.length > 2 &&
+              (entry as any).__energyCustomGraphCompareOriginalTimestamp ===
+                undefined
+                ? {
+                    __energyCustomGraphCompareOriginalTimestamp: Number(
+                      tuple[tuple.length - 1]
+                    ),
+                  }
+                : {}),
             };
           }
           return { ...(entry as Record<string, unknown>) };
@@ -5340,7 +5353,7 @@ export class EnergyCustomGraphCard extends LitElement {
       if (!Number.isFinite(timestamp)) {
         return tuple;
       }
-      return [timestamp + barAlignmentOffsetMs, tuple[1], timestamp];
+      return [timestamp + barAlignmentOffsetMs, tuple[1]];
     };
 
     barSeries.forEach((serie) => {
@@ -5353,12 +5366,12 @@ export class EnergyCustomGraphCard extends LitElement {
         if (!tuple) {
           return;
         }
-        const timestamp = Number(tuple[0]);
+        const bucketTimestamp = Number(tuple[0]);
         const alignedTuple = alignBarTuple(tuple);
-        dataMap.set(timestamp, {
-          ...item,
+        dataMap.set(bucketTimestamp, {
+          ...(item ?? {}),
           value: alignedTuple,
-          __energyCustomGraphRealTimestamp: timestamp,
+          __energyCustomGraphBucketTimestamp: bucketTimestamp,
           __energyCustomGraphRealValue: true,
           itemStyle: {
             ...baseItemStyle,
@@ -5374,7 +5387,7 @@ export class EnergyCustomGraphCard extends LitElement {
         }
         return {
           value: alignBarTuple([bucket, 0]),
-          __energyCustomGraphRealTimestamp: bucket,
+          __energyCustomGraphBucketTimestamp: bucket,
           itemStyle: {
             ...baseItemStyle,
             borderWidth: 0,
@@ -6571,52 +6584,46 @@ export class EnergyCustomGraphCard extends LitElement {
 
     const extractTuple = (
       param: Record<string, any>
-    ): { display: number; value: number | null; original?: number } | undefined => {
-      const value = param.value ?? param.data ?? param?.value?.value;
-      if (Array.isArray(value)) {
-        const displayTs = Number(value[0]);
-        const yVal =
-          value.length > 1 && typeof value[1] === "number" ? value[1] : null;
-        const originalCandidate =
-          value.length > 2 && typeof value[value.length - 1] === "number"
-            ? value[value.length - 1]
+    ):
+      | { bucket: number; value: number | null; compareOriginal?: number }
+      | undefined => {
+      const data =
+        param.data && typeof param.data === "object" && !Array.isArray(param.data)
+          ? (param.data as Record<string, any>)
+          : undefined;
+      const tuple: any[] | undefined = Array.isArray(param.value)
+        ? param.value
+        : Array.isArray(data?.value)
+          ? data!.value
+          : Array.isArray(param.data)
+            ? param.data
             : undefined;
-        return {
-          display: displayTs,
-          value: yVal,
-          original:
-            originalCandidate !== undefined &&
-            originalCandidate !== displayTs
-              ? originalCandidate
-              : undefined,
-        };
+
+      const bucket = Number(
+        data?.__energyCustomGraphBucketTimestamp ??
+          tuple?.[0] ??
+          param.axisValue ??
+          NaN
+      );
+      if (!Number.isFinite(bucket)) {
+        return undefined;
       }
-      if (typeof value === "number") {
-        return {
-          display: Number(param.axisValue ?? param.axisValueLabel ?? 0),
-          value,
-        };
-      }
-      if (value && Array.isArray(value.value)) {
-        const tuple = value.value as any[];
-        const displayTs = Number(tuple[0]);
-        const yVal =
-          tuple.length > 1 && typeof tuple[1] === "number" ? tuple[1] : null;
-        const originalCandidate =
-          tuple.length > 2 && typeof tuple[tuple.length - 1] === "number"
-            ? tuple[tuple.length - 1]
-            : undefined;
-        return {
-          display: displayTs,
-          value: yVal,
-          original:
-            originalCandidate !== undefined &&
-            originalCandidate !== displayTs
-              ? originalCandidate
-              : undefined,
-        };
-      }
-      return undefined;
+
+      const rawValue = tuple ? tuple[1] : param.value;
+      const value = typeof rawValue === "number" ? rawValue : null;
+
+      const compareOriginalRaw =
+        data?.__energyCustomGraphCompareOriginalTimestamp ??
+        (tuple && tuple.length > 2 ? tuple[tuple.length - 1] : undefined);
+      const compareOriginal = Number(compareOriginalRaw);
+
+      return {
+        bucket,
+        value,
+        compareOriginal: Number.isFinite(compareOriginal)
+          ? compareOriginal
+          : undefined,
+      };
     };
 
     const toDate = (input: number | string | undefined): Date | undefined => {
@@ -6631,10 +6638,6 @@ export class EnergyCustomGraphCard extends LitElement {
       }
       return undefined;
     };
-
-    const firstTuple = extractTuple(items[0]);
-    const headerDate = firstTuple ? toDate(firstTuple.display) : undefined;
-    const header = headerDate ? this._formatDateTime(headerDate) : undefined;
 
     const rendered = new Set<string>();
 
@@ -6664,7 +6667,8 @@ export class EnergyCustomGraphCard extends LitElement {
       },
     };
 
-    let firstCompareDisplay: number | undefined;
+    let firstMainBucket: number | undefined;
+    let firstCompareBucket: number | undefined;
     let firstCompareOriginal: number | undefined;
 
     items.forEach((item, index) => {
@@ -6701,7 +6705,7 @@ export class EnergyCustomGraphCard extends LitElement {
       if (!tuple) {
         return;
       }
-      const { display, value, original } = tuple;
+      const { bucket, value, compareOriginal } = tuple;
       if (value === null || value === undefined || Number.isNaN(value)) {
         return;
       }
@@ -6709,12 +6713,14 @@ export class EnergyCustomGraphCard extends LitElement {
       const groupKey: "main" | "compare" = isCompare ? "compare" : "main";
 
       if (isCompare) {
-        if (firstCompareDisplay === undefined) {
-          firstCompareDisplay = display;
+        if (firstCompareBucket === undefined) {
+          firstCompareBucket = bucket;
         }
-        if (original !== undefined && firstCompareOriginal === undefined) {
-          firstCompareOriginal = original;
+        if (compareOriginal !== undefined && firstCompareOriginal === undefined) {
+          firstCompareOriginal = compareOriginal;
         }
+      } else if (firstMainBucket === undefined) {
+        firstMainBucket = bucket;
       }
 
       const unit =
@@ -6732,12 +6738,6 @@ export class EnergyCustomGraphCard extends LitElement {
         color: markerColor,
         text: `${seriesName}: ${formattedValue}${unitLabel}`,
       });
-      if (isCompare && original !== undefined && !groupData.compare.header) {
-        const compareDate = toDate(original);
-        if (compareDate) {
-          groupData.compare.header = this._formatDateTime(compareDate);
-        }
-      }
 
       if (includeStackSums) {
         const stackName = seriesConfig?.stack?.trim();
@@ -6792,20 +6792,22 @@ export class EnergyCustomGraphCard extends LitElement {
       });
     }
 
-    if (!groupData.compare.header) {
-      const candidateOriginal =
-        firstCompareOriginal !== undefined
-          ? firstCompareOriginal
-          : firstCompareDisplay !== undefined
-            ? this._computeCompareOriginalTimestamp(firstCompareDisplay)
-            : undefined;
-      if (candidateOriginal !== undefined) {
-        const compareDate = toDate(candidateOriginal);
-        if (compareDate) {
-          groupData.compare.header = this._formatDateTime(compareDate);
-        }
+    if (firstCompareBucket !== undefined) {
+      const compareTimestamp =
+        firstCompareOriginal ??
+        this._computeCompareOriginalTimestamp(firstCompareBucket);
+      const compareDate = toDate(compareTimestamp);
+      if (compareDate) {
+        groupData.compare.header = this._formatDateTime(compareDate);
       }
     }
+
+    const headerBucket = firstMainBucket ?? firstCompareBucket;
+    const headerDate =
+      headerBucket !== undefined ? toDate(headerBucket) : undefined;
+    const globalHeader = headerDate
+      ? this._formatDateTime(headerDate)
+      : undefined;
 
     const root = document.createElement("div");
     root.style.display = "contents";
@@ -6876,8 +6878,8 @@ export class EnergyCustomGraphCard extends LitElement {
     let hasContent = false;
     let hasBody = false;
 
-    if (header) {
-      appendStrong(header);
+    if (globalHeader) {
+      appendStrong(globalHeader);
       hasContent = true;
     }
 
