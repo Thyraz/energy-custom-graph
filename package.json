@@ -28,6 +28,7 @@
   },
   "devDependencies": {
     "@parcel/transformer-inline-string": "^2.10.0",
+    "@types/node": "^26.6.5",
     "parcel": "^2.10.0",
     "tsx": "^4.23.15",
     "typescript": "^5.3.3"

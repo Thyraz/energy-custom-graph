@@ -39,7 +39,10 @@ export interface BuiltSeriesResult {
     borderColor?: string;
     borderWidth?: number;
     hidden?: boolean;
+    legendGroup?: string;
+    showInLegend?: boolean;
   }[];
+  legendSecondaryIds: Map<string, string[]>;
   unitBySeries: Map<string, string | null | undefined>;
   seriesById: Map<string, EnergyCustomGraphSeriesConfig>;
   indicatorColorBySeries: Map<string, string>;
@@ -399,6 +402,7 @@ export const buildSeries = ({
   const seriesById = new Map<string, EnergyCustomGraphSeriesConfig>();
   const indicatorColorBySeries = new Map<string, string>();
   const resolvedSeriesById = new Map<string, ResolvedSeriesData>();
+  const legendSecondaryIds = new Map<string, string[]>();
   const colorThresholdsBySeries = new Map<string, ResolvedColorThresholds>();
   const visualMapPiecesBySeries = new Map<string, ColorThresholdPiece[]>();
   const output: (LineSeriesOption | BarSeriesOption)[] = [];
@@ -442,8 +446,44 @@ export const buildSeries = ({
         : undefined;
     const calculationKey = source === "calculation" ? getCalculationKey(index) : undefined;
     const forecastKey = source === "forecast" ? getForecastKey(index) : undefined;
+    const statType =
+      seriesConfig.stat_type ??
+      (statisticId && seriesConfig.attribute?.trim()
+        ? DEFAULT_ATTRIBUTE_STAT_TYPE
+        : "change");
+    const chartType = seriesConfig.chart_type ?? "bar";
+    const baseKey = statisticId ?? calculationKey ?? forecastKey ?? `series_${index}`;
+    const configuredId =
+      typeof seriesConfig.id === "string" && seriesConfig.id.trim().length
+        ? seriesConfig.id.trim()
+        : undefined;
+    const id = configuredId ?? `${baseKey}:${statType}:${chartType}:${index}`;
+
     let raw: StatisticValue[] | undefined;
     let calcUnit: string | null | undefined;
+
+    // Grouped series without data still register their ids, so they inherit
+    // the group's hidden state once data (or compare data) shows up later.
+    const registerEmptyGroupMember = () => {
+      const groupName = seriesConfig.legend_group?.trim();
+      if (!groupName || seriesConfig.show_in_chart === false) {
+        return;
+      }
+      legend.push({
+        id,
+        name: id,
+        hidden: seriesConfig.hidden_by_default === true,
+        legendGroup: groupName,
+        showInLegend: false,
+      });
+      if (seriesConfig.fill_to_series?.trim()) {
+        legendSecondaryIds.set(id, [
+          ...(legendSecondaryIds.get(id) ?? []),
+          `${id}__fill_base`,
+          `${id}__fill_area`,
+        ]);
+      }
+    };
 
     if (source === "calculation" && calculationKey) {
       raw = calculatedData?.get(calculationKey);
@@ -453,6 +493,7 @@ export const buildSeries = ({
           `calculation-empty-${index}`,
           `Calculation for series "${seriesConfig.name ?? calculationKey}" produced no data.`
         );
+        registerEmptyGroupMember();
         return;
       }
     } else if (source === "forecast" && forecastKey) {
@@ -461,6 +502,7 @@ export const buildSeries = ({
           `forecast-missing-${index}`,
           `No forecast data available for series "${seriesConfig.name ?? forecastKey}".`
         );
+        registerEmptyGroupMember();
         return;
       }
       raw = forecastData.get(forecastKey);
@@ -470,6 +512,7 @@ export const buildSeries = ({
           `forecast-empty-${index}`,
           `Forecast series "${seriesConfig.name ?? forecastKey}" produced no data for the selected range.`
         );
+        registerEmptyGroupMember();
         return;
       }
     } else if (source === "statistic" && statisticId) {
@@ -479,6 +522,7 @@ export const buildSeries = ({
           `statistics-empty-${statisticId}`,
           `No statistics available for "${statisticId}".`
         );
+        registerEmptyGroupMember();
         return;
       }
     } else {
@@ -492,12 +536,6 @@ export const buildSeries = ({
     const meta = statisticId
       ? metadata?.[statisticId]
       : undefined;
-    const statType =
-      seriesConfig.stat_type ??
-      (statisticId && seriesConfig.attribute?.trim()
-        ? DEFAULT_ATTRIBUTE_STAT_TYPE
-        : "change");
-    const chartType = seriesConfig.chart_type ?? "bar";
     const isLine = chartType === "line";
     const isStep = chartType === "step";
     const isLineLike = isLine || isStep;
@@ -542,12 +580,6 @@ export const buildSeries = ({
     const defaultBarFillOpacity = BAR_FILL_ALPHA;
     const defaultLineFillOpacity = LINE_AREA_ALPHA;
 
-    const baseKey = statisticId ?? calculationKey ?? forecastKey ?? `series_${index}`;
-    const configuredId =
-      typeof seriesConfig.id === "string" && seriesConfig.id.trim().length
-        ? seriesConfig.id.trim()
-        : undefined;
-    const id = configuredId ?? `${baseKey}:${statType}:${chartType}:${index}`;
     const unit = calcUnit ?? meta?.statistics_unit_of_measurement;
 
     const dataPoints: [number, number | null][] = raw.map(
@@ -805,19 +837,19 @@ export const buildSeries = ({
       legendBorder = borderColor;
     }
 
-    // Only add to legend if show_in_legend is not explicitly false
-    if (seriesConfig.show_in_legend !== false) {
-      legend.push({
-        id,
-        name,
-        color: legendFill,
-        indicatorColor: legendFill,
-        fillColor: legendFill,
-        borderColor: legendBorder,
-        borderWidth: isLineLike ? 2 : 1,
-        hidden: seriesConfig.hidden_by_default === true,
-      });
-    }
+    // show_in_legend: false only hides the entry; the series can still belong to a legend_group
+    legend.push({
+      id,
+      name,
+      color: legendFill,
+      indicatorColor: legendFill,
+      fillColor: legendFill,
+      borderColor: legendBorder,
+      borderWidth: isLineLike ? 2 : 1,
+      hidden: seriesConfig.hidden_by_default === true,
+      legendGroup: seriesConfig.legend_group?.trim() || undefined,
+      showInLegend: seriesConfig.show_in_legend !== false,
+    });
   });
 
   fillRequests.forEach(({ sourceName, targetName }) => {
@@ -829,6 +861,14 @@ export const buildSeries = ({
       );
       return;
     }
+
+    // Register ids even without a band, so a band appearing later inherits the hidden state
+    const stackId = `__energy_fill_${sourceMeta.id}`;
+    const baseId = `${sourceMeta.id}__fill_base`;
+    const fillId = `${sourceMeta.id}__fill_area`;
+    const secondaryIds = legendSecondaryIds.get(sourceMeta.id) ?? [];
+    secondaryIds.push(baseId, fillId);
+    legendSecondaryIds.set(sourceMeta.id, secondaryIds);
 
     if (sourceMeta.config.stack) {
       warnOnce(
@@ -925,10 +965,6 @@ export const buildSeries = ({
       );
     }
 
-    const stackId = `__energy_fill_${sourceMeta.id}`;
-    const baseId = `${sourceMeta.id}__fill_base`;
-    const fillId = `${sourceMeta.id}__fill_area`;
-
     const defaultLineZ = 2;
     const sourceLineZ =
       typeof sourceMeta.series.z === "number"
@@ -1014,6 +1050,7 @@ export const buildSeries = ({
   return {
     series: output,
     legend,
+    legendSecondaryIds,
     unitBySeries,
     seriesById,
     indicatorColorBySeries,
