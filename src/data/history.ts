@@ -2,7 +2,7 @@ import type { HomeAssistant } from "custom-card-helpers";
 import type { Statistics, StatisticValue } from "./statistics";
 
 export interface EntityHistoryState {
-  s: string;
+  s: string | null;
   a?: Record<string, unknown>;
   lc?: number;
   lu: number;
@@ -34,8 +34,8 @@ const BINARY_STATE_MAP: Record<string, number> = {
 const normalizeTimestamp = (value?: number): number | undefined =>
   typeof value === "number" ? Math.round(value * 1000) : undefined;
 
-export const normalizeStateValue = (raw: string): number | null => {
-  const key = raw.trim().toLowerCase();
+export const normalizeStateValue = (raw: string | null | undefined): number | null => {
+  const key = raw?.trim().toLowerCase() ?? "";
   if (key in BINARY_STATE_MAP) {
     return BINARY_STATE_MAP[key];
   }
@@ -106,7 +106,7 @@ export const historyStatesToStatistics = (
     const values: StatisticValue[] = sorted.map((entry) => {
       const timestamp = normalizeTimestamp(entry.lc ?? entry.lu);
       const numeric = normalizeStateValue(entry.s);
-      const normalizedState = entry.s.trim().toLowerCase();
+      const normalizedState = entry.s?.trim().toLowerCase() ?? "";
 
       if (
         numeric === null &&
