@@ -110,6 +110,11 @@ const HEADER_STACK_SIGN_OPTIONS: Array<{ value: EnergyCustomGraphHeaderStackSign
   { value: "absolute", label: "Absolute" },
 ];
 
+const BAR_ALIGNMENT_OPTIONS: Array<{ value: "center" | "right"; label: string }> = [
+  { value: "center", label: "Centered" },
+  { value: "right", label: "Right aligned" },
+];
+
 const TIME_OFFSET_UNITS = new Set<EnergyCustomGraphTimeOffsetUnit>(
   TIME_OFFSET_UNIT_OPTIONS.map((option) => option.value)
 );
@@ -911,7 +916,9 @@ export class EnergyCustomGraphCardEditor
   }
 
   private _renderChartMoreOptions(cfg: EnergyCustomGraphCardConfig) {
-    const count = cfg.chart_height ? 1 : 0;
+    const count =
+      (cfg.chart_height ? 1 : 0) +
+      (cfg.bar_alignment && cfg.bar_alignment !== "center" ? 1 : 0);
     const expanded = this._chartMoreExpanded || count > 0;
     return this._renderMoreBlock({
       count,
@@ -927,6 +934,31 @@ export class EnergyCustomGraphCardEditor
           onInput: (value) =>
             this._updateConfig("chart_height", value || undefined),
         })}
+        <div class="field">
+          <label>Bar alignment</label>
+          <select
+            @change=${(ev: Event) =>
+              this._updateConfig(
+                "bar_alignment",
+                (ev.target as HTMLSelectElement).value as "center" | "right"
+              )}
+          >
+            ${BAR_ALIGNMENT_OPTIONS.map(
+              (option) => html`
+                <option
+                  value=${option.value}
+                  ?selected=${(cfg.bar_alignment ?? "center") === option.value}
+                >
+                  ${option.label}
+                </option>
+              `
+            )}
+          </select>
+          <p class="hint">
+            Center keeps the bar on the time marker. Right aligned matches the default
+            Home Assistant hourly energy graph more closely.
+          </p>
+        </div>
       `,
     });
   }
