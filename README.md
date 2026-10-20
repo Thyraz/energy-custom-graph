@@ -450,6 +450,7 @@ Configure both left and right Y axes individually. The right axis appears automa
 | `fit_y_data` | boolean | `false` | Force this axis to fit its data range tightly. |
 | `center_zero` | boolean | `false` | Center the axis around zero by making min/max symmetric (e.g., -10 to +10). Useful for visualizing values from different y-axes with zero aligned. If `max` is not set, it will be calculated from the data. |
 | `logarithmic_scale` | boolean | `false` | Apply logarithmic scaling to this axis. |
+| `show_grid` | boolean | `true` | Show the horizontal grid lines of this axis. Set to `false` on one axis when two axes with different scales draw their grid lines at different heights. |
 | `unit` | string | metadata | Override unit label for this axis. |
 
 ### Aggregation options

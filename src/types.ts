@@ -237,6 +237,7 @@ export interface EnergyCustomGraphAxisConfig {
   fit_y_data?: boolean;
   center_zero?: boolean;
   logarithmic_scale?: boolean;
+  show_grid?: boolean;
   unit?: string;
 }
 
