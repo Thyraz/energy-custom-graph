@@ -1348,6 +1348,11 @@ export class EnergyCustomGraphCardEditor
             axisConfig?.center_zero === true,
             (value) => this._updateAxisConfig(axisId, "center_zero", value)
           )}
+          ${this._renderCompactToggle(
+            "Grid lines",
+            axisConfig?.show_grid !== false,
+            (value) => this._updateAxisConfig(axisId, "show_grid", value)
+          )}
         </div>
       </div>
     `;
@@ -5024,7 +5029,11 @@ export class EnergyCustomGraphCardEditor
           ? value === ""
             ? undefined
             : (value as string)
-          : (value as boolean);
+          : key === "show_grid"
+            ? value === false
+              ? false
+              : undefined // default is true, keep config clean
+            : (value as boolean);
 
     if (existingIndex >= 0) {
       // Update existing axis
@@ -5466,6 +5475,7 @@ export class EnergyCustomGraphCardEditor
       if (leftAxis.unit) leftParts.push(leftAxis.unit);
       if (leftAxis.fit_y_data) leftParts.push("fit");
       if (leftAxis.center_zero) leftParts.push("center zero");
+      if (leftAxis.show_grid === false) leftParts.push("no grid");
       if (leftAxis.min !== undefined || leftAxis.max !== undefined) {
         const range = `${leftAxis.min ?? "auto"}-${leftAxis.max ?? "auto"}`;
         leftParts.push(range);
@@ -5480,6 +5490,7 @@ export class EnergyCustomGraphCardEditor
       if (rightAxis.unit) rightParts.push(rightAxis.unit);
       if (rightAxis.fit_y_data) rightParts.push("fit");
       if (rightAxis.center_zero) rightParts.push("center zero");
+      if (rightAxis.show_grid === false) rightParts.push("no grid");
       if (rightAxis.min !== undefined || rightAxis.max !== undefined) {
         const range = `${rightAxis.min ?? "auto"}-${rightAxis.max ?? "auto"}`;
         rightParts.push(range);

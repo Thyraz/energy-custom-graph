@@ -6514,7 +6514,7 @@ export class EnergyCustomGraphCard extends LitElement {
         min: minValue,
         max: maxValue,
         splitLine: {
-          show: true,
+          show: axisConfig?.show_grid !== false,
         },
         axisLabel: {
           formatter: (value: number) => this._formatNumber(value),
