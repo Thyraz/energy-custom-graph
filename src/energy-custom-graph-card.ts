@@ -5703,7 +5703,8 @@ export class EnergyCustomGraphCard extends LitElement {
           return existing;
         }
         return {
-          value: alignBarTuple([bucket, 0]),
+          // Reserve the bucket without forcing fitted Y axes to include zero.
+          value: alignBarTuple([bucket, null]),
           __energyCustomGraphBucketTimestamp: bucket,
           itemStyle: {
             ...baseItemStyle,

@@ -1354,6 +1354,10 @@ export class EnergyCustomGraphCardEditor
             (value) => this._updateAxisConfig(axisId, "show_grid", value)
           )}
         </div>
+        <p class="hint axis-hint">
+          Fit to data allows the Y axis to exclude zero. Explicit min/max values
+          and Center zero still take precedence.
+        </p>
       </div>
     `;
   }

@@ -447,7 +447,7 @@ Configure both left and right Y axes individually. The right axis appears automa
 | `id` | `"left"`, `"right"` | – | Axis selector to override (`left` is primary). |
 | `min` | number | auto | Minimum axis value. **Note:** Ignored when `center_zero` is active. |
 | `max` | number | auto | Maximum axis value. When `center_zero` is active, this value is used for both positive and negative bounds (e.g., `max: 10` creates range -10 to +10). |
-| `fit_y_data` | boolean | `false` | Force this axis to fit its data range tightly. |
+| `fit_y_data` | boolean | `false` | Allow the Y axis to exclude zero when fitting its data range. |
 | `center_zero` | boolean | `false` | Center the axis around zero by making min/max symmetric (e.g., -10 to +10). Useful for visualizing values from different y-axes with zero aligned. If `max` is not set, it will be calculated from the data. |
 | `logarithmic_scale` | boolean | `false` | Apply logarithmic scaling to this axis. |
 | `show_grid` | boolean | `true` | Show the horizontal grid lines of this axis. Set to `false` on one axis when two axes with different scales draw their grid lines at different heights. |
