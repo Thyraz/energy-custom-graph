@@ -229,6 +229,8 @@ export class EnergyCustomGraphCard extends LitElement {
   @state() private _isLoading = false;
   @state() private _chartData: SeriesOption[] = [];
   @state() private _chartOptions?: ECOption;
+  // Legend visibility toggled by the user (legend id -> visible).
+  private _legendVisibility = new Map<string, boolean>();
   @state() private _headerChip?: HeaderChipRender;
   @state() private _disabledMessage?: string;
   @state() private _usesSectionLayout = false;
@@ -4426,9 +4428,40 @@ export class EnergyCustomGraphCard extends LitElement {
           .options=${this._chartOptions}
           .height=${chartHeight}
           .expandLegend=${this._config?.expand_legend}
+          @dataset-hidden=${(ev: CustomEvent<{ id: string }>) =>
+            this._handleLegendToggle(ev.detail?.id, false)}
+          @dataset-unhidden=${(ev: CustomEvent<{ id: string }>) =>
+            this._handleLegendToggle(ev.detail?.id, true)}
         ></ha-chart-base>
       </div>
     `;
+  }
+
+  private _handleLegendToggle(id: string | undefined, visible: boolean): void {
+    if (!id) {
+      return;
+    }
+    this._legendVisibility.set(id, visible);
+    // Axes with data-derived fixed ranges must be recomputed for the visible series.
+    const axes = this._config?.y_axes ?? [];
+    if (this._config?.align_zero || axes.some((axis) => axis.center_zero)) {
+      this._generateChart();
+    }
+  }
+
+  private _isSeriesVisible(
+    seriesId: string | undefined,
+    config: EnergyCustomGraphSeriesConfig | undefined
+  ): boolean {
+    if (!seriesId) {
+      return true;
+    }
+    for (const [legendId, visible] of this._legendVisibility) {
+      if (seriesId === legendId || seriesId.startsWith(`${legendId}__`)) {
+        return visible;
+      }
+    }
+    return config?.hidden_by_default !== true;
   }
 
   private _generateChart(): void {
@@ -6315,7 +6348,7 @@ export class EnergyCustomGraphCard extends LitElement {
 
     const selected: Record<string, boolean> = {};
     sortedEntries.forEach((entry) => {
-      const isVisible = entry.hidden ? false : true;
+      const isVisible = this._legendVisibility.get(entry.id) ?? (entry.hidden ? false : true);
       selected[entry.id] = isVisible;
       const linked = groupedSecondaryIds.get(entry.id);
       linked?.forEach((secondaryId) => {
@@ -6348,7 +6381,9 @@ export class EnergyCustomGraphCard extends LitElement {
 
     const getDataRange = (axisIndex: number): { min: number; max: number } | undefined => {
       const relevantSeries = series.filter(
-        (s) => (s.yAxisIndex ?? 0) === axisIndex
+        (s) =>
+          (s.yAxisIndex ?? 0) === axisIndex &&
+          this._isSeriesVisible(s.id as string | undefined, seriesById.get(String(s.id ?? "")))
       );
 
       if (!relevantSeries.length) {
@@ -6530,7 +6565,106 @@ export class EnergyCustomGraphCard extends LitElement {
       yAxis.push(createAxis(rightConfig, 1));
     }
 
+    if (this._config?.align_zero && yAxis.length > 1) {
+      this._alignAxisZero(yAxis, [leftConfig, rightConfig], getDataRange, roundToNiceValue);
+    }
+
     return { yAxis, axisUnitByIndex };
+  }
+
+  /**
+   * Gives both y axes the same share below zero, so their zero lines match,
+   * while each axis still fits its own data (no symmetric range needed).
+   */
+  private _alignAxisZero(
+    yAxis: YAxisOption[],
+    configs: Array<EnergyCustomGraphAxisConfig | undefined>,
+    getDataRange: (axisIndex: number) => { min: number; max: number } | undefined,
+    roundToNiceValue: (value: number) => number
+  ): void {
+    const extents = yAxis.map((axis, index) => {
+      const config = configs[index];
+      if (config?.logarithmic_scale) {
+        return undefined;
+      }
+      const range = getDataRange(index);
+      const lo = Math.min(
+        config?.min ?? range?.min ?? 0,
+        range?.min ?? 0,
+        0
+      );
+      const hi = Math.max(config?.max ?? range?.max ?? 0, range?.max ?? 0, 0);
+      const negative = -lo;
+      const positive = hi;
+      if (negative + positive <= 0) {
+        return undefined;
+      }
+      return { negative, positive };
+    });
+
+    const valid = extents.filter((item): item is { negative: number; positive: number } => !!item);
+    if (valid.length < 2) {
+      return;
+    }
+    // Common share of the axis height below zero. Any share in (0, 1) keeps
+    // all data visible; pick the one that wastes the least height, so an
+    // all-negative axis does not squash an all-positive one.
+    const MAX_NEGATIVE_SHARE = 1 / 3;
+    const anyPositive = valid.some(({ positive }) => positive > 0);
+    let share = 0;
+    let bestScore = -Infinity;
+    for (let step = 0; step <= 100; step++) {
+      const candidate = step / 100;
+      // Keep the area below zero to at most a third when any axis has
+      // positive data; negative values are usually the secondary story.
+      if (anyPositive && candidate > MAX_NEGATIVE_SHARE) {
+        break;
+      }
+      const fits = valid.every(
+        ({ negative, positive }) =>
+          (negative === 0 || candidate > 0) && (positive === 0 || candidate < 1)
+      );
+      if (!fits) {
+        continue;
+      }
+      const score = Math.min(
+        ...valid.map(({ negative, positive }) => {
+          const total = Math.max(
+            candidate > 0 ? negative / candidate : 0,
+            candidate < 1 ? positive / (1 - candidate) : 0
+          );
+          return total > 0 ? (negative + positive) / total : 1;
+        })
+      );
+      if (score > bestScore + 1e-9) {
+        bestScore = score;
+        share = candidate;
+      }
+    }
+
+    extents.forEach((extent, index) => {
+      if (!extent) {
+        return;
+      }
+      const axis = yAxis[index] as YAxisOption & { min?: unknown; max?: unknown; scale?: boolean };
+      if (share >= 1) {
+        axis.min = -roundToNiceValue(extent.negative);
+        axis.max = 0;
+      } else if (share <= 0) {
+        axis.min = 0;
+        axis.max = roundToNiceValue(extent.positive);
+      } else {
+        const total = Math.max(extent.negative / share, extent.positive / (1 - share));
+        const max = roundToNiceValue((1 - share) * total);
+        const span = max / (1 - share);
+        axis.max = max;
+        axis.min = -share * span;
+        // The derived minimum is rarely a round number; hide its label.
+        const labelAxis = axis as YAxisOption & { axisLabel?: Record<string, unknown> };
+        labelAxis.axisLabel = { ...(labelAxis.axisLabel ?? {}), showMinLabel: false };
+      }
+      axis.scale = false;
+    });
   }
 
   private _evaluateHeaderChip(
