@@ -102,6 +102,8 @@ import type {
   XAxisOption,
 } from "./types/echarts";
 
+const NOW_MARKER_ID = "__now_marker";
+
 interface EnergyData {
   start: Date;
   end?: Date;
@@ -4953,6 +4955,8 @@ export class EnergyCustomGraphCard extends LitElement {
       (!hasExistingChartData && (extendMainToNow || extendCompareToNow));
 
     // Control animation explicitly: only animate when we decided to animate from zero
+    this._appendNowMarker(options, combinedSeries, currentStart, displayEnd, computedStyle);
+
     options.animation = shouldAnimateFromZero;
     this._chartOptions = options;
 
@@ -6973,12 +6977,64 @@ export class EnergyCustomGraphCard extends LitElement {
     this._log("warn", message, details);
   }
 
+  /**
+   * Draws a dashed vertical "now" line. HA's bundled ECharts has no markLine
+   * component, so the line is a two-point series on a hidden 0..1 y axis.
+   */
+  private _appendNowMarker(
+    options: ECOption,
+    series: SeriesOption[],
+    rangeStart: number,
+    rangeEnd: number | null,
+    computedStyle: CSSStyleDeclaration
+  ): void {
+    if (!this._config?.show_now_marker || !series.length) {
+      return;
+    }
+    const now = Date.now();
+    if (now < rangeStart || (rangeEnd !== null && now > rangeEnd)) {
+      return;
+    }
+    const yAxes = Array.isArray(options.yAxis)
+      ? options.yAxis
+      : options.yAxis
+        ? [options.yAxis]
+        : [];
+    yAxes.push({ id: NOW_MARKER_ID, type: "value", min: 0, max: 1, show: false } as YAxisOption);
+    options.yAxis = yAxes;
+    const color =
+      computedStyle.getPropertyValue("--primary-color").trim() ||
+      computedStyle.getPropertyValue("--primary-text-color").trim() ||
+      "#03a9f4";
+    series.push({
+      id: NOW_MARKER_ID,
+      name: NOW_MARKER_ID,
+      type: "line",
+      yAxisIndex: yAxes.length - 1,
+      data: [
+        [now, 0],
+        [now, 1],
+      ],
+      symbol: "none",
+      silent: true,
+      animation: false,
+      z: 1,
+      tooltip: { show: false },
+      lineStyle: { color, type: "dashed", width: 1, opacity: 0.9 },
+    } as SeriesOption);
+  }
+
   private _renderTooltip(params: unknown): HTMLElement | null {
     if (!Array.isArray(params) || !params.length) {
       return null;
     }
 
-    const items = params as Array<Record<string, any>>;
+    const items = (params as Array<Record<string, any>>).filter(
+      (item) => item?.seriesId !== NOW_MARKER_ID
+    );
+    if (!items.length) {
+      return null;
+    }
     const precision = this._config?.tooltip_precision ?? 2;
     const includeStackSums = this._config?.show_stack_sums === true;
 
