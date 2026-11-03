@@ -11,7 +11,8 @@ I know the `Statistics graph card` also supports the energy date picker nowadays
 - Displayed timespan sync with the energy date picker (`energy-date-selection`).
 - Supports any entity that exposes long-term statistics, as well as the short-term 'raw' history.
 - Can graph numeric entity attributes (e.g. a thermostat's `current_temperature`), aggregated from recorder history.
-- Solar forecast entities that are used in the energy dashboard can also be shown in the charts. 
+- Solar forecast entities that are used in the energy dashboard can also be shown in the charts.
+- Lists stored in an entity attribute (e.g. Nord Pool `raw_today` / `raw_tomorrow`, battery schedules) can be plotted, including future values. 
 - Allows to compute and display 'live' values for the current running hour before HA provides the final aggregation.
 - Uses Home Assistant's bundled ECharts runtime – no extra framework needs to be loaded.
 - Override the energy date pickers default aggregation periods, to e.g. display hourly instead of daily bars when viewing a monthly report.
@@ -264,7 +265,7 @@ Metric sources and calculation terms support `multiply`, `add`, `clip_min`, and 
 | --- | ---- | ------- | ----------- |
 | `id` | string | auto in editor | Stable identifier used by header metrics. YAML users should set this when referencing the series from `header.chip`. |
 | `name` | string | entity name | Display name shown in tooltip and legend. |
-| `source` | `"statistic"`, `"calculation"`, `"forecast"` | inferred | Data source type. When omitted the card can auto-detect the source based on the other fields for `statistic` and `calculation` signals. Use `forecast` to plot solar forecasts configured in the Energy dashboard. |
+| `source` | `"statistic"`, `"calculation"`, `"forecast"`, `"attribute_forecast"` | inferred | Data source type. When omitted the card can auto-detect the source based on the other fields for `statistic` and `calculation` signals. Use `forecast` to plot solar forecasts configured in the Energy dashboard. |
 | `statistic_id` | string | – | Entity with long term statistics (e.g. `sensor.entity_id`). Required unless series uses a `calculation` instead. |
 | `attribute` | string | – | Read values from this entity attribute instead of the entity state. See [Entity attribute series](#entity-attribute-series). |
 | `stat_type` | `"change"`, `"sum"`, `"mean"`, `"min"`, `"max"`, `"state"` | `"change"` (`"mean"` with `attribute`) | Statistic type to display for this entity. Not used when `calculation` is provided, as each subseries has it's own setting there. |
@@ -296,6 +297,13 @@ Metric sources and calculation terms support `multiply`, `add`, `clip_min`, and 
 | `clip_min` | number | – | Values will be set to this value if they are smaller. |
 | `clip_max` | number | – | Values will be set to this value if they are larger. |
 | `pv_production_entity` | string | – | (Forecast only) Sensor entity you configured as PV production in the Energy dashboard. Leave unset to sum all configured forecasts. |
+| `entity` | string | – | (Attribute list only) Entity that holds the list attribute(s). See [Attribute list series](#attribute-list-series). |
+| `attributes` | string or list | – | (Attribute list only) One or more list attributes. Entries are merged by time. |
+| `time_key` | string | auto | (Attribute list only) Key of the start time in each entry. Defaults to the first of `start`, `time`, `datetime`, `period_start`, `startsAt`, `start_time`. |
+| `end_key` | string | auto | (Attribute list only) Key of the end time. Defaults to `end` if present, otherwise the next entry's start. |
+| `value_key` | string | auto | (Attribute list only) Key of the value. Defaults to the first of `value`, `price`, `total`. |
+| `subtract_key` | string | – | (Attribute list only) Key whose value is subtracted from `value_key`, e.g. `charged` minus `discharged`. |
+| `unit` | string | entity unit | (Attribute list only) Unit shown in tooltips, e.g. after scaling with `multiply`. Defaults to the entity's `unit_of_measurement`. |
 
 #### Color thresholds
 
@@ -405,6 +413,55 @@ Each term accepts the following options:
 | `add` | number | `0` | Apply an additive offset after multiplication. |
 | `clip_min` | number | – | Values will be set to this value if they are smaller. |
 | `clip_max` | number | – | Values will be set to this value if they are larger. |
+
+#### Attribute list series
+
+Many integrations publish a time series as a list inside one attribute of an entity, often reaching into the future: electricity prices (Nord Pool `raw_today` / `raw_tomorrow`, Tibber, Energi Data Service), battery or EV charge schedules, and similar. Set `source: attribute_forecast` to plot such a list:
+
+```yaml
+type: custom:energy-custom-graph-card
+title: Electricity price today
+timespan:
+  mode: relative
+  period: day        # use offset: 1 for tomorrow
+aggregation:
+  manual: raw        # one bar per list entry; use hour to average per hour
+y_axes:
+  - id: left
+    unit: SEK/kWh
+  - id: right
+    unit: kW
+series:
+  - source: attribute_forecast
+    name: Price
+    entity: sensor.nordpool_kwh_se4_sek_3_10_025
+    attributes: [raw_today, raw_tomorrow]
+    chart_type: bar
+    color_thresholds:
+      - value: 0
+        color: "#12A141"
+      - value: 0.8
+        color: "#F3DC0C"
+      - value: 1.5
+        color: "#DC182F"
+  - source: attribute_forecast
+    name: Battery plan
+    entity: sensor.battery_schedule
+    attributes: forecast
+    time_key: time
+    value_key: charged
+    subtract_key: discharged   # charging positive, discharging negative
+    multiply: 0.001            # W -> kW
+    chart_type: step
+    y_axis: right
+```
+
+- Values are read from the entity's current state, not from the recorder, so they are independent of `purge_keep_days` and can lie in the future. Past entries are only shown while they are still in the list.
+- The chart updates whenever the entity changes.
+- Each entry needs a parseable time (ISO string or epoch seconds/milliseconds) and a numeric value (numbers or numeric strings, decimal comma allowed). Other entries are skipped.
+- With the `raw` aggregation interval every entry is one point. With `5minute`, `hour`, `day`, … entries are grouped per interval: `mean` (default) is time-weighted, `sum` / `change` add up the entries, `min` / `max` are the extremes and `state` is the last entry.
+- The unit is taken from the entity's `unit_of_measurement`; set the series `unit` or `y_axes[].unit` to override it.
+- `multiply`, `add`, `clip_min`, `clip_max`, `color_thresholds` and all display options work as for other series. `time_offset` and the compare feature are not supported.
 
 #### Solar forecast series
 
