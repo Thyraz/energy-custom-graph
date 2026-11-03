@@ -5070,31 +5070,9 @@ export class EnergyCustomGraphCard extends LitElement {
       }
     }
 
-    return end
-      ? this._computeSuggestedXAxisMax(start, end)
-      : (fallbackEnd ?? start.getTime());
-  }
-
-  private _computeSuggestedXAxisMax(start: Date, end: Date): number {
-    const dayDifference = differenceInDays(end, start);
-    let suggestedMax = new Date(end);
-
-    if (dayDifference > 2 && suggestedMax.getHours() === 0) {
-      suggestedMax = subHours(suggestedMax, 1);
-    }
-
-    if (dayDifference > 2) {
-      suggestedMax.setMinutes(0, 0, 0);
-    }
-
-    if (dayDifference > 35) {
-      suggestedMax.setDate(1);
-    }
-    if (dayDifference > 2) {
-      suggestedMax.setHours(0);
-    }
-
-    return suggestedMax.getTime();
+    // A long timespan can still use fine-grained statistics or raw history.
+    // Rounding its end down to a day/month would hide already loaded values.
+    return end?.getTime() ?? fallbackEnd ?? start.getTime();
   }
 
   private _normalizeLineSeries(
