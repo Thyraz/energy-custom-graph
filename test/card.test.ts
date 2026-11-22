@@ -38,6 +38,7 @@ interface CardState {
   _getRoundedNow(period: string): Date;
   _resolvePeriod(): { start: Date; end?: Date } | undefined;
   _generateChart(): void;
+  _formatDateTime(date: Date, period?: StatisticsPeriod | "raw" | "disabled"): string;
 }
 
 const HOUR = 60 * 60 * 1000;
@@ -248,4 +249,24 @@ test("monthly and yearly aggregation keep the final calendar bucket visible", as
     const max = await renderTimespan(range, period, "bar", lastPoint);
     assert.equal(max, lastPoint.getTime());
   }
+});
+
+
+test("tooltip headers use the bucket precision in the configured time zone", async () => {
+  const card = await generate([1]);
+  Object.assign(card, {
+    hass: { locale: { language: "en-US", time_zone: "server" }, config: { time_zone: "America/New_York" }, states: {} },
+  });
+  const at = new Date("2026-01-01T00:30:00Z");
+  const format = (options: Intl.DateTimeFormatOptions) =>
+    new Intl.DateTimeFormat("en-US", { ...options, timeZone: "America/New_York" }).format(at);
+  const date = { year: "numeric", month: "short", day: "numeric" } as const;
+  for (const period of ["raw", "5minute", "hour"] as const) {
+    assert.equal(card._formatDateTime(at, period), format({ ...date, hour: "numeric", minute: "2-digit" }));
+  }
+  for (const period of ["day", "week"] as const) {
+    assert.equal(card._formatDateTime(at, period), format(date));
+  }
+  assert.equal(card._formatDateTime(at, "month"), format({ month: "long", year: "numeric" }));
+  assert.equal(card._formatDateTime(at, "year"), format({ year: "numeric" }));
 });
