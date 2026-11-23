@@ -7180,7 +7180,7 @@ export class EnergyCustomGraphCard extends LitElement {
         this._computeCompareOriginalTimestamp(firstCompareBucket);
       const compareDate = toDate(compareTimestamp);
       if (compareDate) {
-        groupData.compare.header = this._formatDateTime(compareDate);
+        groupData.compare.header = this._formatDateTime(compareDate, this._statisticsPeriodCompare);
       }
     }
 
@@ -7188,7 +7188,7 @@ export class EnergyCustomGraphCard extends LitElement {
     const headerDate =
       headerBucket !== undefined ? toDate(headerBucket) : undefined;
     const globalHeader = headerDate
-      ? this._formatDateTime(headerDate)
+      ? this._formatDateTime(headerDate, this._statisticsPeriod)
       : undefined;
 
     const root = document.createElement("div");
@@ -7383,7 +7383,20 @@ export class EnergyCustomGraphCard extends LitElement {
     return this._formatDatePart(new Date(value), { year: "numeric" });
   }
 
-  private _formatDateTime(date: Date): string {
+  private _formatDateTime(
+    date: Date,
+    period?: StatisticsPeriod | "raw" | "disabled"
+  ): string {
+    switch (period) {
+      case "day":
+      case "week":
+        return this._formatDatePart(date, { year: "numeric", month: "short", day: "numeric" });
+      case "month":
+        return this._formatDatePart(date, { month: "long", year: "numeric" });
+      case "year":
+        return this._formatXAxisYearLabel(date.getTime());
+    }
+
     const { locale, timeZone } = this._getDateTimeFormatterContext();
 
     try {
