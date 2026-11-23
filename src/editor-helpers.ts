@@ -267,6 +267,7 @@ export const convertSeriesToCalculation = (
   };
   delete next.statistic_id;
   delete next.attribute;
+  stripAttributeForecastKeys(next);
   delete next.stat_type;
   delete next.pv_production_entity;
   return next;
@@ -286,6 +287,7 @@ export const convertSeriesToStatistic = (
   delete next.source;
   delete next.calculation;
   delete next.pv_production_entity;
+  stripAttributeForecastKeys(next);
   if (soleEntityTerm?.statistic_id) {
     next.statistic_id = soleEntityTerm.statistic_id.trim();
     next.stat_type = soleEntityTerm.stat_type;
@@ -303,6 +305,36 @@ export const convertSeriesToStatistic = (
   return next;
 };
 
+const ATTRIBUTE_FORECAST_KEYS = [
+  "entity",
+  "attributes",
+  "time_key",
+  "end_key",
+  "value_key",
+  "subtract_key",
+] as const;
+
+const stripAttributeForecastKeys = (series: EnergyCustomGraphSeriesConfig) => {
+  ATTRIBUTE_FORECAST_KEYS.forEach((key) => {
+    delete series[key];
+  });
+};
+
+export const cleanSeriesForAttributeForecast = (
+  series: EnergyCustomGraphSeriesConfig
+): EnergyCustomGraphSeriesConfig => {
+  const next: EnergyCustomGraphSeriesConfig = {
+    ...series,
+    source: "attribute_forecast",
+  };
+  delete next.statistic_id;
+  delete next.attribute;
+  delete next.calculation;
+  delete next.time_offset;
+  delete next.pv_production_entity;
+  return next;
+};
+
 export const cleanSeriesForForecast = (
   series: EnergyCustomGraphSeriesConfig
 ): EnergyCustomGraphSeriesConfig => {
@@ -315,5 +347,6 @@ export const cleanSeriesForForecast = (
   delete next.stat_type;
   delete next.calculation;
   delete next.time_offset;
+  stripAttributeForecastKeys(next);
   return next;
 };

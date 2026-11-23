@@ -66,7 +66,7 @@ export interface ResolvedSeriesData {
   id: string;
   chartSeriesId: string;
   name: string;
-  source: "statistic" | "calculation" | "forecast";
+  source: "statistic" | "calculation" | "forecast" | "attribute_forecast";
   config: EnergyCustomGraphSeriesConfig;
   data: [number, number | null][];
   unit?: string | null;
@@ -434,11 +434,19 @@ export const buildSeries = ({
   };
 
   configSeries.forEach((seriesConfig, index) => {
-    const source: "statistic" | "calculation" | "forecast" =
+    const rawSource: "statistic" | "calculation" | "forecast" | "attribute_forecast" =
       seriesConfig.source ?? (seriesConfig.calculation ? "calculation" : "statistic");
-    if (source === "forecast" && skipForecastSeries) {
+    if (rawSource === "forecast" && skipForecastSeries) {
       return;
     }
+    if (rawSource === "attribute_forecast" && skipForecastSeries) {
+      return;
+    }
+    const isAttributeForecast = rawSource === "attribute_forecast";
+    // Attribute forecasts share the forecast data path.
+    const source: "statistic" | "calculation" | "forecast" = isAttributeForecast
+      ? "forecast"
+      : rawSource;
 
     const statisticId =
       source === "statistic"
@@ -448,7 +456,7 @@ export const buildSeries = ({
     const forecastKey = source === "forecast" ? getForecastKey(index) : undefined;
     const statType =
       seriesConfig.stat_type ??
-      (statisticId && seriesConfig.attribute?.trim()
+      ((statisticId && seriesConfig.attribute?.trim()) || isAttributeForecast
         ? DEFAULT_ATTRIBUTE_STAT_TYPE
         : "change");
     const chartType = seriesConfig.chart_type ?? "bar";

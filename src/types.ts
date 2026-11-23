@@ -56,7 +56,11 @@ export interface EnergyCustomGraphCalculationConfig {
   unit?: string | null;
 }
 
-export type EnergyCustomGraphSeriesSource = "statistic" | "calculation" | "forecast";
+export type EnergyCustomGraphSeriesSource =
+  | "statistic"
+  | "calculation"
+  | "forecast"
+  | "attribute_forecast";
 
 export type EnergyCustomGraphTimeOffsetUnit =
   | "hour"
@@ -110,6 +114,20 @@ export interface EnergyCustomGraphSeriesConfig {
   clip_max?: number;
   time_offset?: EnergyCustomGraphTimeOffsetConfig;
   pv_production_entity?: string;
+  /** (attribute_forecast) Entity that holds the list attribute(s). */
+  entity?: string;
+  /** (attribute_forecast) One or more list attributes, merged by time. */
+  attributes?: string | string[];
+  /** (attribute_forecast) Key of the start time in each list entry. */
+  time_key?: string;
+  /** (attribute_forecast) Optional key of the end time in each list entry. */
+  end_key?: string;
+  /** (attribute_forecast) Key of the value in each list entry. */
+  value_key?: string;
+  /** (attribute_forecast) Optional key whose value is subtracted from value_key. */
+  subtract_key?: string;
+  /** (attribute_forecast) Unit override; defaults to the entity's unit_of_measurement. */
+  unit?: string | null;
 }
 
 export interface EnergyCustomGraphHeaderSeriesMetricConfig

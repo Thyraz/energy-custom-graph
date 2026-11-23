@@ -38,6 +38,7 @@ import {
 } from "./data/statistics";
 import {
   aggregationUsesRaw,
+  cleanSeriesForAttributeForecast,
   cleanSeriesForForecast,
   cloneSeriesForDuplicate,
   convertSeriesToCalculation,
@@ -54,6 +55,7 @@ import {
   type EditorIssue,
   type StatisticSourceResolution,
 } from "./editor-helpers";
+import { normalizeAttributeForecastAttributes } from "./data/attribute-forecast";
 
 const ENERGY_COLOR_PRESETS: Array<{ label: string; value: string }> = [
   { label: "Grid Import • Blue", value: "--energy-grid-consumption-color" },
@@ -440,7 +442,7 @@ export class EnergyCustomGraphCardEditor
     });
   }
 
-  private _resolveSeriesSource(series: EnergyCustomGraphSeriesConfig): "statistic" | "calculation" | "forecast" {
+  private _resolveSeriesSource(series: EnergyCustomGraphSeriesConfig): "statistic" | "calculation" | "forecast" | "attribute_forecast" {
     return resolveSeriesSource(series);
   }
 
@@ -574,7 +576,9 @@ export class EnergyCustomGraphCardEditor
             ? "calculation"
             : series.source === "forecast"
               ? "forecast"
-              : "series")
+              : series.source === "attribute_forecast"
+                ? series.entity?.split(".").pop() ?? "attribute_forecast"
+                : "series")
       ) || `series_${index + 1}`;
     let candidate = base;
     let suffix = 2;
@@ -1100,6 +1104,16 @@ export class EnergyCustomGraphCardEditor
     const source = this._resolveSeriesSource(series);
     if (source === "forecast") {
       return undefined;
+    }
+    if (source === "attribute_forecast") {
+      return series.entity?.trim() &&
+        normalizeAttributeForecastAttributes(series.attributes).length
+        ? undefined
+        : {
+            severity: "warning",
+            cause: "No entity or list attribute set.",
+            action: "Set an entity and at least one list attribute.",
+          };
     }
     if (source === "calculation") {
       const terms = series.calculation?.terms ?? [];
@@ -2244,6 +2258,9 @@ export class EnergyCustomGraphCardEditor
     if (source === "forecast") {
       return true;
     }
+    if (source === "attribute_forecast") {
+      return Boolean(series.entity?.trim());
+    }
     return Boolean(normalizeStatisticId(series.statistic_id));
   }
 
@@ -2254,6 +2271,9 @@ export class EnergyCustomGraphCardEditor
     }
     if (source === "forecast") {
       return html`<ha-icon icon="mdi:solar-power-variant-outline"></ha-icon>`;
+    }
+    if (source === "attribute_forecast") {
+      return html`<ha-icon icon="mdi:chart-timeline-variant"></ha-icon>`;
     }
     const statisticId = normalizeStatisticId(series.statistic_id);
     const stateObj = statisticId ? this.hass?.states?.[statisticId] : undefined;
@@ -2447,6 +2467,12 @@ export class EnergyCustomGraphCardEditor
         ? `Forecast · ${series.pv_production_entity}`
         : "Forecast · all solar forecasts";
     }
+    if (source === "attribute_forecast") {
+      const attrs = normalizeAttributeForecastAttributes(series.attributes).join(", ");
+      return series.entity
+        ? `Attribute list · ${series.entity}${attrs ? ` (${attrs})` : ""}`
+        : "Attribute list · no entity";
+    }
     const id = normalizeStatisticId(series.statistic_id);
     if (!id) {
       return "No entity selected";
@@ -2616,10 +2642,11 @@ export class EnergyCustomGraphCardEditor
 
   private _renderSeriesSourceGroup(series: EnergyCustomGraphSeriesConfig, index: number) {
     const source = this._resolveSeriesSource(series);
-    const buttons: Array<{ value: "statistic" | "calculation" | "forecast"; label: string }> = [
+    const buttons: Array<{ value: "statistic" | "calculation" | "forecast" | "attribute_forecast"; label: string }> = [
       { value: "statistic", label: "Entity" },
       { value: "calculation", label: "Calculation" },
       { value: "forecast", label: "Forecast" },
+      { value: "attribute_forecast", label: "Attribute list" },
     ];
     return html`
       <div class="section series-source-body">
@@ -2632,7 +2659,9 @@ export class EnergyCustomGraphCardEditor
             ? this._renderSeriesCalculationContent(series, index)
             : source === "forecast"
               ? this._renderSeriesForecastContent(series, index)
-              : this._renderSeriesStatisticContent(series, index)}
+              : source === "attribute_forecast"
+                ? this._renderSeriesAttributeForecastContent(series, index)
+                : this._renderSeriesStatisticContent(series, index)}
           ${this._renderSeriesSourceMore(series, index)}
       </div>
     `;
@@ -2790,6 +2819,49 @@ export class EnergyCustomGraphCardEditor
           this._updateSeriesNumber(index, "value_label_precision", value),
       }),
     });
+  }
+
+  private _renderSeriesAttributeForecastContent(
+    series: EnergyCustomGraphSeriesConfig,
+    index: number
+  ) {
+    const attributes = normalizeAttributeForecastAttributes(series.attributes);
+    const textField = (
+      label: string,
+      key: "time_key" | "end_key" | "value_key" | "subtract_key",
+      helper: string
+    ) =>
+      this._renderTextInput({
+        label,
+        value: series[key] ?? "",
+        helper,
+        onInput: (value) => this._updateSeries(index, key, value.trim() || undefined),
+      });
+    return html`
+      <p class="hint">
+        Plot a list stored in an entity attribute, e.g. Nord Pool <code>raw_today</code> /
+        <code>raw_tomorrow</code> or a battery schedule. Values can lie in the future.
+      </p>
+      ${this._renderTextInput({
+        label: "Entity",
+        value: series.entity ?? "",
+        helper: "Entity ID, e.g. sensor.nordpool_kwh_se4_sek_3_10_025",
+        onInput: (value) => this._updateSeries(index, "entity", value.trim() || undefined),
+      })}
+      ${this._renderTextInput({
+        label: "Attributes",
+        value: attributes.join(", "),
+        helper: "Comma separated list attributes, merged by time",
+        onInput: (value) => {
+          const list = normalizeAttributeForecastAttributes(value.split(","));
+          this._updateSeries(index, "attributes", list.length ? list : undefined);
+        },
+      })}
+      ${textField("Time key", "time_key", "Default: start, time, datetime, …")}
+      ${textField("Value key", "value_key", "Default: value, price, total")}
+      ${textField("Subtract key", "subtract_key", "Optional; subtracted from the value")}
+      ${textField("End time key", "end_key", "Optional; defaults to the next entry's start")}
+    `;
   }
 
   private _renderSeriesForecastContent(series: EnergyCustomGraphSeriesConfig, index: number) {
@@ -4031,7 +4103,7 @@ export class EnergyCustomGraphCardEditor
     this._updateSeries(index, "line_style", style);
   }
 
-  private _setSeriesSource(index: number, mode: "statistic" | "calculation" | "forecast") {
+  private _setSeriesSource(index: number, mode: "statistic" | "calculation" | "forecast" | "attribute_forecast") {
     const series = this._config!.series ?? [];
     const current = series[index];
     if (!current) {
@@ -4048,6 +4120,11 @@ export class EnergyCustomGraphCardEditor
     }
     if (mode === "forecast") {
       this._replaceSeries(index, cleanSeriesForForecast(current));
+      this._setSeriesOptionGroupExpanded(index, "source", true);
+      return;
+    }
+    if (mode === "attribute_forecast") {
+      this._replaceSeries(index, cleanSeriesForAttributeForecast(current));
       this._setSeriesOptionGroupExpanded(index, "source", true);
       return;
     }
