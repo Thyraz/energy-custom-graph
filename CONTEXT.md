@@ -136,6 +136,14 @@ _Avoid_: Text field, header value
 A scalar value shown in a header chip, based on chart data or an entity state.
 _Avoid_: Summary value, template text
 
+**Entity-state header metric**:
+A header metric based on an entity's current value, independently of the chart's timespan.
+_Avoid_: Entity mode, live series
+
+**Header calculation**:
+A header metric that combines scalar values from series, stacks, current entity states, or constants.
+_Avoid_: Calculation chip, calculation series
+
 **Editor help hint**:
 A short help explanation for one card editor option, shown beside the option instead of as README-only documentation.
 _Avoid_: Tooltip, inline documentation

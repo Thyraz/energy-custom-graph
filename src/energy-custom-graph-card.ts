@@ -413,7 +413,7 @@ export class EnergyCustomGraphCard extends LitElement {
         return true;
       }
 
-      // Only update on meaningful hass changes, not state updates
+      // Update for global Home Assistant changes.
       if (
         oldHass.connected !== this.hass?.connected ||
         oldHass.themes !== this.hass?.themes ||
@@ -423,8 +423,10 @@ export class EnergyCustomGraphCard extends LitElement {
         return true;
       }
 
-      // Ignore hass.states updates (sensor value changes)
-      return false;
+      // Ignore unrelated state updates, but keep entity-state header metrics live.
+      return this._getHeaderMetricEntityIds().some(
+        (entityId) => oldHass.states[entityId] !== this.hass?.states[entityId]
+      );
     }
 
     // Update for any other property changes
@@ -4262,7 +4264,7 @@ export class EnergyCustomGraphCard extends LitElement {
       changedProps.has("_config") ||
       changedProps.has("_forecastSeriesData") ||
       changedProps.has("_forecastSeriesDataCompare") ||
-      (changedProps.has("hass") && this._headerMetricUsesEntityState())
+      (changedProps.has("hass") && this._getHeaderMetricEntityIds().length > 0)
     ) {
       this._generateChart();
     }
@@ -6539,19 +6541,18 @@ export class EnergyCustomGraphCard extends LitElement {
     };
   }
 
-  private _headerMetricUsesEntityState(
+  private _getHeaderMetricEntityIds(
     metric: EnergyCustomGraphHeaderMetricConfig | undefined =
       this._config?.header?.chip?.metric
-  ): boolean {
+  ): string[] {
     if (!metric) {
-      return false;
+      return [];
     }
-    if ("calculation" in metric) {
-      return (metric.calculation.terms ?? []).some(
-        (term) => term.source === "entity_state"
-      );
-    }
-    return metric.source === "entity_state";
+    const inputs = "calculation" in metric ? metric.calculation.terms ?? [] : [metric];
+    return inputs.flatMap((input) => {
+      const entityId = input.source === "entity_state" ? input.entity_id?.trim() : undefined;
+      return entityId ? [entityId] : [];
+    });
   }
 
   private _evaluateHeaderMetric(
