@@ -6487,7 +6487,7 @@ export class EnergyCustomGraphCard extends LitElement {
         name: axisConfig?.unit,
         nameGap: axisConfig?.unit ? 2 : 0,
         nameTextStyle: {
-          align: "left",
+          align: index === 0 ? "left" : "right",
         },
         position: index === 0 ? "left" : "right",
         min: minValue,
