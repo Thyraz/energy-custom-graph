@@ -3,6 +3,7 @@ import { test } from "node:test";
 import type {
   EnergyCustomGraphCardConfig,
   EnergyCustomGraphChartType,
+  EnergyCustomGraphSeriesConfig,
   EnergyCustomGraphTimespanConfig,
 } from "../src/types";
 import type { Statistics, StatisticsPeriod } from "../src/data/statistics";
@@ -57,6 +58,8 @@ const generate = async (
   values: Array<number | undefined>,
   options: {
     compare?: number[];
+    compareData?: Statistics;
+    series?: EnergyCustomGraphSeriesConfig[];
     axis?: Record<string, unknown>;
     chartType?: EnergyCustomGraphChartType;
     period?: StatisticsPeriod | "raw";
@@ -86,7 +89,7 @@ const generate = async (
   Object.assign(state, {
     _config: {
       type: "custom:energy-custom-graph-card",
-      series: [{ id: "main", statistic_id: "sensor.test", chart_type: options.chartType ?? "bar" }],
+      series: options.series ?? [{ id: "main", statistic_id: "sensor.test", chart_type: options.chartType ?? "bar" }],
       y_axes: [{ id: "left", fit_y_data: true, ...options.axis }],
       show_tooltip: false,
       show_x_axis_pointer: false,
@@ -101,13 +104,13 @@ const generate = async (
     _lastRenderedRange: { start, end },
     _chartData: [{ type: "line", data: [] }],
   });
-  if (options.compare) {
+  if (options.compare || options.compareData) {
     const compareStart = START - 24 * HOUR;
     const compareEnd = END - 24 * HOUR;
     Object.assign(state, {
       _comparePeriodStart: new Date(compareStart),
       _comparePeriodEnd: new Date(compareEnd),
-      _statisticsCompare: statistics(options.compare, compareStart),
+      _statisticsCompare: options.compareData ?? statistics(options.compare!, compareStart),
       _metadataCompare: {},
       _statisticsRangeCompare: { start: compareStart, end: compareEnd },
       _statisticsPeriodCompare: "hour",
@@ -148,6 +151,118 @@ test("compare timespan bars keep their values and separate stack", async () => {
   const main = card._chartData.find((series) => series.id === "main")!;
   const compare = card._chartData.find((series) => series.id === "main--compare")!;
   assert.notEqual(main.stack, compare.stack);
+});
+
+const assertDrawOrder = (card: CardState, ids: string[]) => {
+  let previousZ = 0;
+  for (const id of ids) {
+    const series = card._chartData.find((item) => item.id === id);
+    assert.ok(series, `missing series ${id}`);
+    assert.ok(
+      typeof series.z === "number" && series.z > previousZ,
+      `${id} must be in front of the preceding series (z=${series.z}, previous=${previousZ})`
+    );
+    previousZ = series.z;
+  }
+};
+
+const withCompare = (ids: string[]) => ids.flatMap((id) => [`${id}--compare`, id]);
+
+const chartSeries = (
+  id: string,
+  chart_type: EnergyCustomGraphChartType,
+  options: Partial<EnergyCustomGraphSeriesConfig> = {}
+): EnergyCustomGraphSeriesConfig => ({ id, name: id, statistic_id: "sensor.test", chart_type, ...options });
+
+test("mixed bars, lines, and steps follow editor draw order on both Y axes", async () => {
+  const series = [
+    ...["solar", "grid", "battery"].map((id) => chartSeries(id, "bar", { stack: "energy" })),
+    chartSeries("load", "line", { y_axis: "right" }),
+    chartSeries("reference", "step"),
+    ...Array.from({ length: 8 }, (_, index) => chartSeries(`extra-${index}`, index % 2 ? "line" : "bar")),
+  ];
+  for (const ordered of [series, [...series].reverse()]) {
+    const card = await generate([3, 4, 5], { series: ordered });
+    assertDrawOrder(card, ordered.map((item) => item.id!));
+  }
+});
+
+test("compare stays behind its own series and ahead of earlier editor positions", async () => {
+  const series = [
+    chartSeries("bar", "bar"),
+    chartSeries("line", "line", { y_axis: "right" }),
+    chartSeries("step", "step"),
+    chartSeries("last-bar", "bar"),
+  ];
+  const card = await generate([3, 4, 5], { series, compare: [6, 7, 8] });
+  assertDrawOrder(card, withCompare(series.map((item) => item.id!)));
+});
+
+test("line stacks reverse only their own draw positions without changing stack input order", async () => {
+  const series = [
+    chartSeries("before", "bar"),
+    chartSeries("a1", "line", { stack: "a" }),
+    chartSeries("between", "line"),
+    chartSeries("a2", "step", { stack: "a" }),
+    chartSeries("b1", "line", { stack: "b" }),
+    chartSeries("b2", "line", { stack: "b" }),
+    chartSeries("right", "line", { stack: "a", y_axis: "right" }),
+    chartSeries("after", "bar"),
+  ];
+  const card = await generate([3, 0, 5], { series, compare: [6, 0, 8] });
+  assertDrawOrder(card, withCompare(["before", "a2", "between", "a1", "b2", "b1", "right", "after"]));
+  assert.deepEqual(
+    card._chartData.filter((item) => series.some((config) => config.id === item.id)).map((item) => item.id),
+    series.map((item) => item.id)
+  );
+});
+
+test("interleaved bar stack members keep individual draw positions including compare", async () => {
+  const series = [
+    chartSeries("a1", "bar", { stack: "a" }),
+    chartSeries("between", "line"),
+    chartSeries("a2", "bar", { stack: "a" }),
+    chartSeries("after", "step"),
+  ];
+  const card = await generate([3, 4, 5], { series, compare: [6, 7, 8] });
+  assertDrawOrder(card, withCompare(series.map((item) => item.id!)));
+});
+
+test("fill bands and their compare variants stay within the source draw position", async () => {
+  const source = chartSeries("source", "line", { fill_to_series: "target", statistic_id: "sensor.upper" });
+  const target = chartSeries("target", "line");
+  const between = chartSeries("between", "bar");
+  const data = { ...statistics([2, 3, 4]), "sensor.upper": statistics([5, 6, 7])["sensor.test"] };
+  const compareStart = START - 24 * HOUR;
+  const compareData = {
+    ...statistics([2, 3, 4], compareStart),
+    "sensor.upper": statistics([5, 6, 7], compareStart)["sensor.test"],
+  };
+  for (const series of [[source, between, target], [target, between, source]]) {
+    const card = await generate([], { series, data, compareData });
+    assertDrawOrder(card, series.flatMap(({ id }) => id === "source"
+      ? ["source__fill_base--compare", "source__fill_area--compare", "source--compare", "source__fill_base", "source__fill_area", "source"]
+      : [`${id}--compare`, id!]
+    ));
+  }
+});
+
+test("compare-only bars retain their configured position when main data is missing", async () => {
+  const missing = chartSeries("missing", "bar", { statistic_id: "sensor.missing" });
+  const line = chartSeries("line", "line");
+  const compareStart = START - 24 * HOUR;
+  const compareData = {
+    ...statistics([6, 7, 8], compareStart),
+    "sensor.missing": statistics([2, 3, 4], compareStart)["sensor.test"],
+  };
+  for (const series of [[missing, line], [line, missing]]) {
+    const card = await generate([3, 4, 5], { series, compareData });
+    assertDrawOrder(card, series.flatMap(({ id }) => id === "missing"
+      ? ["missing--compare"]
+      : ["line--compare", "line"]
+    ));
+    assert.ok(!card._chartData.some((item) => item.id === "missing"));
+  }
 });
 
 test("fit to data preserves explicit Y axis bounds", async () => {

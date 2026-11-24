@@ -84,6 +84,9 @@ export const DEFAULT_COLORS = [
 ];
 
 export const BAR_MAX_WIDTH = 50;
+// Keep all series above the grid. Fractional offsets below each position
+// leave room for its compare series, fill band, and layout placeholder.
+export const SERIES_Z_BASE = 10;
 const BAR_FILL_ALPHA = 0.5;
 const LINE_AREA_ALPHA = 0.15;
 const LINE_GRADIENT_STRONG_ALPHA = 0.75;
@@ -671,7 +674,7 @@ export const buildSeries = ({
         data: dataPoints,
         stack: seriesConfig.stack,
         yAxisIndex: seriesConfig.y_axis === "right" ? 1 : 0,
-        z: stackedLineZByIndex.get(index) ?? index,
+        z: SERIES_Z_BASE + (stackedLineZByIndex.get(index) ?? index),
         emphasis: {
           focus: "series",
           itemStyle: {
@@ -803,7 +806,7 @@ export const buildSeries = ({
         stack: seriesConfig.stack,
         data: barData,
         yAxisIndex: seriesConfig.y_axis === "right" ? 1 : 0,
-        z: index,
+        z: SERIES_Z_BASE + index,
         emphasis: {
           focus: "series",
           itemStyle: {
@@ -965,23 +968,12 @@ export const buildSeries = ({
       );
     }
 
-    const defaultLineZ = 2;
     const sourceLineZ =
       typeof sourceMeta.series.z === "number"
         ? sourceMeta.series.z
-        : defaultLineZ;
-    const targetLineZ =
-      typeof targetMeta.series.z === "number"
-        ? targetMeta.series.z
-        : defaultLineZ;
-    let areaZ = sourceLineZ - 0.1;
-    if (areaZ < 0) {
-      areaZ = sourceLineZ + 0.1;
-    }
-    let baseZ = Math.min(areaZ - 0.01, targetLineZ - 0.1);
-    if (baseZ < 0) {
-      baseZ = Math.max(areaZ - 0.02, 0);
-    }
+        : SERIES_Z_BASE;
+    const areaZ = sourceLineZ - 0.1;
+    const baseZ = areaZ - 0.01;
 
     const baseSeries: LineSeriesOption = {
       id: baseId,

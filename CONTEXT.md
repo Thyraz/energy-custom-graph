@@ -212,12 +212,16 @@ _Avoid_: Period, aggregation period
 The secondary timespan aligned with the primary timespan when Home Assistant's compare toggle is active.
 _Avoid_: Compare period, comparison range
 
+**Compare series**:
+A series showing values from the compare timespan at the corresponding chart positions. It shares the draw-order position of its main series and appears behind it.
+_Avoid_: Comparison series, previous series
+
 **Stack sum**:
 A tooltip total for positive or negative values across visible series in the same stack.
 _Avoid_: Aggregate
 
 **Fill band**:
-The shaded area between a source line series and a target line series.
+The shaded area between a source line series and a target line series. It shares its source series' draw-order position and appears behind that line; the target series retains its independent draw-order position.
 _Avoid_: Fill stack
 
 **Gradient fill**:
@@ -229,5 +233,5 @@ A user-configured group where series values are visually accumulated.
 _Avoid_: Fill stack
 
 **Draw order**:
-The visual layering order for overlapping series in the chart; it does not change series values or stack calculation.
+The visual layering order for overlapping series in the chart; it does not change series values or stack calculation. An unrelated series can appear between members of the same stack.
 _Avoid_: Stack, z-index

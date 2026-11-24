@@ -89,6 +89,7 @@ import {
   buildSeries,
   ECHARTS_DEFAULT_AREA_OPACITY,
   resolveThresholdColor,
+  SERIES_Z_BASE,
   type ColorThresholdPiece,
   type ResolvedColorThresholds,
   type ResolvedSeriesData,
@@ -4519,8 +4520,6 @@ export class EnergyCustomGraphCard extends LitElement {
     const normalizedBarStacks = new Map<string, string>();
     const placeholderByBase = new Map<string, BarSeriesOption>();
     const barStackOrder: string[] = [];
-    const barStackZByBase = new Map<string, number>();
-    const BAR_Z_BASE = 10;
     let generatedBarStackCounter = 0;
 
     const getBaseKeyForBar = (rawStack?: string): string => {
@@ -4538,7 +4537,7 @@ export class EnergyCustomGraphCard extends LitElement {
     };
 
     const ensurePlaceholder = (baseKey: string, baseZ: number) => {
-      const placeholderZ = Math.max(baseZ - 3, 0);
+      const placeholderZ = Math.max(baseZ - 0.75, 0);
       const existing = placeholderByBase.get(baseKey);
       if (existing) {
         existing.stack = `${baseKey}--current`;
@@ -4579,17 +4578,8 @@ export class EnergyCustomGraphCard extends LitElement {
           : undefined;
       const baseKey = getBaseKeyForBar(rawStack);
       barStackBaseById.set(id, baseKey);
-      const baseZCandidate =
-        typeof serie.z === "number" && Number.isFinite(serie.z)
-          ? Math.max(serie.z, BAR_Z_BASE)
-          : BAR_Z_BASE;
-      const resolvedBaseZ = barStackZByBase.has(baseKey)
-        ? Math.max(barStackZByBase.get(baseKey)!, baseZCandidate)
-        : baseZCandidate;
-      serie.z = resolvedBaseZ;
       serie.stack = `${baseKey}--current`;
-      barStackZByBase.set(baseKey, resolvedBaseZ);
-      ensurePlaceholder(baseKey, resolvedBaseZ);
+      ensurePlaceholder(baseKey, serie.z ?? SERIES_Z_BASE);
     });
 
     let compareSeries: SeriesOption[] = [];
@@ -4702,25 +4692,13 @@ export class EnergyCustomGraphCard extends LitElement {
                 : undefined;
             baseKey = getBaseKeyForBar(rawStack);
             barStackBaseById.set(baseId, baseKey);
-            const fallbackZ = BAR_Z_BASE;
-            barStackZByBase.set(baseKey, fallbackZ);
-            ensurePlaceholder(baseKey, fallbackZ);
           }
-          const candidateZ =
-            typeof serie.z === "number" && Number.isFinite(serie.z)
-              ? Math.max(serie.z, BAR_Z_BASE)
-              : BAR_Z_BASE;
-          const storedZ = barStackZByBase.get(baseKey);
-          const baseZ = storedZ ? Math.max(storedZ, candidateZ) : candidateZ;
-          barStackZByBase.set(baseKey, baseZ);
-          ensurePlaceholder(baseKey, baseZ);
+          ensurePlaceholder(baseKey, serie.z ?? SERIES_Z_BASE);
           const placeholder = placeholderByBase.get(baseKey);
           if (placeholder) {
             placeholder.stack = `${baseKey}--compare`;
-            placeholder.z = Math.max(baseZ - 3, 0);
           }
           cloned.stack = `${baseKey}--compare`;
-          cloned.z = Math.max(baseZ, BAR_Z_BASE);
           this._styleCompareSeries(cloned, compareColor);
           compareSeriesTemp.push(cloned);
         } else {
@@ -5959,7 +5937,7 @@ export class EnergyCustomGraphCard extends LitElement {
       }
     }
 
-    const baseZ = (serie.z ?? 0) - 1;
+    const baseZ = (serie.z ?? SERIES_Z_BASE) - 0.5;
     serie.z = baseZ < 0 ? 0 : baseZ;
   }
 
