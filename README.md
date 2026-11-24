@@ -136,6 +136,7 @@ By default the card mirrors the core energy cards and automatically selects the 
 | `show_unit` | boolean | `true` | Show corresponding units from the recorder database when available in tooltips and axes. |
 | `show_stack_sums` | boolean | `false` | When `true`, adds positive/negative totals for each visible stack to the tooltip. |
 | `y_axes` | list | – | Y axis configuration for both left and right axes (see below). |
+| `align_zero` | boolean | `false` | With a left and a right y axis: scale both from their data so their zero lines sit at the same height (unlike `center_zero`, the negative part only gets the room it needs, at most a third of the height when there is positive data). Ranges are recomputed when series are toggled in the legend. |
 | `aggregation` | object | auto | Control recorder aggregation intervals. See below. |
 | `series` | list | – | One or more series definitions (see below). |
 

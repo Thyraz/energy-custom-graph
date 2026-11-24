@@ -255,6 +255,7 @@ export interface EnergyCustomGraphCardConfig extends LovelaceCardConfig {
   allow_compare?: boolean;
   header?: EnergyCustomGraphHeaderConfig;
   y_axes?: EnergyCustomGraphAxisConfig[];
+  align_zero?: boolean;
   show_tooltip?: boolean;
   show_x_axis_pointer?: boolean;
   show_y_axis_pointer?: boolean;
