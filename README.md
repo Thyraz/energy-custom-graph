@@ -131,6 +131,7 @@ By default the card mirrors the core energy cards and automatically selects the 
 | `show_tooltip` | boolean | `true` | Show the tooltip detail panel on hover or click. Axis pointers can still be shown when this is `false`. |
 | `show_x_axis_pointer` | boolean | `true` | Show the vertical hover guide line for the selected X axis position. |
 | `show_y_axis_pointer` | boolean | `false` | Show the horizontal hover guide line for the selected Y axis value. |
+| `show_now_marker` | boolean | `false` | Draw a dashed vertical line at the current time when it lies inside the visible timespan. |
 | `bar_alignment` | `"center"`, `"right"` | `"center"` | Align bar buckets relative to the time marker. Use `"right"` to match the default Home Assistant hourly bars, while month/year views stay centered. |
 | `tooltip_precision` | number | – | Override numeric precision in the tooltip. |
 | `show_unit` | boolean | `true` | Show corresponding units from the recorder database when available in tooltips and axes. |
